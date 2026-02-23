@@ -1,0 +1,20 @@
+/* Vant Notify 组件样式覆盖 - 修复文字和背景颜色问题 */
+.van-notify {
+  color: #fff !important;
+}
+
+.van-notify--success {
+  background-color: #07c160 !important;
+}
+
+.van-notify--danger {
+  background-color: #ee0a24 !important;
+}
+
+.van-notify--warning {
+  background-color: #ff976a !important;
+}
+
+.van-notify--primary {
+  background-color: #1989fa !important;
+}
