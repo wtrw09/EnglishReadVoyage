@@ -1,4 +1,5 @@
 """使用SQLAlchemy异步的数据库管理和初始化"""
+from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import select
 from app.core.config import get_settings
@@ -6,6 +7,18 @@ from app.models.database_models import Base, User
 from app.core.security import hash_password
 
 settings = get_settings()
+
+# 确保数据库文件存在（避免Docker创建为目录）
+def ensure_db_file_exists():
+    """如果数据库文件不存在，创建空文件"""
+    db_path = Path(settings.DATABASE_PATH)
+    if not db_path.exists():
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.touch()
+        print(f"Created empty database file: {db_path}")
+
+# 在引擎创建前确保文件存在
+ensure_db_file_exists()
 
 # 创建异步引擎
 engine = create_async_engine(

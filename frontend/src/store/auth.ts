@@ -45,23 +45,26 @@ export type ApiResult<T> = ApiSuccess<T> | ApiError
 // 创建 axios 实例
 export const api: AxiosInstance = axios.create({
   baseURL: '/api/v1',
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json'
   }
 })
 
+// 不需要 token 的公开接口列表
+const publicEndpoints = ['/auth/login', '/auth/activate']
+
 // 请求拦截器添加 token
 api.interceptors.request.use((config) => {
   const tokenValue = localStorage.getItem('token')
-  console.log('[API Request] URL:', config.url, '| Token exists:', !!tokenValue, '| Token:', tokenValue?.substring(0, 20) + '...')
+  const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint))
+
   if (tokenValue) {
     config.headers.Authorization = `Bearer ${tokenValue}`
-    console.log('[API Request] Authorization header set:', config.headers.Authorization?.substring(0, 40) + '...')
-  } else {
-    console.warn('[API Request] No token found in localStorage')
+  } else if (!isPublicEndpoint) {
+    // 非公开接口且没有 token 时才打印警告
+    console.warn('[API Request] No token found in localStorage for:', config.url)
   }
-  // 打印所有请求头
-  console.log('[API Request] All headers:', JSON.stringify(config.headers))
   return config
 })
 
@@ -70,6 +73,16 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (axios.isAxiosError(error)) {
+      // 打印详细错误信息
+      console.error('[API Response Error]', {
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        method: error.config?.method,
+      })
+      
       // 401 Unauthorized - Token 过期或无效
       // 但排除登录接口，登录失败返回 401 是正常的业务错误
       const url = error.config?.url || ''
@@ -139,19 +152,29 @@ export const useAuthStore = defineStore('auth', () => {
       
       return { success: true }
     } catch (error) {
+      console.error('[Login] Error caught:', error)
       if (axios.isAxiosError(error)) {
+        console.error('[Login] Axios error details:', {
+          message: error.message,
+          code: error.code,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+        })
         // 处理后端返回的错误消息，确保是字符串
         const detail = error.response?.data?.detail
         let errorMessage = '登录失败'
         if (detail) {
           errorMessage = Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ') : String(detail)
+        } else if (error.message) {
+          errorMessage = error.message
         }
         return { 
           success: false, 
           message: errorMessage
         }
       }
-      return { success: false, message: '登录失败' }
+      return { success: false, message: '登录失败: ' + String(error) }
     } finally {
       loading.value = false
     }

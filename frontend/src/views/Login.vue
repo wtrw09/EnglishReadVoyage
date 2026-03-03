@@ -162,7 +162,7 @@ const onSubmit = async () => {
   const result = await authStore.login(form.username, form.password)
   
   if (result.success) {
-    showNotify({ type: 'success', message: '登录成功' })
+    showNotify({ type: 'success', message: '登录成功', duration: 1500 })
     // 跳转到之前尝试访问的页面或首页
     const redirect = route.query.redirect as string
     router.replace(redirect || '/')

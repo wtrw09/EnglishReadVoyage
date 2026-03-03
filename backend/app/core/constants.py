@@ -9,8 +9,5 @@ MARKDOWN_EXTENSION = ".md"
 # 目录模式
 LEVEL_DIR_PREFIX = "Level_"
 
-# 缓存
-AUDIO_CACHE_MOUNT = "/audio"
-
 # 分页
 PAGE_SEPARATOR = r'\n---\n'

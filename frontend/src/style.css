@@ -1,4 +1,4 @@
-/* Vant Notify 组件样式覆盖 - 修复文字和背景颜色问题 */
+/* Vant Notify 组件样式*/
 .van-notify {
   color: #fff !important;
 }
@@ -17,4 +17,14 @@
 
 .van-notify--primary {
   background-color: #1989fa !important;
+}
+
+/* Vant Toast 组件样式 - 确保文字可见 */
+.van-toast {
+  background-color: rgba(0, 0, 0, 0.7) !important;
+  color: #fff !important;
+}
+
+.van-toast__text {
+  color: #fff !important;
 }

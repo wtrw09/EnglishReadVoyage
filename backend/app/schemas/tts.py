@@ -21,11 +21,12 @@ class TTSRequest(BaseModel):
 
 class TTSResponse(BaseModel):
     """文本转语音响应模式"""
-    url: str = Field(..., description="URL to the generated audio file")
-    
+    url: str = Field(default=None, description="URL to the generated audio file (deprecated)")
+    audio_data: str = Field(default=None, description="Base64 encoded audio data")
+
     class Config:
         json_schema_extra = {
             "example": {
-                "url": "/audio/abc123def456.mp3"
+                "audio_data": "base64_encoded_audio_data..."
             }
         }
