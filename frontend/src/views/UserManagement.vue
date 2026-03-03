@@ -30,6 +30,7 @@
               <van-cell
                 :title="user.username"
                 :label="`创建时间: ${formatDate(user.created_at)}`"
+                @contextmenu.prevent="handleContextMenu($event, user)"
               >
                 <template #icon>
                   <van-icon
@@ -218,6 +219,45 @@
       </van-form>
     </van-dialog>
 
+    <!-- 用户右键菜单 -->
+    <van-popup
+      v-model:show="showContextMenuPopup"
+      :style="{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }"
+      round
+      class="user-context-menu"
+    >
+      <div class="context-menu-list">
+        <div class="context-menu-item" @click="handleMenuEdit">
+          <van-icon name="edit" />
+          <span>编辑</span>
+        </div>
+        <div
+          v-if="contextMenuUser?.is_active"
+          class="context-menu-item"
+          @click="handleMenuResetPassword"
+        >
+          <van-icon name="lock" />
+          <span>重置密码</span>
+        </div>
+        <div
+          v-else-if="contextMenuUser?.username !== 'admin'"
+          class="context-menu-item"
+          @click="handleMenuGetInvitationCode"
+        >
+          <van-icon name="coupon-o" />
+          <span>获取邀请码</span>
+        </div>
+        <div
+          v-if="contextMenuUser?.username !== 'admin'"
+          class="context-menu-item danger"
+          @click="handleMenuDelete"
+        >
+          <van-icon name="delete-o" />
+          <span>删除</span>
+        </div>
+      </div>
+    </van-popup>
+
     <!-- 邀请码展示对话框 -->
     <van-dialog
       v-model:show="invitationVisible"
@@ -339,6 +379,50 @@ const newPasswordError = ref('')
 const invitationVisible = ref(false)
 const createdUser = ref<CreatedUserInfo | null>(null)
 
+// 右键菜单
+const showContextMenuPopup = ref(false)
+const contextMenuUser = ref<UserDetail | null>(null)
+
+// 显示右键菜单
+const handleContextMenu = (_event: MouseEvent, user: UserDetail) => {
+  contextMenuUser.value = user
+  showContextMenuPopup.value = true
+}
+
+// 关闭右键菜单
+const closeContextMenu = () => {
+  showContextMenuPopup.value = false
+}
+
+// 菜单操作
+const handleMenuEdit = () => {
+  closeContextMenu()
+  if (contextMenuUser.value) {
+    showEditDialog(contextMenuUser.value)
+  }
+}
+
+const handleMenuResetPassword = () => {
+  closeContextMenu()
+  if (contextMenuUser.value) {
+    showResetPasswordDialog(contextMenuUser.value)
+  }
+}
+
+const handleMenuGetInvitationCode = () => {
+  closeContextMenu()
+  if (contextMenuUser.value) {
+    handleGetInvitationCode(contextMenuUser.value)
+  }
+}
+
+const handleMenuDelete = () => {
+  closeContextMenu()
+  if (contextMenuUser.value) {
+    confirmDelete(contextMenuUser.value)
+  }
+}
+
 const goBack = () => {
   router.back()
 }
@@ -374,7 +458,7 @@ const onLoad = async () => {
 const onRefresh = async () => {
   await loadUsers()
   refreshing.value = false
-  showNotify({ type: 'success', message: '刷新成功' })
+  showNotify({ type: 'success', message: '刷新成功', duration: 1500 })
 }
 
 // 创建用户
@@ -462,7 +546,7 @@ const handleEdit = async () => {
   })
 
   if (result.success) {
-    showNotify({ type: 'success', message: '更新成功' })
+    showNotify({ type: 'success', message: '更新成功', duration: 1500 })
     await loadUsers()
   } else {
     showNotify({ type: 'danger', message: result.message })
@@ -486,7 +570,7 @@ const handleResetPassword = async () => {
 
   const result = await authStore.resetPassword(selectedUser.value.id, newPassword.value.trim())
   if (result.success) {
-    showNotify({ type: 'success', message: '密码重置成功' })
+    showNotify({ type: 'success', message: '密码重置成功', duration: 1500 })
   } else {
     showNotify({ type: 'danger', message: result.message })
   }
@@ -600,7 +684,7 @@ const confirmDelete = (user: UserDetail) => {
   }).then(async () => {
     const result = await authStore.deleteUser(user.id)
     if (result.success) {
-      showNotify({ type: 'success', message: '删除成功' })
+      showNotify({ type: 'success', message: '删除成功', duration: 1500 })
       await loadUsers()
     } else {
       showNotify({ type: 'danger', message: result.message })
@@ -613,22 +697,69 @@ const confirmDelete = (user: UserDetail) => {
 // 复制邀请码
 const copyInvitationCode = () => {
   if (!createdUser.value || !createdUser.value.invitation_code) return
-  
+
   const text = `用户名: ${createdUser.value.username}\n邀请码: ${createdUser.value.invitation_code}`
-  
-  navigator.clipboard.writeText(text).then(() => {
-    showNotify({
-      type: 'success',
-      message: '邀请码已复制',
-      duration: 1500
-    })
-  }).catch(() => {
+
+  // 兼容性复制：优先使用 Clipboard API，降级使用 execCommand
+  const doCopy = (): boolean => {
+    // 尝试使用 Clipboard API
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        showNotify({
+          type: 'success',
+          message: '邀请码已复制',
+          duration: 1500
+        })
+      }).catch(() => {
+        // Clipboard API 失败，尝试降级方案
+        if (!fallbackCopy()) {
+          showNotify({
+            type: 'warning',
+            message: '复制失败，请手动复制',
+            duration: 2000
+          })
+        }
+      })
+      return true
+    }
+    // 使用降级方案
+    return fallbackCopy()
+  }
+
+  // 降级复制方案（兼容 HTTP 环境）
+  const fallbackCopy = (): boolean => {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        showNotify({
+          type: 'success',
+          message: '邀请码已复制',
+          duration: 1500
+        })
+      }
+      return successful
+    } catch (err) {
+      document.body.removeChild(textarea)
+      return false
+    }
+  }
+
+  if (!doCopy()) {
     showNotify({
       type: 'warning',
       message: '复制失败，请手动复制',
       duration: 2000
     })
-  })
+  }
 }
 
 onMounted(() => {
@@ -744,6 +875,51 @@ onMounted(() => {
   .action-buttons {
     padding: 16px;
     margin-top: 12px;
+  }
+}
+
+/* 用户右键菜单 */
+.user-context-menu {
+  position: fixed !important;
+  width: 150px;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.context-menu-list {
+  padding: 8px 0;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-size: 14px;
+  color: #323233;
+
+  &:hover {
+    background-color: #f5f5f5;
+  }
+
+  &:active {
+    background-color: #e8e8e8;
+  }
+
+  &.danger {
+    color: #ee0a24;
+
+    .van-icon {
+      color: #ee0a24;
+    }
+  }
+
+  .van-icon {
+    font-size: 18px;
+    color: #969799;
   }
 }
 </style>

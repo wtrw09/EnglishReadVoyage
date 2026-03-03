@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     # 目录
     BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     BOOKS_DIR: Optional[str] = None
-    CACHE_DIR: Optional[str] = None
     DATABASE_PATH: Optional[str] = None
 
     @property
@@ -33,8 +32,15 @@ class Settings(BaseSettings):
 
     # Kokoro语音合成
     KOKORO_API_URL: str = "http://localhost:8880/v1/audio/speech"
+    KOKORO_DEFAULT_VOICE: str = "bf_v0isabella"
+    KOKORO_DEFAULT_SPEED: float = 1.0
     TTS_TIMEOUT: float = 30.0
-    TTS_DEFAULT_VOICE: str = "bf_v0isabella"
+
+    # 豆包语音合成
+    DOUBAO_API_URL: str = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+    DOUBAO_DEFAULT_VOICE: str = "zh_female_shuangkuaisisi_moon_bigtts"
+    DOUBAO_DEFAULT_RESOURCE_ID: str = "seed-tts-1.0"
+    DOUBAO_DEFAULT_SPEED: float = 1.0
 
     # JWT 认证
     SECRET_KEY: str = "your-secret-key-change-in-production"
@@ -50,8 +56,8 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # 设置默认路径
-        self.BOOKS_DIR = self.BOOKS_DIR or os.path.join(os.path.dirname(self.BASE_DIR), "Books")
-        self.CACHE_DIR = self.CACHE_DIR or os.path.join(self.BASE_DIR, "cache", "audio")
+        # BASE_DIR 是 /app，Books 目录在 /app/Books
+        self.BOOKS_DIR = self.BOOKS_DIR or os.path.join(self.BASE_DIR, "Books")
         self.DATABASE_PATH = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data.db")
 
 

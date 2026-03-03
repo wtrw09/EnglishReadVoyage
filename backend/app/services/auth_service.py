@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete
 
 from app.core.security import (
     hash_password,
@@ -11,7 +12,7 @@ from app.core.security import (
     get_invitation_expiry
 )
 from app.repositories.user_repository import UserRepository
-from app.models.database_models import User
+from app.models.database_models import User, Category, BookCategoryRel, ReadingProgress, UserSettings, Vocabulary
 
 
 class AuthService:
@@ -300,7 +301,7 @@ class AuthService:
         db: AsyncSession,
         user_id: int
     ) -> Optional[User]:
-        """删除用户(不能删除默认管理员)。
+        """删除用户(不能删除默认管理员)，级联删除该用户的所有相关数据。
 
         Args:
             db: 数据库会话
@@ -320,6 +321,23 @@ class AuthService:
         if user.username == "admin":
             raise ValueError("不能删除默认管理员用户")
 
+        # 级联删除该用户的所有相关数据
+        # 1. 删除生词本数据
+        await db.execute(delete(Vocabulary).where(Vocabulary.user_id == user_id))
+
+        # 2. 删除用户设置
+        await db.execute(delete(UserSettings).where(UserSettings.user_id == user_id))
+
+        # 3. 删除阅读进度
+        await db.execute(delete(ReadingProgress).where(ReadingProgress.user_id == user_id))
+
+        # 4. 删除书籍分类关系
+        await db.execute(delete(BookCategoryRel).where(BookCategoryRel.user_id == user_id))
+
+        # 5. 删除用户创建的分类
+        await db.execute(delete(Category).where(Category.user_id == user_id))
+
+        # 6. 最后删除用户
         await UserRepository.delete(db, user)
         await db.commit()
 

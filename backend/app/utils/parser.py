@@ -13,34 +13,31 @@ class MarkdownParser:
     def parse_file(self, file_path: str) -> list[str]:
         """
         解析markdown文件并返回HTML页面列表。
-        
+
         Args:
             file_path: markdown文件的绝对路径
-            
+
         Returns:
             HTML字符串列表，每页一个
         """
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+
         # 1. 预处理：完全移除忽略块
         content = re.sub(r'<!--\s*ignore\s*-->(.*?)<!--\s*/ignore\s*-->', '', content, flags=re.DOTALL)
 
         # 2. 按分页标记---分割
         pages_raw = re.split(r'\n---\n', content)
-        
-        parsed_pages = []
-        for page_raw in pages_raw:
-            html = self.md.convert(page_raw)
-            
-            # 3. 将非图像内容包装在text-wrapper中以实现并排布局
-            html = self._add_text_wrapper(html)
 
-            # 4. 处理HTML以包装句子在<span data-tts="...">中
-            html = self._wrap_sentences(html)
-            
+        parsed_pages = []
+        for page_idx, page_raw in enumerate(pages_raw):
+            html = self.md.convert(page_raw)
+
+            # 3. 处理HTML以包装句子在<span data-tts="...">中，带page和sentence索引
+            html = self._wrap_sentences(html, page_idx)
+
             parsed_pages.append(html)
-            
+
         return parsed_pages
 
     def _add_text_wrapper(self, html: str) -> str:
@@ -104,38 +101,69 @@ class MarkdownParser:
         processed_sections.append(flush_section())
         return "".join(processed_sections)
 
-    def _wrap_sentences(self, html: str) -> str:
+    def _wrap_sentences(self, html: str, page_idx: int = 0) -> str:
         """
         用带有data-tts属性的<span>标签包装句子以供TTS播放
-        
+
         参数:
             html: 带有包装div的HTML内容
-            
+            page_idx: 页面索引
+
         返回:
             句子被包装在TTS就绪span中的HTML
         """
+        sentence_idx = 0  # 每个页面内的句子索引
+
         def replacer(match):
+            nonlocal sentence_idx
             tag_open = match.group(1)
             content = match.group(4)
             tag_close = match.group(5)
-            
+
             # 如果已经在忽略的div内则跳过
             if 'class="ignored-content"' in tag_open:
                 return f"{tag_open}{content}{tag_close}"
 
             if content and ('<img' in content or '<table' in content):
                 return f"{tag_open}{content}{tag_close}"
-            
-            # 分成句子：按句号(.)或换行符(\n)分割
-            # 使用(?<=\.)确保句号与句子在一起
-            sentences = re.split(r'(?<=\.)|\n+', content)
+
+            # 移除MD格式字符（标题标记和加粗斜体标记）
+            # 先移除标题标记 (# ## ### 等)
+            content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
+            # 移除加粗、斜体等标记
+            content = re.sub(r'[*_]+', '', content)
+
+            # 分句逻辑：先按换行分割（每行是一个独立句子），再按句号分割
+            lines = content.split('\n')
+            sentences = []
+            for line in lines:
+                line = line.strip()
+                if not line or len(line) < 3:
+                    continue
+                # 按句号分割
+                parts = re.split(r'(?<=[.])\s*', line)
+                for part in parts:
+                    part = part.strip()
+                    if part:
+                        sentences.append(part)
             wrapped_sentences = []
             for s in sentences:
                 s = s.strip()
                 if s:
-                    safe_text = s.replace('"', '&quot;')
-                    wrapped_sentences.append(f'<span class="tts-sentence" data-tts="{safe_text}">{s}</span>')
-            
+                    # 移除HTML标签（如<br />）用于data-tts，确保哈希匹配
+                    text_for_tts = re.sub(r'<[^>]+>', '', s)
+                    # 移除双引号和单引号
+                    text_for_tts = text_for_tts.replace('"', '').replace("'", "")
+                    # 移除非英文、非数字、非基本标点的字符（保留字母、数字、空格和基本标点）
+                    text_for_tts = re.sub(r'[^\w\s.,!?;:\-]', '', text_for_tts)
+                    # 清理多余空格
+                    text_for_tts = re.sub(r'\s+', ' ', text_for_tts).strip()
+                    safe_text = text_for_tts.replace('"', '&quot;')
+                    wrapped_sentences.append(
+                        f'<span class="tts-sentence" data-tts="{safe_text}" data-page-index="{page_idx}" data-sentence-index="{sentence_idx}">{s}</span>'
+                    )
+                    sentence_idx += 1
+
             return f"{tag_open}{' '.join(wrapped_sentences)}{tag_close}"
 
         # 匹配<p>, <li>, <h1-6>

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "WebFetch(domain:youzan.github.io)",
+      "WebSearch",
+      "Bash(cd:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

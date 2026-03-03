@@ -26,6 +26,12 @@ const routes: RouteRecordRaw[] = [
     name: 'UserManagement',
     component: () => import('@/views/UserManagement.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/vocabulary',
+    name: 'Vocabulary',
+    component: () => import('@/views/Vocabulary.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 
