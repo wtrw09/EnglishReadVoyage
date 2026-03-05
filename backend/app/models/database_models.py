@@ -94,6 +94,8 @@ class UserSettings(Base):
 
     # 音标设置：'uk' 表示英式音标，'us' 表示美式音标
     phonetic_accent: Mapped[str] = mapped_column(String, default="uk", nullable=False)
+    # UI设置：隐藏已读书籍状态（按分组存储，JSON格式）
+    hide_read_books_map: Mapped[Optional[str]] = mapped_column(String, nullable=True, default="{}")
     # 更新时间
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -118,3 +120,34 @@ class Vocabulary(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "word", "sentence", name="uq_user_word_sentence"),
     )
+
+
+class AudiobookPlaylist(Base):
+    """听书播放列表"""
+    __tablename__ = "audiobook_playlists"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, default="默认播放列表")
+    play_mode: Mapped[str] = mapped_column(String, default="sequential")  # sequential/random
+    sleep_timer: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 分钟
+    current_book_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship()
+    items: Mapped[List["AudiobookPlaylistItem"]] = relationship(back_populates="playlist", cascade="all, delete-orphan", order_by="AudiobookPlaylistItem.sort_order")
+
+
+class AudiobookPlaylistItem(Base):
+    """播放列表项"""
+    __tablename__ = "audiobook_playlist_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("audiobook_playlists.id"), nullable=False)
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    playlist: Mapped["AudiobookPlaylist"] = relationship(back_populates="items")
+    book: Mapped["Book"] = relationship()

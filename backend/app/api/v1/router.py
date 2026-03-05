@@ -1,7 +1,7 @@
 """API v1路由。"""
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import books, tts, auth, categories, dictionary, settings, vocabulary
+from app.api.v1.endpoints import books, tts, auth, categories, dictionary, settings, vocabulary, audiobook
 
 
 api_router = APIRouter()
@@ -14,3 +14,4 @@ api_router.include_router(tts.router, prefix="/tts", tags=["tts"])
 api_router.include_router(dictionary.router, prefix="/dictionary", tags=["dictionary"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
 api_router.include_router(vocabulary.router, prefix="/vocabulary", tags=["vocabulary"])
+api_router.include_router(audiobook.router, prefix="/audiobook", tags=["audiobook"])

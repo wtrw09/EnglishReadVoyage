@@ -978,6 +978,11 @@ const loadUserSettings = async () => {
     ttsAppId.value = defaultTtsConfig.value.app_id || ''
     ttsAccessKey.value = defaultTtsConfig.value.access_key || ''
     ttsResourceId.value = defaultTtsConfig.value.resource_id || ''
+
+    // 加载UI设置（隐藏已读书籍状态）
+    if (res.data.ui?.hide_read_books_map) {
+      hideReadBooksMap.value = res.data.ui.hide_read_books_map
+    }
   } catch (error) {
     console.error('加载用户设置失败:', error)
   }
@@ -1313,6 +1318,8 @@ const filteredGroups = computed(() => {
 const settingsActions = computed<PopoverAction[]>(() => {
   const actions: PopoverAction[] = []
 
+  // 听书模式
+  actions.push({ text: '听书模式', icon: 'music-o', key: 'audiobook' })
   // 生词本
   actions.push({ text: '生词本', icon: 'records-o', key: 'vocabulary' })
   // 朗读设置
@@ -1343,7 +1350,9 @@ const bookActions = [
 
 // 设置/用户菜单选择
 const onSettingsSelect = (action: PopoverAction) => {
-  if (action.key === 'vocabulary') {
+  if (action.key === 'audiobook') {
+    router.push('/audiobook')
+  } else if (action.key === 'vocabulary') {
     router.push('/vocabulary')
   } else if (action.key === 'ttsSettings') {
     loadTtsVoices()
@@ -1615,10 +1624,20 @@ const closeGroupContextMenu = () => {
 }
 
 // 切换隐藏已读书籍状态
-const toggleHideReadBooks = () => {
+const toggleHideReadBooks = async () => {
   if (contextMenuGroup.value) {
     const groupId = contextMenuGroup.value.id
     hideReadBooksMap.value[groupId] = !hideReadBooksMap.value[groupId]
+
+    // 保存到数据库
+    try {
+      await api.put('/settings/ui', {
+        hide_read_books_map: hideReadBooksMap.value
+      })
+    } catch (error: any) {
+      console.error('保存隐藏已读书籍设置失败:', error)
+      showNotify({ type: 'danger', message: '保存设置失败', duration: 1500 })
+    }
   }
   closeGroupContextMenu()
 }
