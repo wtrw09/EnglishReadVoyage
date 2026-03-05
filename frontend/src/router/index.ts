@@ -32,6 +32,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Vocabulary',
     component: () => import('@/views/Vocabulary.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/audiobook',
+    name: 'Audiobook',
+    component: () => import('@/views/AudiobookPlayer.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 
