@@ -39,15 +39,25 @@ Frontend runs on `http://localhost:5173` with API proxy to backend.
 
 TTS requires Kokoro service running on port 8880. Configure via `KOKORO_API_URL` in `.env`.
 
+### Docker Deployment
+
+```bash
+# Build and run all-in-one container
+cd docker/all-in-one
+docker-compose up -d
+
+# Access at http://localhost:8888
+```
+
 ## Architecture
 
 ### Backend Structure (app/)
-- `api/v1/endpoints/` - API route handlers (auth.py, books.py, tts.py)
+- `api/v1/endpoints/` - API route handlers (auth, books, tts, audiobook, categories, vocabulary, dictionary, settings)
 - `core/` - Configuration, database, security
 - `models/` - SQLAlchemy ORM models
 - `repositories/` - Data access layer
 - `schemas/` - Pydantic request/response models
-- `services/` - Business logic (auth, book, tts, sync)
+- `services/` - Business logic (auth, book, tts, audiobook, sync, category, dictionary)
 
 ### Database Models
 - `users` - User accounts with roles (admin/user)
@@ -59,6 +69,11 @@ TTS requires Kokoro service running on port 8880. Configure via `KOKORO_API_URL`
 - `/api/v1/auth/*` - Authentication (login, user management)
 - `/api/v1/books/*` - Book listing and details
 - `/api/v1/tts/?text=...&voice=...` - Text-to-speech generation
+- `/api/v1/categories/*` - Category management
+- `/api/v1/vocabulary/*` - Vocabulary/word learning
+- `/api/v1/dictionary/*` - Dictionary lookup
+- `/api/v1/audiobook/*` - Audiobook playback
+- `/api/v1/settings/*` - User settings
 
 ## Book Content Structure
 
