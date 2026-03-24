@@ -11,14 +11,21 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AudioFixDialog: typeof import('./src/components/AudioFixDialog.vue')['default']
+    BilingualModeDialog: typeof import('./src/components/BilingualModeDialog.vue')['default']
     BookEditDialog: typeof import('./src/components/BookEditDialog.vue')['default']
     BookEditor: typeof import('./src/components/BookEditor.vue')['default']
     HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
+    Playlist: typeof import('./src/components/Playlist.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    UserBookAssignment: typeof import('./src/components/UserBookAssignment.vue')['default']
+    VanActionSheet: typeof import('vant/es')['ActionSheet']
     VanButton: typeof import('vant/es')['Button']
     VanCell: typeof import('vant/es')['Cell']
     VanCellGroup: typeof import('vant/es')['CellGroup']
+    VanCheckbox: typeof import('vant/es')['Checkbox']
+    VanCheckboxGroup: typeof import('vant/es')['CheckboxGroup']
     VanCollapse: typeof import('vant/es')['Collapse']
     VanCollapseItem: typeof import('vant/es')['CollapseItem']
     VanDialog: typeof import('vant/es')['Dialog']
@@ -37,7 +44,10 @@ declare module 'vue' {
     VanPullRefresh: typeof import('vant/es')['PullRefresh']
     VanRadio: typeof import('vant/es')['Radio']
     VanRadioGroup: typeof import('vant/es')['RadioGroup']
+    VanStepper: typeof import('vant/es')['Stepper']
     VanSwipeCell: typeof import('vant/es')['SwipeCell']
+    VanSwitch: typeof import('vant/es')['Switch']
     VanTag: typeof import('vant/es')['Tag']
+    VirtualContent: typeof import('./src/components/VirtualContent.vue')['default']
   }
 }

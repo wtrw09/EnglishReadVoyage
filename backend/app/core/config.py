@@ -33,14 +33,29 @@ class Settings(BaseSettings):
     # Kokoro语音合成
     KOKORO_API_URL: str = "http://localhost:8880/v1/audio/speech"
     KOKORO_DEFAULT_VOICE: str = "bf_v0isabella"
+    KOKORO_DEFAULT_VOICE_ZH: str = "zf_xiaoxiao"  # 默认中文语音
     KOKORO_DEFAULT_SPEED: float = 1.0
     TTS_TIMEOUT: float = 30.0
+
+    # 默认TTS服务 (kokoro-tts, doubao-tts, siliconflow-tts, edge-tts)
+    DEFAULT_TTS_SERVICE: str = "edge-tts"
 
     # 豆包语音合成
     DOUBAO_API_URL: str = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
     DOUBAO_DEFAULT_VOICE: str = "zh_female_shuangkuaisisi_moon_bigtts"
+    DOUBAO_DEFAULT_VOICE_ZH: str = "zh_female_yingyujiaoyu_mars_bigtts"  # 默认中文语音
     DOUBAO_DEFAULT_RESOURCE_ID: str = "seed-tts-1.0"
     DOUBAO_DEFAULT_SPEED: float = 1.0
+
+    # 硅基流动语音合成
+    SILICONFLOW_API_URL: str = "https://api.siliconflow.cn/v1/audio/speech"
+    SILICONFLOW_DEFAULT_MODEL: str = "fnlp/MOSS-TTSD-v0.5"
+    SILICONFLOW_DEFAULT_VOICE: str = "anna"
+
+    # Edge-TTS语音合成 (微软Edge在线TTS)
+    EDGE_TTS_DEFAULT_VOICE: str = "en-US-AriaNeural"
+    EDGE_TTS_DEFAULT_VOICE_ZH: str = "zh-CN-XiaoxiaoNeural"
+    EDGE_TTS_DEFAULT_SPEED: float = 1.0
 
     # JWT 认证
     SECRET_KEY: str = "your-secret-key-change-in-production"

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+import json
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -13,9 +14,11 @@ from app.schemas.dictionary import (
     UserDictionarySettings,
     UserTtsSettings,
     UserPhoneticSettings,
+    UserUiSettings,
     UpdateDictionarySettingsRequest,
     UpdatePhoneticSettingsRequest,
-    UpdateTtsSettingsRequest
+    UpdateTtsSettingsRequest,
+    UpdateUiSettingsRequest
 )
 
 # 全局缓存默认TTS配置（从.env读取）
@@ -27,17 +30,25 @@ def get_default_tts_config():
     if _default_tts_config is None:
         settings = get_settings()
         _default_tts_config = {
-            "service_name": "kokoro-tts",
+            "service_name": "edge-tts",
             # Kokoro TTS 默认配置
             "kokoro_voice": settings.KOKORO_DEFAULT_VOICE,
             "kokoro_speed": settings.KOKORO_DEFAULT_SPEED,
             "kokoro_api_url": settings.KOKORO_API_URL,
             # 豆包 TTS 默认配置
             "doubao_voice": settings.DOUBAO_DEFAULT_VOICE,
+            "doubao_voice_zh": settings.DOUBAO_DEFAULT_VOICE_ZH,
             "doubao_speed": settings.DOUBAO_DEFAULT_SPEED,
             "doubao_app_id": None,
             "doubao_access_key": None,
-            "doubao_resource_id": settings.DOUBAO_DEFAULT_RESOURCE_ID
+            "doubao_resource_id": settings.DOUBAO_DEFAULT_RESOURCE_ID,
+            # 硅基流动 TTS 默认配置
+            "siliconflow_api_key": None,
+            "siliconflow_model": settings.SILICONFLOW_DEFAULT_MODEL,
+            "siliconflow_voice": settings.SILICONFLOW_DEFAULT_VOICE,
+            # Edge-TTS 默认配置
+            "edge_tts_voice": settings.EDGE_TTS_DEFAULT_VOICE,
+            "edge_tts_speed": settings.EDGE_TTS_DEFAULT_SPEED
         }
     return _default_tts_config
 
@@ -70,6 +81,16 @@ async def get_user_settings(
     settings = await get_or_create_user_settings(db, current_user.id)
     default_config = get_default_tts_config()
 
+    # 解析隐藏已读书籍状态
+    hide_read_books_map = {}
+    if settings.hide_read_books_map:
+        try:
+            hide_read_books_map = json.loads(settings.hide_read_books_map)
+            # 将字符串键转换为整数键
+            hide_read_books_map = {int(k): v for k, v in hide_read_books_map.items()}
+        except (json.JSONDecodeError, ValueError):
+            hide_read_books_map = {}
+
     return UserSettingsResponse(
         dictionary=UserDictionarySettings(
             dictionary_source=settings.dictionary_source
@@ -82,13 +103,24 @@ async def get_user_settings(
             kokoro_api_url=settings.kokoro_api_url or default_config.get("kokoro_api_url"),
             # 豆包TTS设置
             doubao_voice=settings.doubao_voice or default_config.get("doubao_voice"),
+            doubao_voice_zh=settings.doubao_voice_zh or default_config.get("doubao_voice_zh"),
             doubao_speed=settings.doubao_speed if settings.doubao_speed is not None else default_config.get("doubao_speed", 1.0),
             doubao_app_id=settings.doubao_app_id or default_config.get("doubao_app_id"),
             doubao_access_key=settings.doubao_access_key or default_config.get("doubao_access_key"),
-            doubao_resource_id=settings.doubao_resource_id or default_config.get("doubao_resource_id")
+            doubao_resource_id=settings.doubao_resource_id or default_config.get("doubao_resource_id"),
+            # 硅基流动TTS设置
+            siliconflow_api_key=settings.siliconflow_api_key or default_config.get("siliconflow_api_key"),
+            siliconflow_model=settings.siliconflow_model or default_config.get("siliconflow_model"),
+            siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
+            # Edge-TTS设置
+            edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
+            edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
         ),
         phonetic=UserPhoneticSettings(
             accent=settings.phonetic_accent or "uk"
+        ),
+        ui=UserUiSettings(
+            hide_read_books_map=hide_read_books_map
         )
     )
 
@@ -101,13 +133,13 @@ async def update_dictionary_settings(
 ):
     """
     更新用户的词典设置。
-    
+
     Args:
         request: 包含 dictionary_source 的请求体，值为 'local' 或 'api'
-        
+
     Returns:
         更新后的词典设置
-        
+
     Raises:
         HTTPException: 如果 dictionary_source 值无效
     """
@@ -180,7 +212,7 @@ async def update_tts_settings(
 
     # 更新服务名称
     if request.service_name is not None:
-        settings.tts_service_name = request.service_name.strip() or "kokoro-tts"
+        settings.tts_service_name = request.service_name.strip() or "edge-tts"
 
     # 更新 Kokoro TTS 设置
     if request.kokoro_voice is not None:
@@ -207,6 +239,9 @@ async def update_tts_settings(
     if request.doubao_voice is not None:
         settings.doubao_voice = request.doubao_voice.strip() if request.doubao_voice.strip() else None
 
+    if request.doubao_voice_zh is not None:
+        settings.doubao_voice_zh = request.doubao_voice_zh.strip() if request.doubao_voice_zh.strip() else None
+
     if request.doubao_speed is not None:
         if not (0.5 <= request.doubao_speed <= 2.0):
             raise HTTPException(
@@ -222,6 +257,25 @@ async def update_tts_settings(
     if request.doubao_resource_id is not None:
         settings.doubao_resource_id = request.doubao_resource_id.strip() if request.doubao_resource_id.strip() else None
 
+    # 更新硅基流动 TTS 设置
+    if request.siliconflow_api_key is not None:
+        settings.siliconflow_api_key = request.siliconflow_api_key.strip() if request.siliconflow_api_key.strip() else None
+    if request.siliconflow_model is not None:
+        settings.siliconflow_model = request.siliconflow_model.strip() if request.siliconflow_model.strip() else None
+    if request.siliconflow_voice is not None:
+        settings.siliconflow_voice = request.siliconflow_voice.strip() if request.siliconflow_voice.strip() else None
+
+    # 更新 Edge-TTS 设置
+    if request.edge_tts_voice is not None:
+        settings.edge_tts_voice = request.edge_tts_voice.strip() if request.edge_tts_voice.strip() else None
+    if request.edge_tts_speed is not None:
+        if not (0.5 <= request.edge_tts_speed <= 2.0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Edge-TTS 朗读速度必须在 0.5 到 2.0 之间"
+            )
+        settings.edge_tts_speed = request.edge_tts_speed
+
     await db.commit()
     await db.refresh(settings)
 
@@ -234,10 +288,18 @@ async def update_tts_settings(
         kokoro_api_url=settings.kokoro_api_url or default_config.get("kokoro_api_url"),
         # 豆包TTS设置
         doubao_voice=settings.doubao_voice or default_config.get("doubao_voice"),
+        doubao_voice_zh=settings.doubao_voice_zh or default_config.get("doubao_voice_zh"),
         doubao_speed=settings.doubao_speed if settings.doubao_speed is not None else default_config.get("doubao_speed", 1.0),
         doubao_app_id=settings.doubao_app_id or default_config.get("doubao_app_id"),
         doubao_access_key=settings.doubao_access_key or default_config.get("doubao_access_key"),
-        doubao_resource_id=settings.doubao_resource_id or default_config.get("doubao_resource_id")
+        doubao_resource_id=settings.doubao_resource_id or default_config.get("doubao_resource_id"),
+        # 硅基流动TTS设置
+        siliconflow_api_key=settings.siliconflow_api_key or default_config.get("siliconflow_api_key"),
+        siliconflow_model=settings.siliconflow_model or default_config.get("siliconflow_model"),
+        siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
+        # Edge-TTS设置
+        edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
+        edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
     )
 
 
@@ -349,3 +411,174 @@ async def get_tts_voices(
             for k, v in voice_name_map.items()
         ]
         return {"voices": default_voices}
+
+
+@router.put("/ui", response_model=UserUiSettings)
+async def update_ui_settings(
+    request: UpdateUiSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    更新用户的界面设置。
+
+    Args:
+        request: 包含 hide_read_books_map 的请求体
+
+    Returns:
+        更新后的界面设置
+    """
+    settings = await get_or_create_user_settings(db, current_user.id)
+
+    if request.hide_read_books_map is not None:
+        settings.hide_read_books_map = json.dumps(request.hide_read_books_map)
+
+    await db.commit()
+    await db.refresh(settings)
+
+    # 解析返回
+    hide_read_books_map = {}
+    if settings.hide_read_books_map:
+        try:
+            hide_read_books_map = json.loads(settings.hide_read_books_map)
+            hide_read_books_map = {int(k): v for k, v in hide_read_books_map.items()}
+        except (json.JSONDecodeError, ValueError):
+            hide_read_books_map = {}
+
+    return UserUiSettings(
+        hide_read_books_map=hide_read_books_map
+    )
+
+
+@router.get("/tts/siliconflow/voices")
+async def get_siliconflow_voices(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取硅基流动可用的模型和语音列表。
+
+    返回固定的模型和语音类型列表。
+
+    Returns:
+        模型列表和语音列表
+    """
+    # 硅基流动支持的模型列表
+    models = [
+        {"id": "fnlp/MOSS-TTSD-v0.5", "name": "MOSS TTSD v0.5"},
+        {"id": "FunAudioLLM/CosyVoice2-0.5B", "name": "CosyVoice2 0.5B"},
+        {"id": "IndexTeam/IndexTTS-2", "name": "IndexTTS 2"}
+    ]
+    
+    # 硅基流动支持的语音类型列表
+    voices = [
+        {"id": "anna", "name": "Anna"},
+        {"id": "alex", "name": "Alex"},
+        {"id": "bella", "name": "Bella"},
+        {"id": "benjiamin", "name": "Benjamin"},
+        {"id": "charles", "name": "Charles"},
+        {"id": "claire", "name": "Claire"},
+        {"id": "david", "name": "David"},
+        {"id": "diana", "name": "Diana"}
+    ]
+    
+    return {"models": models, "voices": voices}
+
+
+@router.get("/tts/edge/voices")
+async def get_edge_tts_voices(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Edge-TTS可用的语音列表。
+
+    动态调用 edge-tts --list-voices 命令获取语音列表，
+    过滤出英语语音返回给前端。
+
+    Returns:
+        语音列表
+    """
+    import subprocess
+    import json
+    
+    # 地区名称映射
+    region_names = {
+        "en-US": "美式英语",
+        "en-GB": "英式英语",
+    }
+    
+    # 性别名称映射
+    gender_names = {
+        "Female": "女声",
+        "Male": "男声",
+    }
+    
+    try:
+        # 调用 edge-tts --list-voices 获取语音列表
+        result = subprocess.run(
+            ["edge-tts", "--list-voices"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            print(f"edge-tts --list-voices 失败: {result.stderr}")
+            return {"voices": []}
+        
+        # 解析输出
+        voices = []
+        lines = result.stdout.strip().split('\n')
+        
+        for line in lines:
+            # 跳过表头行
+            if not line.strip() or 'Name' in line or '---' in line:
+                continue
+            
+            # 提取语音ID（第一列）
+            parts = line.split()
+            if not parts:
+                continue
+            
+            voice_id = parts[0]
+            
+            # 只保留美式英语和英式英语 (en-US 和 en-GB)
+            if not (voice_id.startswith('en-US') or voice_id.startswith('en-GB')):
+                continue
+            
+            # 解析地区和性别
+            region_code = '-'.join(voice_id.split('-')[:2])  # 如 en-US
+            
+            # 从行中提取性别
+            gender = "Unknown"
+            if "Female" in line:
+                gender = "Female"
+            elif "Male" in line:
+                gender = "Male"
+            
+            # 提取语音名称（去掉 Neural 后缀）
+            voice_name = voice_id.split('-')[-1].replace('Neural', '').replace('Multilingual', '')
+            
+            # 构建显示名称
+            region_name = region_names.get(region_code, region_code)
+            gender_name = gender_names.get(gender, "")
+            
+            display_name = f"{region_name} - {voice_name} ({gender_name})" if gender_name else f"{region_name} - {voice_name}"
+            
+            voices.append({
+                "id": voice_id,
+                "name": display_name
+            })
+        
+        # 按地区排序（英式英语在前，美式英语在后）
+        voices.sort(key=lambda v: 0 if v["id"].startswith("en-GB") else 1)
+        
+        return {"voices": voices}
+        
+    except FileNotFoundError:
+        # edge-tts 未安装
+        return {"voices": []}
+    except subprocess.TimeoutExpired:
+        return {"voices": []}
+    except Exception as e:
+        print(f"获取Edge-TTS语音列表失败: {e}")
+        return {"voices": []}

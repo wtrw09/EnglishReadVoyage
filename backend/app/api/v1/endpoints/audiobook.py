@@ -11,7 +11,8 @@ from app.schemas.audiobook import (
     PlaylistOperationResponse,
     NextBookResponse,
     BooksByGroupResponse,
-    BookAudioListResponse
+    BookAudioListResponse,
+    PlaylistAudioCheckResponse
 )
 from app.services.audiobook_service import audiobook_service
 from app.core.database import get_db
@@ -114,6 +115,7 @@ async def get_available_books(
 @router.get("/playlist/next", response_model=NextBookResponse)
 async def get_next_book(
     direction: str = "next",
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -121,13 +123,14 @@ async def get_next_book(
 
     Args:
         direction: 方向，"next" 表示下一本，"prev" 表示上一本
+        force: 是否强制切换，忽略单曲循环模式限制（手动点击时使用）
     """
     if direction not in ["next", "prev"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="direction 参数必须是 'next' 或 'prev'"
         )
-    return await audiobook_service.get_next_book(db, current_user.id, direction)
+    return await audiobook_service.get_next_book(db, current_user.id, direction, force)
 
 
 @router.delete("/playlist/clear", response_model=PlaylistOperationResponse)
@@ -153,3 +156,12 @@ async def get_book_audio_list(
 ):
     """获取书籍的音频列表"""
     return await audiobook_service.get_book_audio_list(db, book_id)
+
+
+@router.get("/playlist/audio-check", response_model=PlaylistAudioCheckResponse)
+async def check_playlist_audio_completeness(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """检查播放列表中所有书籍的音频完整性（英文和中文）"""
+    return await audiobook_service.check_playlist_audio_completeness(db, current_user.id)

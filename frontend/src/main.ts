@@ -7,6 +7,8 @@ import router from './router'
 import 'vant/lib/index.css'
 // 导入Vant图标样式
 import 'vant/es/icon/style/index'
+// 导入Font Awesome样式
+import '@fortawesome/fontawesome-free/css/all.min.css'
 // 导入自定义样式（覆盖Vant默认样式）
 import './style.css'
 

@@ -45,11 +45,41 @@ export type ApiResult<T> = ApiSuccess<T> | ApiError
 // 创建 axios 实例
 export const api: AxiosInstance = axios.create({
   baseURL: '/api/v1',
-  timeout: 10000,
+  timeout: 600000,  // 压缩图片等耗时操作可能需要较长时间，增加到10分钟
   headers: {
     'Content-Type': 'application/json'
   }
 })
+
+// 添加响应拦截器，处理 502 错误自动重试
+let retryCount = 0
+const MAX_RETRIES = 3
+const RETRY_DELAY = 2000 // 2秒
+
+api.interceptors.response.use(
+  (response) => {
+    retryCount = 0 // 重置重试计数
+    return response
+  },
+  async (error) => {
+    const originalRequest = error.config
+
+    // 如果是 502 错误且未超过重试次数
+    if (error.response?.status === 502 && originalRequest && !originalRequest._retry) {
+      originalRequest._retry = true
+      retryCount++
+
+      if (retryCount <= MAX_RETRIES) {
+        console.log(`[API] 502错误，第 ${retryCount} 次重试，${RETRY_DELAY / 1000}秒后...`)
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY))
+        return api(originalRequest)
+      }
+    }
+
+    retryCount = 0
+    return Promise.reject(error)
+  }
+)
 
 // 不需要 token 的公开接口列表
 const publicEndpoints = ['/auth/login', '/auth/activate']

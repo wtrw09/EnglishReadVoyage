@@ -15,7 +15,7 @@
               @input="handleSearch"
             />
           </div>
-          <van-icon name="plus" class="nav-icon" @click="openImportDialog(0)" />
+          <van-icon name="plus" class="nav-icon" @click="openImportDialog(0)" v-if="authStore.isAdmin" />
         </div>
       </template>
       <template #right>
@@ -25,6 +25,9 @@
             v-model:show="showBookPopover"
             placement="bottom-end"
             :actions="bookActions"
+            close-on-click-outside
+            teleport="body"
+            @update:show="(show: boolean) => handlePopoverShow(show, 'book')"
             @select="onBookActionSelect"
           >
             <template #reference>
@@ -33,13 +36,28 @@
               </div>
             </template>
           </van-popover>
-          <!-- 用户名称显示 -->
-          <span class="username">{{ authStore.user?.username || '用户' }}</span>
+          <!-- 用户名下拉菜单 -->
+          <van-popover
+            v-model:show="showUserPopover"
+            placement="bottom-end"
+            :actions="userActions"
+            close-on-click-outside
+            teleport="body"
+            @update:show="(show: boolean) => handlePopoverShow(show, 'user')"
+            @select="onUserSelect"
+          >
+            <template #reference>
+              <span class="username-link">{{ authStore.user?.username || '用户' }}</span>
+            </template>
+          </van-popover>
           <!-- 设置下拉菜单 -->
           <van-popover
             v-model:show="showSettingsPopover"
             placement="bottom-end"
             :actions="settingsActions"
+            close-on-click-outside
+            teleport="body"
+            @update:show="(show: boolean) => handlePopoverShow(show, 'settings')"
             @select="onSettingsSelect"
           >
             <template #reference>
@@ -61,7 +79,7 @@
           :key="group.id"
           :name="group.id"
           class="group-item"
-          v-show="group.id !== 0 || group.books.length > 0"
+          v-show="group.name !== '未分组' || group.books.length > 0"
         >
           <!-- 分组标题 -->
           <template #title>
@@ -70,6 +88,14 @@
               @contextmenu.prevent="showGroupContextMenu($event, group)"
               @longpress="showGroupContextMenu($event, group)"
             >
+              <!-- 分组选择框（仅在多选模式下显示） -->
+              <div v-if="isMultiSelect" class="group-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="isGroupAllSelected(group.id)"
+                  @change.stop="toggleGroupSelect(group.id)"
+                />
+              </div>
               <span class="group-name">{{ group.name }}</span>
               <span class="book-count">({{ group.books.length }})</span>
             </div>
@@ -77,30 +103,31 @@
           <!-- 分组右侧操作 -->
           <template #right-icon>
             <div class="group-actions" @click.stop>
-              <!-- 该分组下的导入按钮 -->
+              <!-- 该分组下的导入按钮（仅管理员可见） -->
               <van-button
                 type="primary"
                 size="small"
                 icon="plus"
                 @click="openImportDialog(group.id)"
                 class="group-import-btn"
+                v-if="authStore.isAdmin"
               />
             </div>
           </template>
 
           <!-- 书籍列表 -->
-          <div class="book-list" :class="{ 'sorting-mode': isSorting }">
+          <div class="book-list">
             <van-swipe-cell
               v-for="book in getVisibleBooks(group)"
               :key="book.id"
               :ref="(el) => { if (el) swipeCellRefs[book.id] = el }"
-              :disabled="isMultiSelect || isSorting"
+              :disabled="isMultiSelect"
               :stop-propagation="true"
               @open="handleSwipeOpen($event, book)"
             >
               <div
                 class="book-item"
-                :class="{ 'selected': selectedBooks.includes(book.id), 'sorting': isSorting, 'is-read': book.is_read }"
+                :class="{ 'selected': selectedBooks.includes(book.id), 'is-read': book.is_read }"
                 @click="handleBookClick(book.id, group.id)"
                 @contextmenu.prevent="showContextMenu($event, book, group.id)"
                 @longpress="showContextMenu($event, book, group.id)"
@@ -119,6 +146,8 @@
                     <img
                       :src="getBookCover(book)"
                       :alt="book.title"
+                      loading="lazy"
+                      decoding="async"
                       @error="(e) => handleCoverError(e, book)"
                     />
                   </template>
@@ -134,10 +163,6 @@
                 <div class="book-info">
                   <span class="book-title">{{ book.title }}</span>
                   <span class="book-meta">Level: {{ book.level }} | {{ book.page_count }} 页</span>
-                </div>
-                <!-- 排序拖拽手柄 -->
-                <div v-if="isSorting" class="sort-handle">
-                  <van-icon name="wap-nav" />
                 </div>
               </div>
 
@@ -200,6 +225,7 @@
       :show-confirm-button="false"
       :show-cancel-button="false"
       :close-on-click-overlay="true"
+      width="320px"
       @closed="onImportDialogClosed"
     >
       <div class="import-dialog-content">
@@ -212,15 +238,17 @@
           @drop.prevent="onFileDrop"
           @click="triggerFileInput"
         >
-          <template v-if="selectedFile">
+          <template v-if="selectedFile || selectedFiles.length > 0">
             <van-icon name="description" size="40" color="#1989fa" />
-            <p class="file-name">{{ selectedFile.name }}</p>
+            <p class="file-name">
+              {{ selectedFiles.length > 0 ? `已选择 ${selectedFiles.length} 个文件` : selectedFile?.name }}
+            </p>
             <p class="file-hint">点击更换文件</p>
           </template>
           <template v-else>
             <van-icon name="plus" size="40" color="#969799" />
             <p>拖拽MD或ZIP文件到这里，或点击选择</p>
-            <p class="hint">支持 .md 和 .zip 格式</p>
+            <p class="hint">支持 .md 和 .zip 格式，支持多选MD文件批量导入</p>
           </template>
         </div>
 
@@ -229,16 +257,17 @@
           type="file"
           accept=".md,.zip"
           hidden
+          multiple
           @change="onFileSelected"
         />
 
-        <!-- 导入进度 -->
-        <div v-if="importing || importProgress === 100" class="import-progress">
+        <!-- 导入进度（合并上传和导入） -->
+        <div v-if="uploading || importing || importProgress === 100" class="import-progress">
           <van-progress
-            :percentage="importProgress"
+            :percentage="uploading ? uploadProgress : importProgress"
             :stroke-width="8"
             :show-pivot="true" />
-          <p class="import-status">{{ importStatus }}</p>
+          <p class="import-status">{{ uploading ? uploadStatus : importStatus }}</p>
         </div>
 
         <!-- 操作按钮 -->
@@ -246,11 +275,11 @@
           <van-button
             type="primary"
             size="large"
-            :disabled="!selectedFile || importing"
-            :loading="importing"
+            :disabled="(!selectedFile && selectedFiles.length === 0) || importing || uploading"
+            :loading="importing || uploading"
             @click="importCompleted ? closeImportDialog() : handleImportConfirm()"
           >
-            {{ importing ? '导入中...' : (importCompleted ? '关闭' : '开始导入') }}
+            {{ uploading ? '上传中...' : (importing ? '导入中...' : (importCompleted ? '关闭' : '开始导入')) }}
           </van-button>
         </div>
       </div>
@@ -401,7 +430,8 @@
       :book-id="currentBookId"
       :title="currentBookTitle"
       :initial-content="editContent"
-      @saved="onEditSaved"
+      @saved="onEditSavedHandler"
+      @closed="onEditClosedHandler"
     />
 
     <!-- 书籍右键菜单 -->
@@ -419,7 +449,6 @@
         />
         <van-cell title="重命名" clickable @click="openRenameBookDialog" />
         <van-cell title="选择更多" clickable @click="enableMultiSelect" v-if="!isMultiSelect" />
-        <van-cell title="修改书籍顺序" clickable @click="enableSorting" v-if="!isSorting" />
         <van-cell title="导出书籍" clickable @click="exportSingleBook" />
         <van-cell title="移动到其他分组" clickable @click="openMoveDialog" />
         <van-cell title="修改封面" clickable @click="openCoverDialog" />
@@ -440,8 +469,8 @@
           clickable
           @click="toggleHideReadBooks"
         />
-        <van-cell title="修改名称" clickable @click="openRenameGroupDialog" v-if="contextMenuGroup?.id !== 0" />
-        <van-cell title="删除分组" clickable @click="confirmDeleteGroup" v-if="contextMenuGroup?.id !== 0" />
+        <van-cell title="修改名称" clickable @click="openRenameGroupDialog" v-if="contextMenuGroup?.id !== 0 && contextMenuGroup?.name !== '未分组'" />
+        <van-cell title="删除分组" clickable @click="confirmDeleteGroup" v-if="contextMenuGroup?.id !== 0 && contextMenuGroup?.name !== '未分组'" />
       </van-cell-group>
     </van-popup>
 
@@ -484,17 +513,6 @@
           <van-radio-group v-model="selectedMoveCategory">
             <van-cell-group>
               <van-cell
-                clickable
-                @click="selectedMoveCategory = 0"
-              >
-                <template #title>
-                  <span>未分组</span>
-                </template>
-                <template #right-icon>
-                  <van-radio :name="0" />
-                </template>
-              </van-cell>
-              <van-cell
                 v-for="cat in categoriesForMove"
                 :key="cat.id"
                 clickable
@@ -514,7 +532,7 @@
           <van-button size="small" type="primary" plain @click="showAddGroupInMove = true">
             创建新分组
           </van-button>
-          <van-button size="small" type="primary" @click="confirmMoveBooks">
+          <van-button size="small" type="primary" :loading="movingBooks" loading-text="移动中..." @click="confirmMoveBooks">
             确定
           </van-button>
         </div>
@@ -609,6 +627,8 @@
             <select v-model="ttsServiceName" class="tts-voice-select">
               <option value="kokoro-tts">Kokoro TTS (本地)</option>
               <option value="doubao-tts">豆包 TTS (在线)</option>
+              <option value="siliconflow-tts">硅基流动 TTS (在线)</option>
+              <option value="edge-tts">Edge-TTS (微软在线)</option>
             </select>
           </template>
         </van-field>
@@ -627,27 +647,29 @@
           </template>
         </van-field>
 
-        <!-- 朗读速度 -->
-        <van-field
-          label="朗读速度"
-          placeholder="1.0"
-        >
-          <template #input>
-            <input
-              :value="ttsSpeed.toFixed(1)"
-              type="number"
-              step="0.1"
-              min="0.25"
-              max="4.0"
-              class="tts-speed-input"
-              @input="ttsSpeed = Math.round(parseFloat(($event.target as HTMLInputElement).value) * 10) / 10"
-            />
-            <span class="speed-unit">x</span>
-          </template>
-        </van-field>
-        <div class="field-hint">
-          范围: {{ ttsServiceName === 'kokoro-tts' ? '0.25 - 4.0' : '0.5 - 2.0' }} (默认 1.0)
-        </div>
+        <!-- 朗读速度 (硅基流动不支持) -->
+        <template v-if="ttsServiceName !== 'siliconflow-tts'">
+          <van-field
+            label="朗读速度"
+            placeholder="1.0"
+          >
+            <template #input>
+              <input
+                :value="ttsSpeed.toFixed(1)"
+                type="number"
+                step="0.1"
+                min="0.25"
+                max="4.0"
+                class="tts-speed-input"
+                @input="ttsSpeed = Math.round(parseFloat(($event.target as HTMLInputElement).value) * 10) / 10"
+              />
+              <span class="speed-unit">x</span>
+            </template>
+          </van-field>
+          <div class="field-hint">
+            范围: {{ ttsServiceName === 'kokoro-tts' ? '0.25 - 4.0' : '0.5 - 2.0' }} (默认 1.0)
+          </div>
+        </template>
 
         <!-- 豆包TTS配置 (仅在使用豆包时显示) -->
         <template v-if="ttsServiceName === 'doubao-tts'">
@@ -667,6 +689,26 @@
             label="Resource ID"
             placeholder="seed-tts-1.0"
           />
+        </template>
+
+        <!-- 硅基流动TTS配置 (仅在使用硅基流动时显示) -->
+        <template v-if="ttsServiceName === 'siliconflow-tts'">
+          <van-field
+            v-model="ttsSiliconFlowApiKey"
+            label="API Key"
+            placeholder="硅基流动API Key"
+            type="password"
+          />
+          <van-field label="模型选择">
+            <template #input>
+              <select v-model="ttsSiliconFlowModel" class="tts-voice-select">
+                <option value="" disabled>请选择模型</option>
+                <option v-for="model in siliconflowModels" :key="model.id" :value="model.id">
+                  {{ model.name }}
+                </option>
+              </select>
+            </template>
+          </van-field>
         </template>
 
         <!-- 服务地址 (仅在使用Kokoro时显示) -->
@@ -739,8 +781,50 @@
             </van-cell>
           </van-cell-group>
         </van-radio-group>
+
+        <!-- 百度翻译API设置（仅管理员可见） -->
+        <div class="baidu-settings" v-if="authStore.isAdmin" style="margin-top: 16px;">
+          <div class="baidu-settings-header">百度翻译API（用于句子翻译）</div>
+          <div v-if="translationApis.length === 0" class="baidu-add-api">
+            <van-field
+              v-model="newBaiduAppId"
+              label="APP ID"
+              placeholder="百度翻译APP ID"
+            />
+            <van-field
+              v-model="newBaiduAppKey"
+              label="APP Key"
+              placeholder="百度翻译APP Key"
+              type="password"
+            />
+            <div class="baidu-add-btn">
+              <van-button type="primary" block @click="addBaiduApi">添加百度翻译API</van-button>
+            </div>
+          </div>
+          <div v-else class="baidu-api-config">
+            <van-cell-group>
+              <van-cell title="APP ID">
+                <template #value>
+                  <span class="app-id-display">{{ translationApis[0]?.app_id }}</span>
+                </template>
+              </van-cell>
+              <van-cell title="状态">
+                <template #value>
+                  <van-switch v-model="translationApis[0].is_active" size="small" @change="saveTranslationApi" />
+                </template>
+              </van-cell>
+            </van-cell-group>
+            <div class="baidu-api-actions">
+              <van-button size="small" type="danger" plain @click="deleteTranslationApi(translationApis[0].id)">删除</van-button>
+            </div>
+            <div class="translation-hint">
+              已配置百度翻译API（用于句子翻译）
+            </div>
+          </div>
+        </div>
       </div>
     </van-dialog>
+
 
     <!-- 音标设置弹窗 -->
     <van-dialog
@@ -774,6 +858,36 @@
         </van-radio-group>
       </div>
     </van-dialog>
+
+    <!-- 语音配置错误清单弹窗 -->
+    <!-- 音频检查修复弹窗 -->
+    <AudioFixDialog
+      v-model:show="showAudioErrorDialog"
+      :fixed-list="audioFixedList"
+      :error-list="audioErrorList"
+      @edit-book="handleEditBookFromAudioFix"
+    />
+
+    <!-- 补充翻译+中文语音进度弹窗 -->
+    <van-dialog
+      v-model:show="showSupplementProgress"
+      title="补充翻译+中文语音"
+      :close-on-click-overlay="false"
+      :show-cancel-button="false"
+      :show-confirm-button="!supplementLoading"
+      confirm-button-text="关闭"
+    >
+      <div class="supplement-progress-content">
+        <van-progress
+          :percentage="supplementProgress"
+          :stroke-width="8"
+          :show-pivot="true"
+        />
+        <div class="progress-message">
+          {{ supplementMessage }}
+        </div>
+      </div>
+    </van-dialog>
   </div>
 </template>
 
@@ -783,6 +897,12 @@ import { useRouter } from 'vue-router'
 import { showConfirmDialog, showNotify, showToast, showLoadingToast, closeToast } from 'vant'
 import { useAuthStore, api } from '@/store/auth'
 import BookEditDialog from '@/components/BookEditDialog.vue'
+import AudioFixDialog from '@/components/AudioFixDialog.vue'
+
+// 定义组件名称，用于 keep-alive 匹配
+defineOptions({
+  name: 'Home'
+})
 
 interface Book {
   id: string
@@ -819,6 +939,7 @@ const activeNames = ref<number>(0)
 // 导航栏状态
 const showBookPopover = ref(false)
 const showSettingsPopover = ref(false)
+const showUserPopover = ref(false)
 
 // 导入相关
 const showImportDialog = ref(false)
@@ -827,13 +948,20 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
 const importCompleted = ref(false)
 const selectedFile = ref<File | null>(null)
+const selectedFiles = ref<File[]>([]) // 多选文件列表
+const isBatchImport = ref(false) // 标记是否是批量导入（多本书）
 const isDragOver = ref(false)
 const importProgress = ref(0)
 const importStatus = ref('')
+// 上传进度相关
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadStatus = ref('')
 const currentBookId = ref('')
 const showChoiceDialog = ref(false)
 const overwriteMode = ref('')
 const isZipImport = ref(false) // 标记是否是ZIP导入
+const isBatchMdImport = ref(false) // 标记是否是批量MD导入
 const showDuplicateDialog = ref(false) // 重复书籍检测对话框
 
 // 导出进度相关
@@ -862,9 +990,6 @@ const currentBookTitle = ref('')
 // 多选模式
 const isMultiSelect = ref(false)
 const selectedBooks = ref<string[]>([])
-
-// 排序模式
-const isSorting = ref(false)
 
 // 书籍右键菜单
 const showContextMenuPopup = ref(false)
@@ -898,6 +1023,7 @@ const categoriesForMove = ref<{ id: number; name: string }[]>([])
 const showAddGroupInMove = ref(false)
 const newGroupInMove = ref('')
 const currentGroupId = ref(0)
+const movingBooks = ref(false)
 
 // 修改封面对话框
 const showCoverDialog = ref(false)
@@ -909,7 +1035,7 @@ const selectedMdImage = ref('')
 
 // 朗读设置弹窗
 const showTtsSettingsDialog = ref(false)
-const ttsServiceName = ref('kokoro-tts')
+const ttsServiceName = ref('edge-tts')
 const ttsVoice = ref('')
 const ttsSpeed = ref(1.0)
 const ttsApiUrl = ref('')
@@ -917,16 +1043,44 @@ const ttsApiUrl = ref('')
 const ttsAppId = ref('')
 const ttsAccessKey = ref('')
 const ttsResourceId = ref('')
+// 硅基流动TTS配置
+const ttsSiliconFlowApiKey = ref('')
+const ttsSiliconFlowModel = ref('')
+// Edge-TTS配置
+const ttsEdgeTtsVoice = ref('')
 const defaultTtsConfig = ref({
-  service_name: 'kokoro-tts',
-  voice: 'bf_v0isabella',
+  service_name: 'edge-tts',
+  voice: 'en-US-AriaNeural',
   speed: 1.0,
   api_url: 'http://localhost:8880/v1/audio/speech',
   app_id: '',
   access_key: '',
-  resource_id: ''
+  resource_id: '',
+  siliconflow_api_key: '',
+  siliconflow_model: 'fnlp/MOSS-TTSD-v0.5',
+  siliconflow_voice: 'anna',
+  edge_tts_voice: 'en-US-AriaNeural',
+  edge_tts_speed: 1.0
 })
 const ttsVoices = ref<{id: string, name: string}[]>([])
+// 硅基流动固定模型和语音列表
+const siliconflowModels = [
+  { id: 'fnlp/MOSS-TTSD-v0.5', name: 'MOSS TTSD v0.5' },
+  { id: 'FunAudioLLM/CosyVoice2-0.5B', name: 'CosyVoice2 0.5B' },
+  { id: 'IndexTeam/IndexTTS-2', name: 'IndexTTS 2' }
+]
+const siliconflowVoices = [
+  { id: 'anna', name: 'Anna' },
+  { id: 'alex', name: 'Alex' },
+  { id: 'bella', name: 'Bella' },
+  { id: 'benjamin', name: 'Benjamin' },
+  { id: 'charles', name: 'Charles' },
+  { id: 'claire', name: 'Claire' },
+  { id: 'david', name: 'David' },
+  { id: 'diana', name: 'Diana' }
+]
+// Edge-TTS语音列表（从后端动态获取）
+const edgeTtsVoices = ref<{id: string, name: string}[]>([])
 const ttsTesting = ref(false)
 const ttsTestText = "She meticulously practiced the intricate piano sonata, her fingers dancing across the ivory keys with a grace that belied the immense concentration required."
 let currentTestAudio: HTMLAudioElement | null = null
@@ -940,6 +1094,12 @@ const ecdictAvailable = ref(false)
 const showPhoneticSettingsDialog = ref(false)
 const phoneticAccent = ref('uk')
 
+// 翻译API相关状态
+const translationApis = ref<{id: number, app_id: string, is_active: boolean}[]>([])
+const selectedTranslationApiId = ref<number | null>(null)
+const newBaiduAppId = ref('')
+const newBaiduAppKey = ref('')
+
 // 加载用户设置
 const loadUserSettings = async () => {
   try {
@@ -948,7 +1108,7 @@ const loadUserSettings = async () => {
     phoneticAccent.value = res.data.phonetic?.accent || 'uk'
 
     // 获取服务名称
-    const serviceName = res.data.tts?.service_name || 'kokoro-tts'
+    const serviceName = res.data.tts?.service_name || 'edge-tts'
 
     // 根据服务类型选择对应的语音和语速配置
     const isKokoro = serviceName === 'kokoro-tts'
@@ -967,7 +1127,12 @@ const loadUserSettings = async () => {
       api_url: res.data.tts?.kokoro_api_url || '',
       app_id: res.data.tts?.doubao_app_id || '',
       access_key: res.data.tts?.doubao_access_key || '',
-      resource_id: res.data.tts?.doubao_resource_id || ''
+      resource_id: res.data.tts?.doubao_resource_id || '',
+      siliconflow_api_key: res.data.tts?.siliconflow_api_key || '',
+      siliconflow_model: res.data.tts?.siliconflow_model || 'fnlp/MOSS-TTSD-v0.5',
+      siliconflow_voice: res.data.tts?.siliconflow_voice || 'anna',
+      edge_tts_voice: res.data.tts?.edge_tts_voice || 'en-US-AriaNeural',
+      edge_tts_speed: res.data.tts?.edge_tts_speed ?? 1.0
     }
     // 使用后端返回的值（已包含.env默认值）
     ttsServiceName.value = defaultTtsConfig.value.service_name
@@ -978,6 +1143,11 @@ const loadUserSettings = async () => {
     ttsAppId.value = defaultTtsConfig.value.app_id || ''
     ttsAccessKey.value = defaultTtsConfig.value.access_key || ''
     ttsResourceId.value = defaultTtsConfig.value.resource_id || ''
+    // 硅基流动配置
+    ttsSiliconFlowApiKey.value = res.data.tts?.siliconflow_api_key || ''
+    ttsSiliconFlowModel.value = res.data.tts?.siliconflow_model || 'fnlp/MOSS-TTSD-v0.5'
+    // Edge-TTS配置
+    ttsEdgeTtsVoice.value = res.data.tts?.edge_tts_voice || 'en-US-AriaNeural'
 
     // 加载UI设置（隐藏已读书籍状态）
     if (res.data.ui?.hide_read_books_map) {
@@ -992,9 +1162,6 @@ const loadUserSettings = async () => {
 const loadTtsVoices = async () => {
   try {
     const res = await api.get('/settings/tts/voices')
-    console.log('TTS voices response:', res.data)
-    console.log('Response type:', typeof res.data)
-    console.log('Is array:', Array.isArray(res.data))
     // 如果返回的是数组，说明后端没有正确处理
     if (Array.isArray(res.data)) {
       // 手动转换字符串数组为对象数组
@@ -1002,7 +1169,6 @@ const loadTtsVoices = async () => {
     } else {
       ttsVoices.value = res.data.voices || []
     }
-    console.log('Loaded voices:', ttsVoices.value)
 
     // 如果当前语音不在列表中，且是有效的Kokoro语音（以af_/am_/bf_/bm_开头），则添加它
     // 这处理了新语音可用但前端映射表未及时更新的情况
@@ -1010,7 +1176,6 @@ const loadTtsVoices = async () => {
       const voiceExists = ttsVoices.value.some((v: {id: string, name: string}) => v.id === ttsVoice.value)
       const isKokoroVoice = /^[ab]f_/.test(ttsVoice.value) || /^[ab]m_/.test(ttsVoice.value)
       if (!voiceExists && isKokoroVoice) {
-        console.log('Kokoro语音不在列表中，添加:', ttsVoice.value)
         ttsVoices.value.unshift({
           id: ttsVoice.value,
           name: ttsVoice.value + ' (当前使用)'
@@ -1022,6 +1187,23 @@ const loadTtsVoices = async () => {
     // 加载失败时清空列表，显示错误提示
     ttsVoices.value = []
     showNotify({ type: 'warning', message: '无法获取语音列表，请检查本地TTS服务是否运行' })
+  }
+}
+
+// 加载Edge-TTS语音列表
+const loadEdgeTtsVoices = async () => {
+  try {
+    const res = await api.get('/settings/tts/edge/voices')
+    if (res.data.voices && res.data.voices.length > 0) {
+      edgeTtsVoices.value = res.data.voices
+    } else {
+      edgeTtsVoices.value = []
+      showNotify({ type: 'warning', message: '没有可用的Edge-TTS语音模型' })
+    }
+  } catch (error) {
+    console.error('加载Edge-TTS语音列表失败:', error)
+    edgeTtsVoices.value = []
+    showNotify({ type: 'warning', message: '无法获取Edge-TTS语音列表，请确保edge-tts已安装' })
   }
 }
 
@@ -1046,13 +1228,18 @@ const availableVoices = computed(() => {
   if (ttsServiceName.value === 'doubao-tts') {
     return doubaoVoices
   }
+  if (ttsServiceName.value === 'siliconflow-tts') {
+    return siliconflowVoices
+  }
+  if (ttsServiceName.value === 'edge-tts') {
+    return edgeTtsVoices.value
+  }
   return ttsVoices.value
 })
 
 // 监听服务切换，从数据库恢复该服务的设置
 watch(ttsServiceName, async (newService, oldService) => {
   if (newService !== oldService && oldService !== undefined) {
-    console.log(`TTS服务切换: ${oldService} -> ${newService}`)
 
     try {
       // 从数据库获取最新设置
@@ -1077,7 +1264,27 @@ watch(ttsServiceName, async (newService, oldService) => {
 
         // 恢复语速
         ttsSpeed.value = savedSpeed ?? defaultTtsConfig.value.speed ?? 1.0
-        console.log(`Kokoro设置已恢复: voice=${ttsVoice.value}, speed=${ttsSpeed.value}`)
+      } else if (newService === 'siliconflow-tts') {
+        // 恢复硅基流动设置（不支持语速调节）
+        const savedVoice = ttsSettings?.siliconflow_voice
+        const savedModel = ttsSettings?.siliconflow_model
+
+        // 恢复语音和模型
+        ttsVoice.value = savedVoice || 'anna'
+        ttsSiliconFlowModel.value = savedModel || 'fnlp/MOSS-TTSD-v0.5'
+      } else if (newService === 'edge-tts') {
+        // 恢复 Edge-TTS 设置
+        await loadEdgeTtsVoices()
+        const savedVoice = ttsSettings?.edge_tts_voice
+        const savedSpeed = ttsSettings?.edge_tts_speed
+
+        // 恢复语音和语速
+        if (savedVoice) {
+          ttsVoice.value = savedVoice
+        } else if (edgeTtsVoices.value.length > 0) {
+          ttsVoice.value = edgeTtsVoices.value[0].id
+        }
+        ttsSpeed.value = savedSpeed ?? 1.0
       } else {
         // 恢复豆包设置
         const savedVoice = ttsSettings?.doubao_voice
@@ -1088,13 +1295,18 @@ watch(ttsServiceName, async (newService, oldService) => {
         ttsVoice.value = savedVoice || 'en_male_corey_emo_v2_mars_bigtts'
         ttsSpeed.value = savedSpeed ?? 1.0
         ttsResourceId.value = savedResourceId || defaultTtsConfig.value.resource_id || 'seed-tts-1.0'
-        console.log(`豆包设置已恢复: voice=${ttsVoice.value}, speed=${ttsSpeed.value}`)
       }
     } catch (error) {
       console.error('恢复设置失败:', error)
       // 使用默认值
       if (newService === 'kokoro-tts') {
         ttsVoice.value = 'bf_v0isabella'
+        ttsSpeed.value = 1.0
+      } else if (newService === 'siliconflow-tts') {
+        ttsVoice.value = 'anna'
+        ttsSiliconFlowModel.value = 'fnlp/MOSS-TTSD-v0.5'
+      } else if (newService === 'edge-tts') {
+        ttsVoice.value = ''
         ttsSpeed.value = 1.0
       } else {
         ttsVoice.value = 'en_male_corey_emo_v2_mars_bigtts'
@@ -1143,6 +1355,91 @@ const savePhoneticSettings = async () => {
   }
 }
 
+// 加载翻译设置
+const loadTranslationSettings = async () => {
+  try {
+    const res = await api.get('/translation/settings')
+    selectedTranslationApiId.value = res.data.selected_api_id
+    translationApis.value = res.data.apis || []
+  } catch (error) {
+    console.error('加载翻译设置失败:', error)
+  }
+}
+
+// 添加百度翻译API
+const addBaiduApi = async () => {
+  if (!newBaiduAppId.value || !newBaiduAppKey.value) {
+    showToast('请填写APP ID和APP Key')
+    return
+  }
+
+  try {
+    await api.post('/translation/apis', {
+      name: '百度翻译',
+      app_id: newBaiduAppId.value,
+      app_key: newBaiduAppKey.value,
+      is_active: true
+    })
+    showNotify({ type: 'success', message: '百度翻译API已添加', duration: 1500 })
+    newBaiduAppId.value = ''
+    newBaiduAppKey.value = ''
+    // 自动选中新添加的API
+    await loadTranslationSettings()
+    if (translationApis.value.length > 0) {
+      await saveSelectedTranslationApi(translationApis.value[0].id)
+    }
+  } catch (error: any) {
+    console.error('添加翻译API失败:', error)
+    showNotify({ type: 'danger', message: error.response?.data?.detail || '添加失败' })
+  }
+}
+
+// 保存选中的翻译API
+const saveSelectedTranslationApi = async (apiId: number | null) => {
+  try {
+    await api.put('/translation/select', null, {
+      params: { api_id: apiId }
+    })
+    selectedTranslationApiId.value = apiId
+  } catch (error: any) {
+    console.error('切换翻译API失败:', error)
+  }
+}
+
+// 更新翻译API启用状态
+const saveTranslationApi = async () => {
+  if (translationApis.value.length === 0) return
+
+  try {
+    await api.put(`/translation/apis/${translationApis.value[0].id}`, {
+      name: '百度翻译',
+      app_id: translationApis.value[0].app_id,
+      app_key: '', // 不更新app_key
+      is_active: translationApis.value[0].is_active
+    })
+  } catch (error: any) {
+    console.error('更新翻译API失败:', error)
+  }
+}
+
+// 删除翻译API
+const deleteTranslationApi = async (apiId: number) => {
+  try {
+    await showConfirmDialog({
+      title: '确认删除',
+      message: '确定要删除百度翻译API吗？'
+    })
+    await api.delete(`/translation/apis/${apiId}`)
+    showNotify({ type: 'success', message: '翻译API已删除', duration: 1500 })
+    await loadTranslationSettings()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除翻译API失败:', error)
+      showNotify({ type: 'danger', message: error.response?.data?.detail || '删除失败' })
+    }
+  }
+}
+
 // 验证TTS URL格式
 const validateTtsUrl = (value: string) => {
   if (!value || value.trim() === '') {
@@ -1166,7 +1463,6 @@ const stopTtsTest = () => {
     currentTestAudio.currentTime = 0
     currentTestAudio = null
     ttsTesting.value = false
-    console.log('TTS测试播放已停止')
   }
 }
 
@@ -1184,19 +1480,28 @@ const testTts = async () => {
     // 使用界面当前设置的语音和语速
     const voice = ttsVoice.value || defaultTtsConfig.value.voice
     const speed = ttsSpeed.value ?? 1.0
-    console.log(`TTS测试: service=${ttsServiceName.value}, voice=${voice}, speed=${speed}`)
+    
+    // 构建请求体
+    const requestBody: any = {
+      text: ttsTestText,
+      voice: voice,
+      speed: speed,
+      service_name: ttsServiceName.value
+    }
+    
+    // 如果是硅基流动，添加额外参数
+    if (ttsServiceName.value === 'siliconflow-tts') {
+      requestBody.siliconflow_api_key = ttsSiliconFlowApiKey.value || null
+      requestBody.siliconflow_model = ttsSiliconFlowModel.value || null
+    }
+    
     const response = await fetch('/api/v1/tts/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${authStore.token}`
       },
-      body: JSON.stringify({
-        text: ttsTestText,
-        voice: voice,
-        speed: speed,
-        service_name: ttsServiceName.value  // 传递当前选择的服务名称
-      })
+      body: JSON.stringify(requestBody)
     })
 
     if (!response.ok) {
@@ -1205,7 +1510,23 @@ const testTts = async () => {
     }
 
     const data = await response.json()
-    if (data.url) {
+    
+    // 支持 url 或 audio_data 两种格式
+    if (data.audio_data) {
+      // base64 音频数据
+      const audioSrc = `data:audio/mp3;base64,${data.audio_data}`
+      currentTestAudio = new Audio(audioSrc)
+      if (ttsServiceName.value === 'doubao-tts' && speed !== 1.0) {
+        currentTestAudio.playbackRate = speed
+      }
+      currentTestAudio.play()
+      showNotify({ type: 'success', message: '正在播放测试语音', duration: 1500 })
+
+      // 播放结束后清理
+      currentTestAudio.onended = () => {
+        currentTestAudio = null
+      }
+    } else if (data.url) {
       // 播放音频（豆包TTS使用前端播放速度控制）
       currentTestAudio = new Audio(data.url)
       if (ttsServiceName.value === 'doubao-tts' && speed !== 1.0) {
@@ -1219,14 +1540,16 @@ const testTts = async () => {
         currentTestAudio = null
       }
     } else {
-      throw new Error('未获取到音频URL')
+      throw new Error('未获取到音频数据')
     }
   } catch (error: any) {
     console.error('TTS测试失败:', error)
     const errorMsg = error.message || '朗读测试失败'
-    // 针对豆包TTS的特殊提示
+    // 针对不同TTS服务的特殊提示
     if (ttsServiceName.value === 'doubao-tts' && errorMsg.includes('app_id')) {
       showNotify({ type: 'danger', message: '豆包TTS需要配置APP ID和Access Key，请在设置中填写' })
+    } else if (ttsServiceName.value === 'siliconflow-tts' && errorMsg.includes('api_key')) {
+      showNotify({ type: 'danger', message: '硅基流动TTS需要配置API Key，请在设置中填写' })
     } else {
       showNotify({ type: 'danger', message: errorMsg })
     }
@@ -1245,12 +1568,14 @@ const saveTtsSettings = async () => {
 
   // 验证语速范围
   const isKokoro = ttsServiceName.value === 'kokoro-tts'
+  const isSiliconFlow = ttsServiceName.value === 'siliconflow-tts'
+  const isEdgeTts = ttsServiceName.value === 'edge-tts'
   if (isKokoro && (ttsSpeed.value < 0.25 || ttsSpeed.value > 4.0)) {
     showNotify({ type: 'warning', message: 'Kokoro 朗读速度必须在 0.25 到 4.0 之间' })
     return
   }
-  if (!isKokoro && (ttsSpeed.value < 0.5 || ttsSpeed.value > 2.0)) {
-    showNotify({ type: 'warning', message: '豆包朗读速度必须在 0.5 到 2.0 之间' })
+  if ((isEdgeTts || !isKokoro && !isSiliconFlow) && (ttsSpeed.value < 0.5 || ttsSpeed.value > 2.0)) {
+    showNotify({ type: 'warning', message: '朗读速度必须在 0.5 到 2.0 之间' })
     return
   }
 
@@ -1265,6 +1590,15 @@ const saveTtsSettings = async () => {
       requestBody.kokoro_voice = ttsVoice.value.trim()
       requestBody.kokoro_speed = ttsSpeed.value
       requestBody.kokoro_api_url = ttsApiUrl.value.trim() || null
+    } else if (isSiliconFlow) {
+      // 硅基流动 TTS 配置（不支持语速调节）
+      requestBody.siliconflow_api_key = ttsSiliconFlowApiKey.value.trim() || null
+      requestBody.siliconflow_model = ttsSiliconFlowModel.value.trim() || null
+      requestBody.siliconflow_voice = ttsVoice.value.trim()
+    } else if (isEdgeTts) {
+      // Edge-TTS 配置
+      requestBody.edge_tts_voice = ttsVoice.value.trim()
+      requestBody.edge_tts_speed = ttsSpeed.value
     } else {
       // 豆包 TTS 配置
       requestBody.doubao_voice = ttsVoice.value.trim()
@@ -1301,12 +1635,17 @@ const handleResize = () => {
 
 // 计算过滤后的分组
 const filteredGroups = computed(() => {
+  // 过滤掉没有书籍的"未分组"分类
+  const groups = bookGroups.value.filter(group =>
+    group.name !== '未分组' || group.books.length > 0
+  )
+
   if (!searchText.value.trim()) {
-    return bookGroups.value
+    return groups
   }
 
   const keyword = searchText.value.toLowerCase().trim()
-  return bookGroups.value.map(group => ({
+  return groups.map(group => ({
     ...group,
     books: group.books.filter(book =>
       book.title.toLowerCase().includes(keyword)
@@ -1322,22 +1661,22 @@ const settingsActions = computed<PopoverAction[]>(() => {
   actions.push({ text: '听书模式', icon: 'music-o', key: 'audiobook' })
   // 生词本
   actions.push({ text: '生词本', icon: 'records-o', key: 'vocabulary' })
-  // 朗读设置
-  actions.push({ text: '朗读设置', icon: 'volume-o', key: 'ttsSettings' })
-  // 词典设置
+  // 词典设置 - 所有用户可见
   actions.push({ text: '词典设置', icon: 'bookmark-o', key: 'dictionarySettings' })
-  // 音标设置
-  actions.push({ text: '音标设置', icon: 'font-o', key: 'phoneticSettings' })
 
+  // 朗读设置、音标设置、修复书籍数据 - 仅管理员可见
   if (authStore.isAdmin) {
-    actions.push({ text: '用户管理', icon: 'friends-o', key: 'users' })
+    // 朗读设置
+    actions.push({ text: '朗读设置', icon: 'volume-o', key: 'ttsSettings' })
+    // 音标设置
+    actions.push({ text: '音标设置', icon: 'font-o', key: 'phoneticSettings' })
     // 修复书籍数据（仅管理员可见）
-    actions.push({ text: '修复书籍数据', icon: 'sync-o', key: 'syncBooks' })
-  } else {
-    actions.push({ text: '个人信息', icon: 'user-o', key: 'users' })
+    actions.push({ text: '修复书籍数据', icon: 'replay', key: 'syncBooks' })
+    // 压缩书籍图片（仅管理员可见）
+    actions.push({ text: '压缩书籍图片', icon: 'photo-o', key: 'compressImages' })
+    // 补充翻译+中文语音（仅管理员可见）
+    actions.push({ text: '补充翻译+中文语音', icon: 'plus', key: 'supplementAll' })
   }
-
-  actions.push({ text: '退出登录', icon: 'logout', key: 'logout' })
 
   return actions
 })
@@ -1347,6 +1686,41 @@ const bookActions = [
   { text: '添加分组', icon: 'plus', key: 'addGroup' },
   { text: '收起所有分组', icon: 'shrink', key: 'collapseAll' }
 ]
+
+// 用户名下拉菜单
+const userActions = computed<PopoverAction[]>(() => {
+  const actions: PopoverAction[] = []
+
+  // 用户管理 - 管理员可见
+  if (authStore.isAdmin) {
+    actions.push({ text: '用户管理', icon: 'friends-o', key: 'users' })
+  } else {
+    actions.push({ text: '个人信息', icon: 'user-o', key: 'users' })
+  }
+
+  // 退出登录
+  actions.push({ text: '退出登录', icon: 'logout', key: 'logout' })
+
+  return actions
+})
+
+// 用户菜单选择
+const onUserSelect = (action: PopoverAction) => {
+  if (action.key === 'users') {
+    router.push('/users')
+  } else if (action.key === 'logout') {
+    showConfirmDialog({
+      title: '确认退出',
+      message: '确定要退出登录吗？'
+    }).then(() => {
+      authStore.logout()
+      showToast('已退出登录')
+      router.push('/login')
+    }).catch(() => {
+      // 取消操作
+    })
+  }
+}
 
 // 设置/用户菜单选择
 const onSettingsSelect = (action: PopoverAction) => {
@@ -1362,6 +1736,7 @@ const onSettingsSelect = (action: PopoverAction) => {
     }
     showTtsSettingsDialog.value = true
   } else if (action.key === 'dictionarySettings') {
+    loadTranslationSettings()
     showDictionarySettingsDialog.value = true
   } else if (action.key === 'phoneticSettings') {
     showPhoneticSettingsDialog.value = true
@@ -1369,13 +1744,17 @@ const onSettingsSelect = (action: PopoverAction) => {
     router.push('/users')
   } else if (action.key === 'syncBooks') {
     handleSyncBooks()
+  } else if (action.key === 'compressImages') {
+    handleCompressImages()
+  } else if (action.key === 'supplementAll') {
+    handleSupplementAll()
   } else if (action.key === 'logout') {
     showConfirmDialog({
       title: '确认退出',
       message: '确定要退出登录吗？'
     }).then(() => {
       authStore.logout()
-      showNotify('已退出登录')
+      showToast('已退出登录')
       router.push('/login')
     }).catch(() => {
       // 取消操作
@@ -1383,18 +1762,116 @@ const onSettingsSelect = (action: PopoverAction) => {
   }
 }
 
+// 语音检查错误清单弹窗
+const showAudioErrorDialog = ref(false)
+const audioErrorList = ref<{ book_id?: string; title: string; issues: string[] }[]>([])
+const audioFixedList = ref<{ book_id?: string; title: string; fixed_fields: string[]; warnings: string[] }[]>([])
+
+// 标记是否从音频修复弹窗进入编辑
+const isEditingFromAudioFix = ref(false)
+
+// 从音频修复弹窗点击编辑书籍
+const handleEditBookFromAudioFix = async (bookId: string) => {
+  // 标记从音频修复弹窗进入
+  isEditingFromAudioFix.value = true
+  
+  // 关闭音频修复弹窗
+  showAudioErrorDialog.value = false
+  
+  // 设置当前书籍 ID
+  currentBookId.value = bookId
+  
+  // 加载书籍内容
+  showLoadingToast({ message: '加载中...', forbidClick: true })
+  try {
+    const res = await api.get<{ title: string }>(`/books/${bookId}`)
+    currentBookTitle.value = res.data.title
+
+    const contentRes = await api.get<{ content: string }>(`/books/${bookId}/content`)
+    editContent.value = contentRes.data.content
+    closeToast()
+    
+    // 打开编辑对话框
+    showEditDialog.value = true
+  } catch (error) {
+    console.error('加载书籍内容失败:', error)
+    closeToast()
+    showNotify({ type: 'danger', message: '加载书籍内容失败' })
+  }
+}
+
+// 编辑保存后的统一处理
+const onEditSavedHandler = async () => {
+  if (isEditingFromAudioFix.value) {
+    // 从音频修复弹窗进入，保存后只刷新列表，不重置标记
+    // 标记保留，等关闭对话框时再检查音频
+    await loadGroups()
+  } else {
+    // 正常编辑，只刷新书籍列表
+    onEditSaved()
+  }
+}
+
+// 编辑保存后重新检查音频
+const onEditSavedAndRefreshAudio = async () => {
+  // 刷新书籍列表
+  await loadGroups()
+  
+  // 重新检查音频，显示 loading 提示
+  showLoadingToast({
+    message: '正在重新检查语音配置...',
+    forbidClick: true,
+    duration: 0
+  })
+  
+  try {
+    const res = await api.post('/books/sync')
+    const result = res.data
+    
+    // 关闭 loading
+    closeToast()
+    
+    // 更新音频修复列表
+    audioFixedList.value = result.audio_fixed || []
+    audioErrorList.value = result.audio_errors || []
+    
+    // 如果还有问题，重新显示弹窗
+    if (audioFixedList.value.length > 0 || audioErrorList.value.length > 0) {
+      showAudioErrorDialog.value = true
+    }
+  } catch (error) {
+    console.error('重新检查音频失败:', error)
+    closeToast()
+    showNotify({ type: 'danger', message: '重新检查音频失败' })
+  }
+}
+
+// 编辑对话框关闭时的处理
+const onEditClosedHandler = async () => {
+  // 如果是从音频修复弹窗进入的编辑模式，关闭时重新检查音频
+  if (isEditingFromAudioFix.value) {
+    isEditingFromAudioFix.value = false
+    await onEditSavedAndRefreshAudio()
+  }
+}
+
 // 修复书籍数据
 const handleSyncBooks = async () => {
   showConfirmDialog({
     title: '修复书籍数据',
-    message: '将扫描 Books 目录并同步数据库记录，是否继续？'
+    message: '将扫描 Books 目录并同步数据库记录，同时检查语音配置文件完整性，是否继续？'
   }).then(async () => {
     try {
-      showNotify({ type: 'success', message: '正在同步...', duration: 1000 })
+      // 显示全屏 Loading 遮罩
+      showLoadingToast({
+        message: '正在同步书籍...',
+        forbidClick: true,
+        duration: 0  // 0 表示不自动关闭，需要手动调用 closeToast
+      })
       const res = await api.post('/books/sync')
       const result = res.data
       
-      // 构建结果消息
+      // 构建数据库同步结果消息
       const messages: string[] = []
       if (result.fixed?.length > 0) {
         messages.push(`修复 ${result.fixed.length} 本`)
@@ -1408,17 +1885,163 @@ const handleSyncBooks = async () => {
       if (result.errors?.length > 0) {
         messages.push(`${result.errors.length} 本出错`)
       }
+      // 语音配置自动修复
+      if (result.audio_fixed?.length > 0) {
+        messages.push(`自动修复语音配置 ${result.audio_fixed.length} 本`)
+      }
       
+      const needReload = (result.fixed?.length > 0) || (result.added?.length > 0) || (result.removed?.length > 0)
+
+      // 关闭 Loading 遮罩
+      closeToast()
+
       if (messages.length === 0) {
         showNotify({ type: 'success', message: '无需修复，数据已同步' })
       } else {
         showNotify({ type: 'success', message: messages.join('，') })
-        // 重新加载书籍列表
-        await loadGroups()
+        if (needReload) {
+          // 重新加载书籍列表
+          await loadGroups()
+        }
+      }
+      
+      // 如果有语音配置修复结果或错误，弹出详细清单
+      if (result.audio_fixed?.length > 0 || result.audio_errors?.length > 0) {
+        audioFixedList.value = result.audio_fixed || []
+        audioErrorList.value = result.audio_errors || []
+        showAudioErrorDialog.value = true
       }
     } catch (error: any) {
       console.error('同步失败:', error)
+      // 关闭 Loading 遮罩
+      closeToast()
       showNotify({ type: 'danger', message: error.response?.data?.detail || '同步失败' })
+    }
+  }).catch(() => {
+    // 取消操作
+  })
+}
+
+// 压缩书籍图片
+const handleCompressImages = async () => {
+  showConfirmDialog({
+    title: '压缩书籍图片',
+    message: '将扫描所有书籍，将jpg/jpeg/png/bmp格式图片压缩并转换为WebP格式，是否继续？'
+  }).then(async () => {
+    try {
+      showLoadingToast({
+        message: '正在压缩图片...',
+        forbidClick: true,
+        duration: 0
+      })
+      const res = await api.post('/books/compress-images')
+      const result = res.data
+      
+      closeToast()
+      
+      // 构建结果消息
+      const messages: string[] = []
+      if (result.processed_books > 0) {
+        messages.push(`处理 ${result.processed_books} 本书籍`)
+      }
+      if (result.converted_images > 0) {
+        messages.push(`转换 ${result.converted_images} 张图片`)
+      }
+      if (result.skipped_images > 0) {
+        messages.push(`跳过 ${result.skipped_images} 张`)
+      }
+      if (result.errors?.length > 0) {
+        messages.push(`${result.errors.length} 个错误`)
+      }
+      
+      if (messages.length === 0) {
+        showNotify({ type: 'success', message: '所有图片已是WebP格式，无需转换' })
+      } else {
+        showNotify({ type: 'success', message: messages.join('，') })
+      }
+    } catch (error: any) {
+      console.error('压缩失败:', error)
+      closeToast()
+      showNotify({ type: 'danger', message: error.response?.data?.detail || '压缩失败' })
+    }
+  }).catch(() => {
+    // 取消操作
+  })
+}
+
+// 补充翻译+中文语音
+const showSupplementProgress = ref(false)
+const supplementProgress = ref(0)
+const supplementMessage = ref('')
+const supplementLoading = ref(false)
+
+const handleSupplementAll = async () => {
+  showConfirmDialog({
+    title: '补充翻译+中文语音',
+    message: '将检查所有书籍，补充缺少的翻译和中文语音（不会覆盖已有内容），是否继续？'
+  }).then(async () => {
+    // 显示进度对话框
+    showSupplementProgress.value = true
+    supplementProgress.value = 0
+    supplementMessage.value = '正在准备...'
+    supplementLoading.value = true
+
+    try {
+      const response = await fetch('/api/v1/books/admin/books/supplement-all', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authStore.token}`
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status} ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('无法读取响应流')
+      }
+
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              supplementProgress.value = data.percentage || 0
+              supplementMessage.value = data.message || ''
+            } catch (e) {
+              console.error('解析SSE数据失败:', e)
+            }
+          }
+        }
+      }
+
+      // 处理完成
+      supplementLoading.value = false
+      supplementMessage.value = '处理完成！'
+      supplementProgress.value = 100
+
+      setTimeout(() => {
+        showSupplementProgress.value = false
+        showNotify({ type: 'success', message: '翻译和中文语音补充完成' })
+      }, 1500)
+
+    } catch (error: any) {
+      console.error('补充翻译和中文语音失败:', error)
+      showSupplementProgress.value = false
+      supplementLoading.value = false
+      showNotify({ type: 'danger', message: error.message || '补充失败' })
     }
   }).catch(() => {
     // 取消操作
@@ -1442,7 +2065,6 @@ const loadGroups = async () => {
     coverErrorMap.value = {}
     coverCheckedBooks.value.clear()
     const res = await api.get<BookGroup[]>('/categories/books/grouped')
-    console.log('loadGroups response:', JSON.stringify(res.data))
     bookGroups.value = res.data
 
     // 默认展开第一个分组
@@ -1513,8 +2135,6 @@ const toggleBookSelect = (bookId: string) => {
 const handleBookClick = (bookId: string, _groupId: number) => {
   if (isMultiSelect.value) {
     toggleBookSelect(bookId)
-  } else if (isSorting.value) {
-    // 排序模式下点击暂时不做处理
   } else {
     openBook(bookId)
   }
@@ -1524,10 +2144,6 @@ const handleBookClick = (bookId: string, _groupId: number) => {
 const handleCoverClick = (book: Book) => {
   if (isMultiSelect.value) {
     toggleBookSelect(book.id)
-  } else if (isSorting.value) {
-    // 排序模式
-  } else {
-    // 正常打开书籍
   }
 }
 
@@ -1748,15 +2364,11 @@ const confirmDeleteGroup = async () => {
 const enableMultiSelect = () => {
   closeContextMenu()
   isMultiSelect.value = true
+  // 记录当前所在分组
+  currentGroupId.value = activeNames.value || 0
   if (contextMenuBook.value) {
     selectedBooks.value = [contextMenuBook.value.id]
   }
-}
-
-// 启用排序模式
-const enableSorting = () => {
-  closeContextMenu()
-  isSorting.value = true
 }
 
 // 取消多选模式
@@ -1812,16 +2424,49 @@ const selectAllBooksInCurrentGroup = () => {
   }
 }
 
+// 判断某个分组是否已全选（所有可见书籍都被选中）
+const isGroupAllSelected = (groupId: number): boolean => {
+  const group = filteredGroups.value.find(g => g.id === groupId)
+  if (!group) return false
+  const visibleBooks = getVisibleBooks(group)
+  if (visibleBooks.length === 0) return false
+  return visibleBooks.every(book => selectedBooks.value.includes(book.id))
+}
+
+// 切换分组选择（选中/取消选中该分组下所有书籍）
+const toggleGroupSelect = (groupId: number) => {
+  const group = filteredGroups.value.find(g => g.id === groupId)
+  if (!group) return
+
+  const visibleBooks = getVisibleBooks(group)
+  const groupBookIds = visibleBooks.map(b => b.id)
+  const isCurrentlyAllSelected = isGroupAllSelected(groupId)
+
+  if (isCurrentlyAllSelected) {
+    // 取消选择该分组的所有书籍
+    selectedBooks.value = selectedBooks.value.filter(id => !groupBookIds.includes(id))
+  } else {
+    // 选中该分组的所有书籍
+    selectedBooks.value = [...new Set([...selectedBooks.value, ...groupBookIds])]
+  }
+}
+
 // 批量移动书籍
 const batchMoveBooks = async () => {
   // 加载分组列表用于选择
   try {
     const res = await api.get<{ id: number; name: string }[]>('/categories')
-    // 过滤掉当前所在分组和未分组(0)
-    categoriesForMove.value = res.data.filter((c: { id: number; name: string }) =>
-      c.id !== 0 && c.id !== currentGroupId.value
-    )
-    selectedMoveCategory.value = 0
+    // 过滤掉未分组(0)，如果当前不是未分组则还要过滤当前所在分组
+    categoriesForMove.value = res.data.filter((c: { id: number; name: string }) => {
+      // 从未分组移动时，显示所有其他分组
+      if (currentGroupId.value === 0) {
+        return c.id !== 0
+      }
+      // 从其他分组移动时，显示除当前分组和未分组外的所有分组
+      return c.id !== 0 && c.id !== currentGroupId.value
+    })
+    // 默认选择第一个分类
+    selectedMoveCategory.value = categoriesForMove.value.length > 0 ? categoriesForMove.value[0].id : 0
     showAddGroupInMove.value = false
     newGroupInMove.value = ''
     showMoveDialog.value = true
@@ -1843,6 +2488,7 @@ const openMoveDialog = () => {
 
 // 确认移动书籍
 const confirmMoveBooks = async () => {
+  movingBooks.value = true
   try {
     // 如果创建新分组
     if (showAddGroupInMove.value && newGroupInMove.value.trim()) {
@@ -1866,6 +2512,8 @@ const confirmMoveBooks = async () => {
   } catch (error: any) {
     console.error('移动失败:', error)
     showNotify({ type: 'danger', message: error.response?.data?.detail || '移动失败' })
+  } finally {
+    movingBooks.value = false
   }
 }
 
@@ -1916,81 +2564,135 @@ const exportBooks = async (bookIds: string[]) => {
   exportCurrentBook.value = ''
 
   try {
-    // 模拟进度更新（因为后端是一次性返回，这里用前端模拟进度）
     const totalBooks = bookIds.length
-    let processedBooks = 0
-
-    // 开始进度模拟
+    let simulatedProgress = 0
+    
+    // 打包阶段的模拟进度（因为后端不支持流式进度）
     const progressInterval = setInterval(() => {
-      if (processedBooks < totalBooks) {
-        processedBooks++
-        exportProgress.value = Math.round((processedBooks / totalBooks) * 90) // 最多到90%，留给下载
-        exportStatus.value = `正在打包书籍 (${processedBooks}/${totalBooks})...`
-        // 查找当前处理的书籍名称
-        for (const group of bookGroups.value) {
-          const book = group.books.find(b => b.id === bookIds[processedBooks - 1])
-          if (book) {
-            exportCurrentBook.value = book.title
-            break
+      if (simulatedProgress < 50) {
+        simulatedProgress += 2
+        exportProgress.value = simulatedProgress
+        exportStatus.value = `正在打包书籍 (${totalBooks} 本)...`
+      }
+    }, 500)
+
+    // 使用 XMLHttpRequest 来监听下载进度
+    return new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/v1/books/export')
+      xhr.setRequestHeader('Content-Type', 'application/json')
+      xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+      xhr.responseType = 'blob'
+
+      // 用于存储总文件大小
+      let totalSize = 0
+
+      // 监听下载进度
+      xhr.addEventListener('progress', (event) => {
+        clearInterval(progressInterval)
+        
+        // 尝试从响应头获取 Content-Length
+        if (totalSize === 0) {
+          const contentLength = xhr.getResponseHeader('Content-Length')
+          if (contentLength) {
+            totalSize = parseInt(contentLength, 10)
           }
         }
-      }
-    }, 2000) // 每2000ms更新一本，让进度显示更平滑
+        
+        const loaded = event.loaded
+        const total = totalSize || event.total
+        
+        if (total > 0) {
+          // 从50%开始计算下载进度，到95%
+          const downloadPercent = Math.round((loaded / total) * 45) + 50
+          exportProgress.value = Math.min(downloadPercent, 95)
+          
+          const loadedMB = (loaded / 1024 / 1024).toFixed(1)
+          const totalMB = (total / 1024 / 1024).toFixed(1)
+          exportStatus.value = `正在下载 ${loadedMB}MB / ${totalMB}MB`
+        } else {
+          // 如果无法获取总大小，显示已下载量
+          exportProgress.value = 70
+          const loadedMB = (loaded / 1024 / 1024).toFixed(1)
+          exportStatus.value = `正在下载 ${loadedMB}MB...`
+        }
+      })
 
-    const response = await fetch('/api/v1/books/export', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authStore.token}`
-      },
-      body: JSON.stringify({ book_ids: bookIds })
+      // 添加 readystatechange 监听，在 headers 接收后获取 Content-Length
+      xhr.addEventListener('readystatechange', () => {
+        // readyState 2 = HEADERS_RECEIVED
+        if (xhr.readyState === 2) {
+          const contentLength = xhr.getResponseHeader('Content-Length')
+          if (contentLength) {
+            totalSize = parseInt(contentLength, 10)
+            clearInterval(progressInterval)
+            const totalMB = (totalSize / 1024 / 1024).toFixed(1)
+            exportStatus.value = `正在下载 0MB / ${totalMB}MB`
+          }
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        clearInterval(progressInterval)
+        
+        if (xhr.status >= 200 && xhr.status < 300) {
+          // 获取文件名
+          const contentDisposition = xhr.getResponseHeader('content-disposition')
+          let filename = 'books_export.zip'
+          if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i)
+            if (filenameMatch) {
+              filename = decodeURIComponent(filenameMatch[1].trim().replace(/"/g, ''))
+            }
+          }
+
+          exportProgress.value = 100
+          exportStatus.value = '导出完成！'
+          exportCurrentBook.value = filename
+
+          // 下载文件
+          const blob = xhr.response
+          const url = window.URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = filename
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          window.URL.revokeObjectURL(url)
+
+          // 延迟关闭对话框
+          setTimeout(() => {
+            showExportProgressDialog.value = false
+            showNotify({ type: 'success', message: '书籍导出成功', duration: 1500 })
+          }, 800)
+
+          // 如果是多选模式，退出多选
+          if (isMultiSelect.value) {
+            cancelMultiSelect()
+          }
+          resolve()
+        } else {
+          showExportProgressDialog.value = false
+          reject(new Error('导出失败'))
+        }
+      })
+
+      xhr.addEventListener('error', () => {
+        clearInterval(progressInterval)
+        showExportProgressDialog.value = false
+        reject(new Error('网络错误'))
+      })
+
+      xhr.addEventListener('abort', () => {
+        clearInterval(progressInterval)
+        showExportProgressDialog.value = false
+        reject(new Error('导出已取消'))
+      })
+
+      // 发送请求
+      xhr.send(JSON.stringify({ book_ids: bookIds }))
     })
-
-    clearInterval(progressInterval)
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: '导出失败' }))
-      throw new Error(errorData.detail || '导出失败')
-    }
-
-    // 获取文件名
-    const contentDisposition = response.headers.get('content-disposition')
-    let filename = 'books_export.zip'
-    if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i)
-      if (filenameMatch) {
-        filename = decodeURIComponent(filenameMatch[1].trim().replace(/"/g, ''))
-      }
-    }
-
-    exportProgress.value = 95
-    exportStatus.value = '正在下载文件...'
-    exportCurrentBook.value = filename
-
-    // 下载文件
-    const blob = await response.blob()
-    const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
-
-    exportProgress.value = 100
-    exportStatus.value = '导出完成！'
-
-    // 延迟关闭对话框
-    setTimeout(() => {
-      showExportProgressDialog.value = false
-      showNotify({ type: 'success', message: '书籍导出成功', duration: 1500 })
-    }, 800)
-
-    // 如果是多选模式，退出多选
-    if (isMultiSelect.value) {
-      cancelMultiSelect()
-    }
   } catch (error: any) {
     showExportProgressDialog.value = false
     console.error('导出书籍失败:', error)
@@ -2074,38 +2776,29 @@ const openCoverDialog = async () => {
 
   // 加载书籍信息以获取书籍路径
   try {
-    console.log('Loading cover for book:', contextMenuBook.value.id, contextMenuBook.value.title)
-
     // 获取书籍详情来获取书籍路径
     const bookRes = await api.get<{ book_path: string }>(`/books/${contextMenuBook.value.id}`)
     const bookFolder = bookRes.data.book_path
 
-    console.log('Book folder:', bookFolder)
-
     // 加载书籍内容
     const contentRes = await api.get<{ content: string }>(`/books/${contextMenuBook.value.id}/content-file`)
     const content = contentRes.data.content
-    console.log('Content length:', content.length)
 
     // 提取markdown中的所有图片
     const localImages: string[] = []
 
     // 使用match直接获取所有图片URL
     const allImgMatches = content.match(/!\[([^\]]*)\]\(([^)]+)\)/g) || []
-    console.log('All image matches:', allImgMatches)
 
     if (allImgMatches.length === 0) {
-      console.log('No images found in content!')
-      // 尝试其他格式
-      const simpleMatches = content.match(/!\[[^\]]*\]\([^)]+\)/g) || []
-      console.log('Simple image matches:', simpleMatches)
+      // 尝试其他格式（预留）
+      // const simpleMatches = content.match(/!\[[^\]]*\]\([^)]+\)/g) || []
     }
 
     for (const match of allImgMatches) {
       const urlMatch = match.match(/!\[([^\]]*)\]\(([^)]+)\)/)
       if (urlMatch) {
         const url = urlMatch[2]
-        console.log('Found image URL:', url)
         // 过滤掉http开头的远程图片，只保留本地图片
         if (!url.startsWith('http://') && !url.startsWith('https://')) {
           localImages.push(url)
@@ -2113,7 +2806,6 @@ const openCoverDialog = async () => {
       }
     }
 
-    console.log('Local images found:', localImages)
 
     // 转换相对路径为完整URL
     mdImages.value = localImages.map((url: string) => {
@@ -2136,11 +2828,9 @@ const openCoverDialog = async () => {
         resultUrl = `/books/${bookFolder}/assets/${url}`
       }
 
-      console.log('Converted URL:', url, '->', resultUrl)
       return resultUrl
     })
 
-    console.log('Full image URLs:', mdImages.value)
   } catch (error) {
     console.error('加载书籍内容失败:', error)
   }
@@ -2200,7 +2890,7 @@ const saveCover = async () => {
       const res = await fetch(coverPath)
       const blob = await res.blob()
       const formData = new FormData()
-      formData.append('file', blob, 'cover.jpg')
+      formData.append('file', blob, 'cover.webp')
 
       // 上传到书籍资源目录
       const uploadRes = await fetch(`/api/v1/books/upload-cover?book_id=${contextMenuBook.value.id}`, {
@@ -2222,6 +2912,8 @@ const saveCover = async () => {
     showNotify({ type: 'success', message: '封面保存成功', duration: 1500 })
     showCoverDialog.value = false
     await loadGroups()
+    // 强制触发 DOM 更新，确保封面刷新
+    await nextTick()
   } catch (error: any) {
     console.error('保存封面失败:', error)
     showNotify({ type: 'danger', message: error.response?.data?.detail || '保存封面失败' })
@@ -2281,10 +2973,16 @@ const onFileDrop = (event: DragEvent) => {
 // 文件选择处理
 const onFileSelected = (event: Event) => {
   const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
+  const files = target.files
 
-  if (file) {
-    handleFile(file)
+  if (files && files.length > 0) {
+    if (files.length === 1) {
+      // 单文件处理
+      handleFile(files[0])
+    } else {
+      // 多文件处理（只接受MD文件）
+      handleMultipleFiles(Array.from(files))
+    }
   }
 }
 
@@ -2310,6 +3008,7 @@ const handleFile = async (file: File) => {
     importStatus.value = ''
     currentBookId.value = ''
     isZipImport.value = false
+    isBatchImport.value = false
     importAction.value = null
     selectedDuplicateBooks.value = []
     duplicateCheckResult.value = {
@@ -2321,60 +3020,175 @@ const handleFile = async (file: File) => {
   }
 
   selectedFile.value = file
+  selectedFiles.value = []
+  isBatchImport.value = false
+}
+
+// 处理多文件选择（批量导入MD文件）
+const handleMultipleFiles = async (files: File[]) => {
+  // 过滤只保留MD文件
+  const mdFiles = files.filter(f => f.name.endsWith('.md'))
+
+  if (mdFiles.length === 0) {
+    showNotify({ type: 'danger', message: '请至少选择一个 .md 格式的文件' })
+    return
+  }
+
+  if (mdFiles.length !== files.length) {
+    showNotify({ type: 'warning', message: `已过滤非MD文件，共选择 ${mdFiles.length} 个MD文件` })
+  }
+
+  // 检查是否已登录
+  if (!authStore.isLoggedIn) {
+    showToast('请先登录')
+    router.push('/login')
+    return
+  }
+
+  // 重置状态
+  if (importCompleted.value) {
+    importCompleted.value = false
+    importProgress.value = 0
+    importStatus.value = ''
+    currentBookId.value = ''
+    isZipImport.value = false
+    isBatchImport.value = false
+    importAction.value = null
+    selectedDuplicateBooks.value = []
+    duplicateCheckResult.value = {
+      has_duplicates: false,
+      duplicate_books: [],
+      new_books: [],
+      total_books: 0
+    }
+  }
+
+  selectedFiles.value = mdFiles
+  isBatchImport.value = true
+}
+
+// 批量导入MD文件
+const handleBatchImport = async () => {
+  importing.value = true
+  importCompleted.value = false
+  importProgress.value = 0
+  importStatus.value = `正在批量导入 ${selectedFiles.value.length} 本书籍...`
+
+  const totalFiles = selectedFiles.value.length
+  let successCount = 0
+  let failCount = 0
+
+  for (let i = 0; i < totalFiles; i++) {
+    const file = selectedFiles.value[i]
+    // 计算当前文件的进度基数
+    const baseProgress = Math.round((i / totalFiles) * 100)
+    
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      // 添加category_id参数（0表示未分组）
+      const categoryId = importCategoryId.value
+      let apiPath = '/api/v1/books/import'
+      const params = new URLSearchParams()
+
+      if (categoryId) {
+        params.append('category_id', categoryId.toString())
+      }
+
+      if (params.toString()) {
+        apiPath += `?${params.toString()}`
+      }
+
+      // 使用带进度回调的上传
+      const result = await uploadWithProgressCallback(
+        apiPath,
+        formData,
+        `正在上传 (${i + 1}/${totalFiles}): ${file.name}`,
+        (progress) => {
+          // 当前文件进度 + 基数 = 总体进度
+          importProgress.value = Math.min(baseProgress + Math.round(progress / totalFiles), 99)
+        }
+      )
+
+      if (result.ok) {
+        successCount++
+      } else {
+        failCount++
+        console.error(`导入失败: ${file.name}`)
+      }
+    } catch (error) {
+      failCount++
+      console.error(`导入异常: ${file.name}`, error)
+    }
+  }
+
+  // 完成
+  importProgress.value = 100
+  importStatus.value = `批量导入完成: 成功 ${successCount} 本, 失败 ${failCount} 本`
+  importCompleted.value = true
+  importing.value = false
+  showNotify({ type: 'success', message: `成功导入 ${successCount} 本书籍`, duration: 2000 })
+
+  // 刷新分组列表（在importing设为false之后，确保UI及时更新）
+  await loadGroups()
 }
 
 // 确认导入
 const handleImportConfirm = async () => {
+  // 批量导入模式
+  if (isBatchImport.value && selectedFiles.value.length > 0) {
+    // 先上传检查重复书籍（需要先上传才能检查内容）
+    isBatchMdImport.value = true
+    
+    const duplicateCheck = await checkMdDuplicates(selectedFiles.value)
+    
+    if (duplicateCheck.has_duplicates) {
+      // 显示重复书籍对话框
+      duplicateCheckResult.value = duplicateCheck
+      showDuplicateDialog.value = true
+      importStatus.value = ''
+      return
+    }
+    
+    // 没有重复，直接导入
+    await handleBatchImport()
+    return
+  }
+
+  // 单文件导入模式
   if (!selectedFile.value) {
     showNotify({ type: 'warning', message: '请先选择文件' })
     return
   }
 
-  importing.value = true
   importCompleted.value = false
   importProgress.value = 0
-  importStatus.value = '正在检查书籍...'
+  importStatus.value = ''
 
   // 标记是否是ZIP导入
   isZipImport.value = selectedFile.value.name.endsWith('.zip')
 
   try {
-    // 1. 如果是ZIP文件，先检查资源完整性和重复书籍
+    // ZIP文件：先检查重复书籍
     if (isZipImport.value) {
-      importStatus.value = '正在检查ZIP文件完整性...'
-      const integrityCheck = await checkZipIntegrity(selectedFile.value)
-
-      if (!integrityCheck.is_valid) {
-        // 资源不完整，询问用户是否继续
-        const confirm = await showConfirmDialog({
-          title: '资源不完整',
-          message: `${integrityCheck.message}，继续导入可能影响使用体验，是否继续？`,
-          confirmButtonText: '继续导入',
-          cancelButtonText: '取消'
-        }).catch(() => null)
-
-        if (!confirm) {
-          importing.value = false
-          importStatus.value = ''
-          return
-        }
-      }
-
-      // 检查重复书籍
-      importStatus.value = '正在检查重复书籍...'
+      // 上传检查重复书籍
+      isBatchMdImport.value = false
       const duplicateCheck = await checkZipDuplicates(selectedFile.value)
-
+      
       if (duplicateCheck.has_duplicates) {
         // 显示重复书籍对话框
         duplicateCheckResult.value = duplicateCheck
         showDuplicateDialog.value = true
-        importing.value = false
         importStatus.value = ''
         return
       }
+      
+      // 没有重复，直接导入（使用doImportZip而非doImport）
+      return await doImportZip(false, undefined)
     }
 
-    // 2. 检查书籍是否已存在
+    // 单文件MD：先用文件名检查是否存在
     const filename = selectedFile.value.name
     const checkResponse = await fetch(`/api/v1/books/check/${encodeURIComponent(filename)}`, {
       headers: {
@@ -2388,9 +3202,8 @@ const handleImportConfirm = async () => {
 
     const checkData = await checkResponse.json()
 
-    // 3. 如果书籍已存在，弹出确认对话框
+    // 如果书籍已存在，弹出确认对话框
     if (checkData.exists) {
-      console.log('Book exists, book_id:', checkData.book_id)
       const confirm = await showConfirmDialog({
         title: '书籍已存在',
         message: `《${checkData.title}》已存在，是否覆盖？`,
@@ -2404,11 +3217,10 @@ const handleImportConfirm = async () => {
         return
       }
 
-      // 4. 覆盖导入（不生成音频），传入已有书籍的book_id
-      console.log('Calling doImport with book_id:', checkData.book_id)
+      // 覆盖导入，传入已有书籍的book_id
       return await doImport(true, checkData.book_id)
     } else {
-      // 5. 正常导入
+      // 正常导入
       return await doImport(false)
     }
   } catch (error: any) {
@@ -2418,29 +3230,216 @@ const handleImportConfirm = async () => {
   }
 }
 
-// 检查ZIP文件完整性
-const checkZipIntegrity = async (file: File): Promise<{ is_valid: boolean; message: string }> => {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  try {
-    const response = await fetch('/api/v1/books/check-zip-integrity', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${authStore.token}`
-      },
-      body: formData
+// 带上传进度的请求函数
+const uploadWithProgress = (
+  url: string,
+  formData: FormData,
+  statusText: string = '正在上传'
+): Promise<{ ok: boolean; data: any }> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    
+    // 监听上传进度
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100)
+        uploadProgress.value = percentComplete
+        uploadStatus.value = `${statusText}... ${percentComplete}%`
+      }
     })
+    
+    xhr.addEventListener('load', () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          resolve({ ok: true, data })
+        } catch (e) {
+          resolve({ ok: true, data: null })
+        }
+      } else {
+        resolve({ ok: false, data: null })
+      }
+    })
+    
+    xhr.addEventListener('error', () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      reject(new Error('Upload failed'))
+    })
+    
+    xhr.addEventListener('abort', () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      reject(new Error('Upload aborted'))
+    })
+    
+    // 设置请求
+    xhr.open('POST', url)
+    xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+    
+    // 开始上传
+    uploading.value = true
+    uploadProgress.value = 0
+    uploadStatus.value = `${statusText}...`
+    xhr.send(formData)
+  })
+}
 
-    if (!response.ok) {
-      return { is_valid: true, message: '' } // 检查失败时允许继续导入
-    }
+// 带进度回调的上传函数（用于批量导入）
+const uploadWithProgressCallback = (
+  url: string,
+  formData: FormData,
+  statusText: string,
+  onProgress: (progress: number) => void
+): Promise<{ ok: boolean; data: any }> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    
+    // 监听上传进度
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100)
+        onProgress(percentComplete)
+        // 上传接近完成时，提示后端正在处理
+        if (percentComplete >= 95) {
+          importStatus.value = `${statusText}，后端处理中...`
+        } else {
+          importStatus.value = `${statusText}... ${percentComplete}%`
+        }
+      }
+    })
+    
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          resolve({ ok: true, data })
+        } catch (e) {
+          resolve({ ok: true, data: null })
+        }
+      } else {
+        resolve({ ok: false, data: null })
+      }
+    })
+    
+    xhr.addEventListener('error', () => {
+      reject(new Error('Upload failed'))
+    })
+    
+    xhr.addEventListener('abort', () => {
+      reject(new Error('Upload aborted'))
+    })
+    
+    // 设置请求
+    xhr.open('POST', url)
+    xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+    xhr.send(formData)
+  })
+}
 
-    return await response.json()
-  } catch (error) {
-    console.error('检查ZIP完整性失败:', error)
-    return { is_valid: true, message: '' } // 检查失败时允许继续导入
-  }
+// 带上传进度的流式请求函数（用于导入书籍）
+const uploadWithProgressAndStream = (
+  url: string,
+  formData: FormData,
+  statusText: string = '正在上传'
+): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    
+    // 监听上传进度
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100)
+        uploadProgress.value = percentComplete
+        // 上传接近完成时，提示后端正在处理
+        if (percentComplete >= 95) {
+          uploadStatus.value = '后端处理中，请稍候...'
+        } else {
+          uploadStatus.value = `${statusText}... ${percentComplete}%`
+        }
+      }
+    })
+    
+    xhr.addEventListener('load', async () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      
+      // 上传完成，切换到导入状态
+      importing.value = true
+      importProgress.value = 0
+      importStatus.value = '正在处理...'
+      
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const text = xhr.responseText
+          // 解析SSE消息
+          const matches = text.matchAll(/data: (\{.*?\})/g)
+          for (const match of matches) {
+            try {
+              const data = JSON.parse(match[1])
+              importProgress.value = data.percentage || 0
+              importStatus.value = data.message || ''
+
+              if (data.success === true) {
+                showNotify({ type: 'success', message: data.message, duration: 1500 })
+                // 如果没有返回book_id，使用覆盖导入时传入的overwriteMode
+                if (!data.book_id && overwriteMode.value) {
+                  currentBookId.value = overwriteMode.value
+                } else {
+                  currentBookId.value = data.book_id || ''
+                }
+                await loadGroups()
+                importCompleted.value = true
+                if (!isZipImport.value && !isBatchImport.value) {
+                  showChoiceDialog.value = true
+                }
+              } else if (data.success === false) {
+                showNotify({ type: 'danger', message: data.message })
+              }
+            } catch (e) {
+              console.error('解析SSE数据失败:', e)
+            }
+          }
+          resolve()
+        } catch (e) {
+          resolve()
+        }
+      } else {
+        reject(new Error('导入请求失败'))
+      }
+    })
+    
+    xhr.addEventListener('error', () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      reject(new Error('Upload failed'))
+    })
+    
+    xhr.addEventListener('abort', () => {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+      reject(new Error('Upload aborted'))
+    })
+    
+    // 设置请求
+    xhr.open('POST', url)
+    xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+    
+    // 开始上传
+    uploading.value = true
+    uploadProgress.value = 0
+    uploadStatus.value = `${statusText}...`
+    xhr.send(formData)
+  })
 }
 
 // 检查ZIP文件中的重复书籍
@@ -2449,21 +3448,44 @@ const checkZipDuplicates = async (file: File): Promise<any> => {
   formData.append('file', file)
 
   try {
-    const response = await fetch('/api/v1/books/check-zip-duplicates', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${authStore.token}`
-      },
-      body: formData
-    })
+    const result = await uploadWithProgress(
+      '/api/v1/books/check-zip-duplicates',
+      formData,
+      '正在上传ZIP检查重复'
+    )
 
-    if (!response.ok) {
+    if (!result.ok) {
       return { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
     }
 
-    return await response.json()
+    return result.data || { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
   } catch (error) {
     console.error('检查重复书籍失败:', error)
+    return { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
+  }
+}
+
+// 检查多个MD文件的重复书籍
+const checkMdDuplicates = async (files: File[]): Promise<any> => {
+  const formData = new FormData()
+  files.forEach(file => {
+    formData.append('files', file)
+  })
+
+  try {
+    const result = await uploadWithProgress(
+      '/api/v1/books/check-md-duplicates',
+      formData,
+      '正在上传文件检查重复'
+    )
+
+    if (!result.ok) {
+      return { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
+    }
+
+    return result.data || { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
+  } catch (error) {
+    console.error('检查MD文件重复书籍失败:', error)
     return { has_duplicates: false, duplicate_books: [], new_books: [], total_books: 0 }
   }
 }
@@ -2492,8 +3514,13 @@ const clearAllDuplicates = () => {
 const handleImportWithOverwrite = () => {
   showDuplicateDialog.value = false
   importAction.value = 'overwrite'
-  // 不修改 selectedDuplicateBooks，保持为空以区分"覆盖全部"和"覆盖选中"
-  doImportZipWithAction()
+  // 不修改 selectedDuplicateBooks，保持为空以区分“覆盖全部”和“覆盖选中”
+  
+  if (isBatchMdImport.value) {
+    doBatchImportWithAction()
+  } else {
+    doImportZipWithAction()
+  }
 }
 
 // 跳过重复书籍导入
@@ -2501,14 +3528,150 @@ const handleImportSkipDuplicates = () => {
   showDuplicateDialog.value = false
   importAction.value = 'skip'
   selectedDuplicateBooks.value = [] // 清空选中，表示跳过全部
-  doImportZipWithAction()
+  
+  if (isBatchMdImport.value) {
+    doBatchImportWithAction()
+  } else {
+    doImportZipWithAction()
+  }
 }
 
 // 覆盖选中的重复书籍
 const handleImportSelected = () => {
   showDuplicateDialog.value = false
   importAction.value = 'selected'
-  doImportZipWithAction()
+  
+  if (isBatchMdImport.value) {
+    doBatchImportWithAction()
+  } else {
+    doImportZipWithAction()
+  }
+}
+
+// 根据用户选择执行批量MD导入
+const doBatchImportWithAction = async () => {
+  if (selectedFiles.value.length === 0 || !importAction.value) return
+
+  importing.value = true
+  importProgress.value = 0
+  importStatus.value = '正在导入书籍...'
+
+  // 根据用户选择决定导入策略
+  // 'skip': 跳过所有重复 
+  // 'overwrite': 覆盖所有重复
+  // 'selected': 只覆盖选中的重复书籍
+  
+  const skipBookIds = new Set<string>()
+  const overwriteBookIds = new Set<string>()
+  
+  if (importAction.value === 'skip') {
+    // 跳过全部重复书籍
+    duplicateCheckResult.value.duplicate_books.forEach((b: any) => skipBookIds.add(b.book_id))
+  } else if (importAction.value === 'overwrite') {
+    // 覆盖全部重复书籍
+    duplicateCheckResult.value.duplicate_books.forEach((b: any) => overwriteBookIds.add(b.book_id))
+  } else if (importAction.value === 'selected') {
+    // 只覆盖选中的书籍
+    selectedDuplicateBooks.value.forEach(id => overwriteBookIds.add(id))
+    // 未选中的重复书籍要跳过
+    duplicateCheckResult.value.duplicate_books.forEach((b: any) => {
+      if (!selectedDuplicateBooks.value.includes(b.book_id)) {
+        skipBookIds.add(b.book_id)
+      }
+    })
+  }
+
+  // 建立filename到book_id的映射
+  const filenameToBookId = new Map<string, string>()
+  duplicateCheckResult.value.duplicate_books.forEach((b: any) => {
+    filenameToBookId.set(b.filename, b.book_id)
+  })
+  duplicateCheckResult.value.new_books.forEach((b: any) => {
+    filenameToBookId.set(b.filename, b.book_id)
+  })
+
+  const totalFiles = selectedFiles.value.length
+  let successCount = 0
+  let failCount = 0
+  let skipCount = 0
+
+  for (let i = 0; i < totalFiles; i++) {
+    const file = selectedFiles.value[i]
+    const bookId = filenameToBookId.get(file.name)
+    // 计算当前文件的进度基数
+    const baseProgress = Math.round((i / totalFiles) * 100)
+    
+    // 检查是否需要跳过
+    if (bookId && skipBookIds.has(bookId)) {
+      skipCount++
+      importProgress.value = Math.min(baseProgress + Math.round(100 / totalFiles), 99)
+      importStatus.value = `跳过 (${i + 1}/${totalFiles}): ${file.name}`
+      continue
+    }
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const categoryId = importCategoryId.value
+      let apiPath = '/api/v1/books/import'
+      const params = new URLSearchParams()
+
+      if (categoryId) {
+        params.append('category_id', categoryId.toString())
+      }
+      
+      // 如果需要覆盖，使用overwrite_book_ids参数
+      if (bookId && overwriteBookIds.has(bookId)) {
+        params.append('overwrite_book_ids', bookId)
+      }
+
+      if (params.toString()) {
+        apiPath += `?${params.toString()}`
+      }
+
+      // 使用带进度回调的上传
+      const result = await uploadWithProgressCallback(
+        apiPath,
+        formData,
+        `正在上传 (${i + 1}/${totalFiles}): ${file.name}`,
+        (progress) => {
+          // 当前文件进度 + 基数 = 总体进度
+          importProgress.value = Math.min(baseProgress + Math.round(progress / totalFiles), 99)
+        }
+      )
+
+      if (result.ok) {
+        successCount++
+      } else {
+        failCount++
+        console.error(`导入失败: ${file.name}`)
+      }
+    } catch (error) {
+      failCount++
+      console.error(`导入异常: ${file.name}`, error)
+    }
+  }
+
+  // 完成
+  importProgress.value = 100
+  const summary = skipCount > 0 
+    ? `批量导入完成: 成功 ${successCount} 本, 跳过 ${skipCount} 本, 失败 ${failCount} 本`
+    : `批量导入完成: 成功 ${successCount} 本, 失败 ${failCount} 本`
+  importStatus.value = summary
+  importCompleted.value = true
+  importing.value = false
+  
+  if (successCount > 0) {
+    showNotify({ type: 'success', message: `成功导入 ${successCount} 本书籍`, duration: 2000 })
+  }
+
+  // 重置状态
+  isBatchMdImport.value = false
+  selectedDuplicateBooks.value = []
+  
+  // 刷新分组列表
+  await loadGroups()
 }
 
 // 取消导入
@@ -2520,6 +3683,7 @@ const cancelImport = () => {
   selectedFile.value = null
   importProgress.value = 0
   selectedDuplicateBooks.value = []
+  isBatchMdImport.value = false
 }
 
 // 根据用户选择执行ZIP导入
@@ -2553,6 +3717,9 @@ const doImportZipWithAction = async () => {
 const doImportZip = async (skipDuplicates: boolean = false, overwriteBookIds?: string[]) => {
   if (!selectedFile.value) return
 
+  importing.value = true
+  importCompleted.value = false
+  importProgress.value = 0
   importStatus.value = '正在导入...'
 
   try {
@@ -2584,49 +3751,7 @@ const doImportZip = async (skipDuplicates: boolean = false, overwriteBookIds?: s
       apiPath += `?${params.toString()}`
     }
 
-    const response = await fetch(apiPath, {
-      method: 'POST',
-      body: formData,
-      headers: {
-        'Authorization': `Bearer ${authStore.token}`
-      }
-    })
-
-    if (!response.ok) {
-      throw new Error('导入请求失败')
-    }
-
-    const reader = response.body?.getReader()
-    const decoder = new TextDecoder()
-
-    while (reader) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      const text = decoder.decode(value)
-      // 解析SSE消息
-      const matches = text.matchAll(/data: (\{.*?\})/g)
-      for (const match of matches) {
-        try {
-          const data = JSON.parse(match[1])
-          importProgress.value = data.percentage || 0
-          importStatus.value = data.message || ''
-
-          if (data.success === true) {
-            showNotify({ type: 'success', message: data.message, duration: 1500 })
-            currentBookId.value = data.book_id || ''
-            // 刷新分组列表
-            await loadGroups()
-            // 标记导入完成
-            importCompleted.value = true
-          } else if (data.success === false) {
-            showNotify({ type: 'danger', message: data.message })
-          }
-        } catch (e) {
-          console.error('解析SSE数据失败:', e)
-        }
-      }
-    }
+    await uploadWithProgressAndStream(apiPath, formData, '正在上传ZIP文件')
   } catch (error: any) {
     console.error('导入书籍失败:', error)
     const message = error.message || '导入失败，请重试'
@@ -2642,6 +3767,9 @@ const doImportZip = async (skipDuplicates: boolean = false, overwriteBookIds?: s
 
 // 执行导入
 const doImport = async (overwrite: boolean, existingBookId?: string) => {
+  importing.value = true
+  importCompleted.value = false
+  importProgress.value = 0
   importStatus.value = '正在导入...'
   overwriteMode.value = existingBookId || ''
 
@@ -2658,7 +3786,6 @@ const doImport = async (overwrite: boolean, existingBookId?: string) => {
     // 如果是覆盖导入，添加已有的book_id参数
     if (overwrite && existingBookId) {
       params.append('book_id', existingBookId)
-      console.log('Overwrite import with existingBookId:', existingBookId)
     }
 
     // 添加category_id参数
@@ -2670,59 +3797,7 @@ const doImport = async (overwrite: boolean, existingBookId?: string) => {
       apiPath += `?${params.toString()}`
     }
 
-    const response = await fetch(apiPath, {
-      method: 'POST',
-      body: formData,
-      headers: {
-        'Authorization': `Bearer ${authStore.token}`
-      }
-    })
-
-    if (!response.ok) {
-      throw new Error('导入请求失败')
-    }
-
-    const reader = response.body?.getReader()
-    const decoder = new TextDecoder()
-
-    while (reader) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      const text = decoder.decode(value)
-      // 解析SSE消息
-      const matches = text.matchAll(/data: (\{.*?\})/g)
-      for (const match of matches) {
-        try {
-          const data = JSON.parse(match[1])
-          importProgress.value = data.percentage || 0
-          importStatus.value = data.message || ''
-
-          if (data.success === true) {
-            console.log('Import success, data:', data)
-            showNotify({ type: 'success', message: data.message, duration: 1500 })
-            // 如果没有返回book_id，使用覆盖导入时传入的existingBookId
-            if (!data.book_id && overwriteMode.value) {
-              currentBookId.value = overwriteMode.value
-            } else {
-              currentBookId.value = data.book_id || ''
-            }
-            // 刷新分组列表
-            await loadGroups()
-            // 标记导入完成
-            importCompleted.value = true
-            // 只有非ZIP导入才显示编辑对话框
-            if (!isZipImport.value) {
-              showChoiceDialog.value = true
-            }
-          } else if (data.success === false) {
-            showNotify({ type: 'danger', message: data.message })
-          }
-        } catch (e) {
-          console.error('解析SSE数据失败:', e)
-        }
-      }
-    }
+    await uploadWithProgressAndStream(apiPath, formData, '正在上传文件')
   } catch (error: any) {
     console.error('导入书籍失败:', error)
     const message = error.message || '导入失败，请重试'
@@ -2739,7 +3814,6 @@ const doImport = async (overwrite: boolean, existingBookId?: string) => {
 // 编辑文件并生成语音
 const handleEditAndGenerate = async () => {
   const bookId = currentBookId.value
-  console.log('handleEditMD called with bookId:', bookId)
   if (!bookId) {
     showNotify({ type: 'danger', message: '书籍ID无效' })
     return
@@ -2780,6 +3854,7 @@ const onImportDialogClosed = () => {
   showChoiceDialog.value = false
   showDuplicateDialog.value = false
   selectedFile.value = null
+  selectedFiles.value = []
   importProgress.value = 0
   importStatus.value = ''
   overwriteMode.value = ''
@@ -2787,6 +3862,8 @@ const onImportDialogClosed = () => {
   importCompleted.value = false
   currentBookId.value = ''
   isZipImport.value = false
+  isBatchImport.value = false
+  isBatchMdImport.value = false
   importAction.value = null
   selectedDuplicateBooks.value = []
   duplicateCheckResult.value = {
@@ -2802,7 +3879,10 @@ onMounted(async () => {
   // 初始化横屏检测
   checkOrientation()
   window.addEventListener('resize', handleResize)
-  
+
+  // 点击页面其他区域关闭导航栏菜单
+  window.addEventListener('click', handleCloseNavMenus)
+
   loadGroups()
   await loadUserSettings()
   loadDictionaryStatus()
@@ -2812,8 +3892,37 @@ onMounted(async () => {
   }
 })
 
+// 处理菜单显示 - 实现互斥（打开一个关闭其他）
+const handlePopoverShow = (show: boolean, current: string) => {
+  if (show) {
+    // 打开一个菜单时，关闭其他菜单
+    if (current !== 'book') showBookPopover.value = false
+    if (current !== 'user') showUserPopover.value = false
+    if (current !== 'settings') showSettingsPopover.value = false
+  }
+}
+
+// 关闭导航栏菜单
+const handleCloseNavMenus = (e: MouseEvent) => {
+  const target = e.target as HTMLElement
+  // 检查点击是否在导航操作区域内或 popover 内部
+  const navActions = target.closest('.nav-actions')
+  const inPopover = target.closest('.van-popover')
+  if (!navActions && !inPopover) {
+    // 点击在导航栏和popover外，关闭所有菜单
+    showBookPopover.value = false
+    showUserPopover.value = false
+    showSettingsPopover.value = false
+  }
+}
+
+// keep-alive 激活时（从阅读页返回）
+// 组件被缓存，滚动位置和状态自动保持
+// 书籍正文修改不影响列表，无需刷新
+
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('click', handleCloseNavMenus)
 })
 </script>
 
@@ -2907,6 +4016,24 @@ onUnmounted(() => {
   min-width: 32px;
 }
 
+.username-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.username-link {
+  font-size: 14px;
+  color: #333;
+  margin: 0 8px;
+  cursor: pointer;
+}
+
+.username-link:hover {
+  color: #1989fa;
+}
+
 .username {
   font-size: 14px;
   color: #333;
@@ -2935,6 +4062,19 @@ onUnmounted(() => {
 .group-title {
   display: flex;
   align-items: center;
+}
+
+.group-checkbox {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+.group-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #1989fa;
 }
 
 .group-name {
@@ -3041,12 +4181,6 @@ onUnmounted(() => {
   width: 18px;
   height: 18px;
   cursor: pointer;
-}
-
-.sort-handle {
-  color: #969799;
-  font-size: 18px;
-  padding: 4px;
 }
 
 /* 批量操作栏 */
@@ -3284,6 +4418,10 @@ onUnmounted(() => {
   color: #646566;
 }
 
+.choice-dialog-content .van-button {
+  padding: 0 24px;
+}
+
 /* 重复书籍对话框样式 */
 .duplicate-dialog-content {
   padding: 16px;
@@ -3474,6 +4612,123 @@ onUnmounted(() => {
   margin-top: 0;
 }
 
+/* 翻译设置样式 */
+.translation-settings-content {
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.translation-api-list {
+  margin-bottom: 16px;
+}
+
+.translation-api-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #323233;
+}
+
+.translation-api-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .api-name {
+    font-weight: 500;
+  }
+
+  .api-appid {
+    font-size: 12px;
+    color: #969799;
+  }
+}
+
+.api-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .api-edit-btn {
+    color: #1989fa;
+    cursor: pointer;
+    font-size: 16px;
+  }
+
+  .api-delete-btn {
+    color: #ee0a24;
+    cursor: pointer;
+    font-size: 16px;
+  }
+}
+
+/* 百度翻译设置样式 */
+.baidu-settings {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #eee;
+}
+
+.baidu-settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #323233;
+}
+
+.translation-api-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .api-name {
+    font-weight: 500;
+  }
+
+  .api-appid {
+    font-size: 12px;
+    color: #969799;
+  }
+}
+
+.api-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .api-edit-btn {
+    color: #1989fa;
+    cursor: pointer;
+    font-size: 16px;
+  }
+
+  .api-delete-btn {
+    color: #ee0a24;
+    cursor: pointer;
+    font-size: 16px;
+  }
+}
+
+.translation-hint {
+  text-align: center;
+  font-size: 12px;
+  color: #969799;
+  padding: 12px;
+  background: #f7f8fa;
+  border-radius: 4px;
+
+  &.warning {
+    color: #ff976a;
+  }
+}
+
 .tts-voice-select {
   width: 100%;
   height: 32px;
@@ -3569,5 +4824,22 @@ onUnmounted(() => {
 
 .swipe-action.read {
   background: #07c160;
+}
+
+/* 补充翻译进度弹窗样式 */
+.supplement-progress-content {
+  padding: 24px 16px;
+}
+
+.supplement-progress-content .van-progress {
+  margin-bottom: 16px;
+}
+
+.progress-message {
+  text-align: center;
+  font-size: 14px;
+  color: #646566;
+  word-break: break-all;
+  min-height: 20px;
 }
 </style>

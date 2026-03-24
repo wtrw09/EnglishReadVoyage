@@ -1,6 +1,7 @@
 """英语分级阅读系统后端 - 主应用程序入口点"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -30,7 +31,7 @@ app = FastAPI(
     redirect_slashes=False  # 禁用 trailing slash 重定向
 )
 
-# 配置CORS
+# 配置 CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -38,6 +39,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 配置 Gzip 压缩（响应大于 1KB 时自动压缩）
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # 挂载静态文件用于书籍图片
 from pathlib import Path
@@ -48,8 +52,8 @@ settings = get_settings()
 if settings.BOOKS_DIR:
     BOOKS_DIR = Path(settings.BOOKS_DIR)
 else:
-    # 默认使用 /app/Books（容器内路径）
-    BOOKS_DIR = Path("/app/Books")
+    # 默认使用项目目录下的 Books 文件夹
+    BOOKS_DIR = Path(__file__).parent / "Books"
 
 if BOOKS_DIR.exists():
     app.mount("/books", StaticFiles(directory=str(BOOKS_DIR)), name="books")

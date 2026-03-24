@@ -1,0 +1,32 @@
+name: englishread
+
+services:
+  app:
+    image: englishread-all-in-one:latest
+    container_name: englishread
+    ports:
+      - "8888:80"
+    volumes:
+      # 持久化数据库
+      - ./backend/data.db:/app/data.db
+      # 词典数据目录
+      - ./backend/data:/app/data
+      # 书籍目录
+      - ./backend/Books:/app/Books
+    environment:
+      - DEBUG=False
+      - HOST=0.0.0.0
+      - PORT=8000
+      - CORS_ORIGINS=["*"]
+      - SECRET_KEY=your-secret-key-change-in-production
+      - ACCESS_TOKEN_EXPIRE_MINUTES=3000
+      - KOKORO_API_URL=http://localhost:8880/v1/audio/speech
+      - KOKORO_DEFAULT_VOICE=bf_v0isabella
+      - KOKORO_DEFAULT_SPEED=1.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/v1/dictionary/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

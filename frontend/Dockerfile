@@ -1,6 +1,6 @@
 # 前端 Dockerfile - 多阶段构建
 ARG NODE_IMAGE=node:22-alpine-amd64
-ARG NGINX_IMAGE=nginx:alpine-amd64
+ARG NGINX_IMAGE=nginx:alpine-slim-amd64
 
 # 构建阶段
 FROM ${NODE_IMAGE} AS builder

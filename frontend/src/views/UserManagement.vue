@@ -61,6 +61,14 @@
                     class="slide-btn"
                     @click="showEditDialog(user)"
                   />
+                  <van-button
+                    v-if="user.username !== 'admin' && user.is_active"
+                    square
+                    type="success"
+                    text="管理书籍"
+                    class="slide-btn"
+                    @click="goToUserBookAssignment(user)"
+                  />
                   <!-- 已激活用户显示重置密码，未激活用户显示获取邀请码 -->
                   <van-button
                     v-if="user.is_active"
@@ -230,6 +238,14 @@
         <div class="context-menu-item" @click="handleMenuEdit">
           <van-icon name="edit" />
           <span>编辑</span>
+        </div>
+        <div
+          v-if="contextMenuUser?.is_active"
+          class="context-menu-item"
+          @click="handleMenuManageBooks"
+        >
+          <i class="fas fa-layer-group"></i>
+          <span>管理书籍</span>
         </div>
         <div
           v-if="contextMenuUser?.is_active"
@@ -416,6 +432,13 @@ const handleMenuGetInvitationCode = () => {
   }
 }
 
+const handleMenuManageBooks = () => {
+  closeContextMenu()
+  if (contextMenuUser.value) {
+    goToUserBookAssignment(contextMenuUser.value)
+  }
+}
+
 const handleMenuDelete = () => {
   closeContextMenu()
   if (contextMenuUser.value) {
@@ -425,6 +448,13 @@ const handleMenuDelete = () => {
 
 const goBack = () => {
   router.back()
+}
+
+const goToUserBookAssignment = (user: UserDetail) => {
+  router.push({
+    name: 'UserBookAssignment',
+    params: { userId: user.id }
+  })
 }
 
 const formatDate = (dateStr: string): string => {

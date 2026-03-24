@@ -31,3 +31,14 @@ class VocabularyListResponse(BaseModel):
     """生词列表响应"""
     items: list[VocabularyResponse] = Field(default_factory=list, description="生词列表")
     total: int = Field(0, description="总数")
+
+
+class VocabularyBatchDelete(BaseModel):
+    """批量删除生词请求"""
+    ids: list[int] = Field(..., description="要删除的生词ID列表")
+
+
+class VocabularyExport(BaseModel):
+    """导出生词本请求"""
+    ids: list[int] = Field(..., description="要导出的生词ID列表")
+    hidden_fields: list[str] = Field(default_factory=list, description="要隐藏的字段：word(英文), phonetic(音标), translation(翻译)")

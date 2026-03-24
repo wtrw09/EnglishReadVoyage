@@ -47,13 +47,14 @@ class Category(Base):
 
 class BookCategoryRel(Base):
     __tablename__ = "book_category_rel"
-    
-    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), primary_key=True)
-    category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
-    
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id"), nullable=False)
+    category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
     __table_args__ = (
-        UniqueConstraint("book_id", "category_id", "user_id", name="uq_book_cat_user"),
+        UniqueConstraint("book_id", "user_id", name="uq_book_user"),
     )
 
 class ReadingProgress(Base):
@@ -82,20 +83,33 @@ class UserSettings(Base):
 
     # Kokoro TTS 设置（独立存储）
     kokoro_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    kokoro_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     kokoro_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
     kokoro_api_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # 豆包 TTS 设置（独立存储）
     doubao_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    doubao_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
     doubao_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
     doubao_app_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     doubao_access_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     doubao_resource_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # 硅基流动 TTS 设置（独立存储）
+    siliconflow_api_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    siliconflow_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    siliconflow_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Edge-TTS 设置（独立存储）
+    edge_tts_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    edge_tts_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
+
     # 音标设置：'uk' 表示英式音标，'us' 表示美式音标
     phonetic_accent: Mapped[str] = mapped_column(String, default="uk", nullable=False)
     # UI设置：隐藏已读书籍状态（按分组存储，JSON格式）
     hide_read_books_map: Mapped[Optional[str]] = mapped_column(String, nullable=True, default="{}")
+    # 翻译设置：选择使用的翻译API ID
+    selected_translation_api_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # 更新时间
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -151,3 +165,16 @@ class AudiobookPlaylistItem(Base):
 
     playlist: Mapped["AudiobookPlaylist"] = relationship(back_populates="items")
     book: Mapped["Book"] = relationship()
+
+
+class TranslationAPI(Base):
+    """用户翻译API配置表"""
+    __tablename__ = "translation_apis"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    app_id: Mapped[str] = mapped_column(String, nullable=False)
+    app_key: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

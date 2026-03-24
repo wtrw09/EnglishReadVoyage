@@ -1,10 +1,13 @@
 <template>
   <router-view v-slot="{ Component }">
-    <transition name="fade" mode="out-in">
+    <keep-alive include="Home">
       <component :is="Component" />
-    </transition>
+    </keep-alive>
   </router-view>
 </template>
+
+<script setup lang="ts">
+</script>
 
 <style>
 body {
@@ -14,6 +17,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica,
     Segoe UI, Arial, Roboto, 'PingFang SC', 'miui', 'Hiragino Sans GB', 'Microsoft Yahei',
     sans-serif;
+}
+
+/* 增加弹出菜单列宽 - Vant 4 Popover */
+.van-popover .van-popover__action {
+  min-width: 180px !important;
+}
+
+.van-popover .van-popover__action-text {
+  min-width: 180px !important;
+  white-space: nowrap !important;
 }
 
 .fade-enter-active,

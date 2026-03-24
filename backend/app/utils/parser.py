@@ -1,6 +1,23 @@
 """用于将书籍转换为带TTS注释的HTML的Markdown解析器工具"""
 import re
 import markdown
+from typing import List
+
+from app.utils.sentence_splitter import split_sentences
+
+
+def normalize_text_for_tts(text: str) -> str:
+    """统一的文本规范化函数，用于 TTS 哈希匹配
+    
+    规则：
+    1. 去除前后空白
+    2. 将多个连续空白字符（空格、制表符等）替换为单个空格
+    
+    注意：不修改原始文本内容（不添加句号、不移除引号等）
+    """
+    if not text:
+        return ""
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 class MarkdownParser:
@@ -101,6 +118,175 @@ class MarkdownParser:
         processed_sections.append(flush_section())
         return "".join(processed_sections)
 
+    def _split_into_sentences(self, text: str) -> list[str]:
+        """
+        使用 spaCy 进行智能断句
+
+        参数:
+            text: 待分割的文本
+
+        返回:
+            句子列表
+        """
+        return split_sentences(text)
+
+    @staticmethod
+    def extract_sentences_from_content(content: str) -> List[dict]:
+        """
+        从markdown内容中提取句子列表（与朗读断句逻辑一致）
+
+        参数:
+            content: markdown页面内容
+
+        返回:
+            句子列表，每个元素包含 page, index, text
+        """
+        # 移除忽略标记
+        ignore_pattern = r'<!--\s*ignore\s*-->.*?<!--\s*/ignore\s*-->'
+        content = re.sub(ignore_pattern, '', content, flags=re.DOTALL | re.IGNORECASE)
+
+        # 移除图片
+        content = re.sub(r'!\[([^\]]*)\]\([^)]+\)', '', content)
+
+        # 将 <br> 标签转为换行符
+        content = re.sub(r'<br\s*/?>', '\n', content, flags=re.IGNORECASE)
+
+        # 移除HTML标签
+        content = re.sub(r'<[^>]+>', '', content)
+
+        # 移除markdown链接
+        content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+
+        # 移除MD格式字符
+        # 移除标题标记
+        content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
+        # 移除加粗、斜体等标记
+        content = re.sub(r'[*_]+', '', content)
+
+        # 只替换空格和制表符，保留换行符
+        content = re.sub(r'[ \t]+', ' ', content).strip()
+
+        # 段落分割逻辑（与 _wrap_text_content 一致）
+        raw_paragraphs = re.split(r'\n\s*\n', content)
+        paragraphs = []
+        for raw_para in raw_paragraphs:
+            title_parts = re.split(r'(?=^#\s)', raw_para, flags=re.MULTILINE)
+            for part in title_parts:
+                part = part.strip()
+                if part:
+                    paragraphs.append(part)
+
+        sentences = []
+        for para_idx, paragraph in enumerate(paragraphs):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            # 如果段落是纯小写字母的单词短语，作为完整句子处理
+            if re.match(r'^[a-z]+(?:\s+[a-z]+)*$', paragraph):
+                if paragraph.strip():
+                    sentences.append(paragraph.strip())
+                continue
+
+            # 移除段落中的换行
+            paragraph = re.sub(r'\n+', ' ', paragraph)
+
+            # 去除句首的序号
+            paragraph = re.sub(r'^\d+[\.)]\s*', '', paragraph)
+            paragraph = re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩]+\s*', '', paragraph)
+
+            # 使用智能断句
+            parts = split_sentences(paragraph)
+            for part in parts:
+                part = part.strip()
+                if part and len(part) >= 1:
+                    sentences.append(part)
+
+        return sentences
+
+    def _wrap_text_content(self, content: str, page_idx: int, sentence_idx: list) -> str:
+        """
+        对纯文本内容进行句子包装
+
+        参数:
+            content: 纯文本内容（可能包含HTML标签）
+            page_idx: 页面索引
+            sentence_idx: 可变列表，用于跟踪句子索引 [current_idx]
+
+        返回:
+            包装了TTS span的HTML内容
+        """
+        # 先移除HTML标签，获取纯文本
+        content = re.sub(r'<[^>]+>', ' ', content)
+
+        # 移除MD格式字符（标题标记和加粗斜体标记）
+        content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
+        content = re.sub(r'[*_]+', '', content)
+
+        # 将 <br> 标签替换为换行符
+        content = re.sub(r'<br\s*/?>', '\n', content, flags=re.IGNORECASE)
+
+        # 分句逻辑：先按段落分割，再在每个段落内断句
+        # 段落分隔符：空行（连续换行）或标题行（# 开头）或单独的数字序号
+        # 先按空行分割，然后再按标题行分割
+
+        # 先按空行分割段落
+        raw_paragraphs = re.split(r'\n\s*\n', content)
+
+        # 进一步分割段落，将标题（# 开头）单独分割出来
+        paragraphs = []
+        for raw_para in raw_paragraphs:
+            # 按标题行分割（# 开头的内容）
+            title_parts = re.split(r'(?=^#\s)', raw_para, flags=re.MULTILINE)
+            for part in title_parts:
+                part = part.strip()
+                if part:
+                    paragraphs.append(part)
+
+        sentences = []
+        for para_idx, paragraph in enumerate(paragraphs):
+            # 清理段落内容
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            # 如果段落是纯小写字母的单词短语（如 "cotton shirts"），作为完整句子处理
+            if re.match(r'^[a-z]+(?:\s+[a-z]+)*$', paragraph):
+                if paragraph.strip():
+                    sentences.append((paragraph.strip(), para_idx))
+                continue
+
+            # 移除段落中的换行，替换为空格
+            paragraph = re.sub(r'\n+', ' ', paragraph)
+
+            # 去除句首的序号（如 "1.", "2.", "①" 等）
+            paragraph = re.sub(r'^\d+[\.)]\s*', '', paragraph)
+            paragraph = re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩]+\s*', '', paragraph)
+
+            # 正常段落使用智能断句
+            parts = self._split_into_sentences(paragraph)
+            for part in parts:
+                part = part.strip()
+                if part and len(part) >= 1:
+                    sentences.append((part, para_idx))
+
+        wrapped_sentences = []
+        prev_block_idx = None
+        for s, block_idx in sentences:
+            normalized = normalize_text_for_tts(s)
+            if not normalized:
+                continue
+            safe_text = normalized.replace('"', '&quot;')
+            if prev_block_idx is not None and block_idx != prev_block_idx:
+                wrapped_sentences.append('<br>')
+            wrapped_sentences.append(
+                f'<span class="tts-sentence" data-tts="{safe_text}" data-page-index="{page_idx}" data-sentence-index="{sentence_idx[0]}">{s}</span>'
+            )
+            prev_block_idx = block_idx
+            sentence_idx[0] += 1
+
+        return ' '.join(wrapped_sentences)
+
     def _wrap_sentences(self, html: str, page_idx: int = 0) -> str:
         """
         用带有data-tts属性的<span>标签包装句子以供TTS播放
@@ -112,10 +298,9 @@ class MarkdownParser:
         返回:
             句子被包装在TTS就绪span中的HTML
         """
-        sentence_idx = 0  # 每个页面内的句子索引
+        sentence_idx = [0]  # 使用列表以便在嵌套函数中修改
 
         def replacer(match):
-            nonlocal sentence_idx
             tag_open = match.group(1)
             content = match.group(4)
             tag_close = match.group(5)
@@ -124,47 +309,32 @@ class MarkdownParser:
             if 'class="ignored-content"' in tag_open:
                 return f"{tag_open}{content}{tag_close}"
 
-            if content and ('<img' in content or '<table' in content):
+            # 如果包含表格，完全跳过
+            if content and '<table' in content:
                 return f"{tag_open}{content}{tag_close}"
 
-            # 移除MD格式字符（标题标记和加粗斜体标记）
-            # 先移除标题标记 (# ## ### 等)
-            content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
-            # 移除加粗、斜体等标记
-            content = re.sub(r'[*_]+', '', content)
+            # 如果包含图片，分离图片和文本，只对文本进行包装
+            if content and '<img' in content:
+                # 使用正则分割出 <img> 标签
+                img_pattern = r'(<img[^>]*>)'
+                parts = re.split(img_pattern, content)
 
-            # 分句逻辑：先按换行分割（每行是一个独立句子），再按句号分割
-            lines = content.split('\n')
-            sentences = []
-            for line in lines:
-                line = line.strip()
-                if not line or len(line) < 3:
-                    continue
-                # 按句号分割
-                parts = re.split(r'(?<=[.])\s*', line)
+                processed_parts = []
                 for part in parts:
-                    part = part.strip()
-                    if part:
-                        sentences.append(part)
-            wrapped_sentences = []
-            for s in sentences:
-                s = s.strip()
-                if s:
-                    # 移除HTML标签（如<br />）用于data-tts，确保哈希匹配
-                    text_for_tts = re.sub(r'<[^>]+>', '', s)
-                    # 移除双引号和单引号
-                    text_for_tts = text_for_tts.replace('"', '').replace("'", "")
-                    # 移除非英文、非数字、非基本标点的字符（保留字母、数字、空格和基本标点）
-                    text_for_tts = re.sub(r'[^\w\s.,!?;:\-]', '', text_for_tts)
-                    # 清理多余空格
-                    text_for_tts = re.sub(r'\s+', ' ', text_for_tts).strip()
-                    safe_text = text_for_tts.replace('"', '&quot;')
-                    wrapped_sentences.append(
-                        f'<span class="tts-sentence" data-tts="{safe_text}" data-page-index="{page_idx}" data-sentence-index="{sentence_idx}">{s}</span>'
-                    )
-                    sentence_idx += 1
+                    if re.match(r'<img', part):
+                        # 图片标签，原样保留
+                        processed_parts.append(part)
+                    elif part.strip():
+                        # 文本部分，进行句子包装
+                        wrapped = self._wrap_text_content(part, page_idx, sentence_idx)
+                        if wrapped:
+                            processed_parts.append(wrapped)
 
-            return f"{tag_open}{' '.join(wrapped_sentences)}{tag_close}"
+                return f"{tag_open}{' '.join(processed_parts)}{tag_close}"
+
+            # 纯文本内容，进行句子包装
+            wrapped = self._wrap_text_content(content, page_idx, sentence_idx)
+            return f"{tag_open}{wrapped}{tag_close}"
 
         # 匹配<p>, <li>, <h1-6>
         # 分组: 1: 开始标签, 2: 标签名, 3: 可选属性, 4: 内容, 5: 结束标签
