@@ -2,42 +2,121 @@
   <div class="playlist-container">
     <div class="playlist-header">
       <span>播放列表 ({{ items.length }})</span>
-      <van-icon name="delete-o" @click="$emit('clear')" />
+      <div class="header-actions">
+        <!-- 排序模式切换 -->
+        <div class="sort-mode-wrapper">
+          <van-icon
+            :name="isSortMode ? 'success' : 'exchange'"
+            :class="['sort-mode-icon', { 'active': isSortMode }]"
+            @click="toggleSortMode"
+          />
+          <span v-if="isSortMode" class="sort-mode-text">完成</span>
+        </div>
+        <!-- 排序选项弹窗 -->
+        <van-popover
+          v-model:show="showSortMenu"
+          placement="bottom-end"
+          :offset="[0, 8]"
+        >
+          <div class="sort-menu">
+            <div
+              v-for="option in sortOptions"
+              :key="option.value"
+              class="sort-menu-item"
+              :class="{ 'active': currentSort === option.value }"
+              @click="handleSortSelect(option.value)"
+            >
+              <van-icon :name="option.icon" />
+              <span>{{ option.label }}</span>
+            </div>
+          </div>
+          <template #reference>
+            <div v-if="!isSortMode" class="header-icon-wrapper">
+              <van-icon name="ascending" class="header-icon" />
+            </div>
+          </template>
+        </van-popover>
+        <van-icon name="delete-o" class="header-icon" @click="$emit('clear')" />
+      </div>
     </div>
     <div class="playlist-body">
-      <div
-        v-for="(item, index) in items"
-        :key="item.id"
-        class="playlist-item"
-        :class="{ 'active': index === currentIndex }"
-        @mouseenter="hoveredIndex = index"
-        @mouseleave="hoveredIndex = null"
+      <!-- 拖拽排序模式 -->
+      <draggable
+        v-if="isSortMode"
+        v-model="localItems"
+        item-key="id"
+        handle=".drag-handle"
+        ghost-class="dragging-ghost"
+        drag-class="dragging"
+        @end="handleDragEnd"
       >
-        <div class="playlist-item-content">
-          <img
-            v-if="item.book_cover"
-            :src="item.book_cover"
-            class="playlist-item-cover"
-          />
-          <div v-else class="playlist-item-placeholder">
-            <van-icon name="book-o" />
-          </div>
-          <span class="playlist-item-title">{{ item.book_title }}</span>
-          <!-- 播放按钮：悬停或当前播放时显示 -->
+        <template #item="{ element, index }">
           <div
-            v-if="hoveredIndex === index || (index === currentIndex && isPlaying)"
-            class="playlist-item-play-btn"
-            @click.stop="$emit('play', index)"
+            class="playlist-item sort-item"
+            :class="{ 'active': index === currentIndex }"
           >
-            <van-icon :name="index === currentIndex && isPlaying ? 'pause-circle' : 'play-circle'" />
+            <div class="drag-handle">
+              <van-icon name="bars" />
+            </div>
+            <div class="playlist-item-content">
+              <img
+                v-if="element.book_cover"
+                :src="element.book_cover"
+                class="playlist-item-cover"
+                loading="lazy"
+                decoding="async"
+              />
+              <div v-else class="playlist-item-placeholder">
+                <van-icon name="book-o" />
+              </div>
+              <span class="playlist-item-title">{{ element.book_title }}</span>
+            </div>
+            <van-icon
+              name="cross"
+              class="playlist-item-remove-btn"
+              @click.stop="$emit('remove', element.id)"
+            />
           </div>
+        </template>
+      </draggable>
+      <!-- 普通模式 -->
+      <template v-else>
+        <div
+          v-for="(item, index) in displayItems"
+          :key="item.id"
+          class="playlist-item"
+          :class="{ 'active': index === currentIndex }"
+          @mouseenter="hoveredIndex = index"
+          @mouseleave="hoveredIndex = null"
+        >
+          <div class="playlist-item-content">
+            <img
+              v-if="item.book_cover"
+              :src="item.book_cover"
+              class="playlist-item-cover"
+              loading="lazy"
+              decoding="async"
+            />
+            <div v-else class="playlist-item-placeholder">
+              <van-icon name="book-o" />
+            </div>
+            <span class="playlist-item-title">{{ item.book_title }}</span>
+            <!-- 播放按钮：悬停或当前播放时显示 -->
+            <div
+              v-if="hoveredIndex === index || (index === currentIndex && isPlaying)"
+              class="playlist-item-play-btn"
+              @click.stop="$emit('play', index)"
+            >
+              <van-icon :name="index === currentIndex && isPlaying ? 'pause-circle' : 'play-circle'" />
+            </div>
+          </div>
+          <van-icon
+            name="cross"
+            class="playlist-item-remove-btn"
+            @click.stop="$emit('remove', item.id)"
+          />
         </div>
-        <van-icon
-          name="cross"
-          class="playlist-item-remove-btn"
-          @click.stop="$emit('remove', item.id)"
-        />
-      </div>
+      </template>
       <div v-if="items.length === 0" class="empty-playlist">
         <van-icon name="music-o" size="48" />
         <p>播放列表为空</p>
@@ -50,7 +129,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
+import draggable from 'vuedraggable'
 
 interface PlaylistItem {
   id: number
@@ -61,6 +141,8 @@ interface PlaylistItem {
   added_at: string
 }
 
+type SortType = 'default' | 'name' | 'nameDesc' | 'addedTime' | 'addedTimeDesc'
+
 interface Props {
   items: PlaylistItem[]
   currentIndex: number
@@ -69,15 +151,85 @@ interface Props {
 
 const props = defineProps<Props>()
 
-defineEmits<{
+const emit = defineEmits<{
   play: [index: number]
   remove: [itemId: number]
   clear: []
   add: []
+  reorder: [itemOrders: { item_id: number; sort_order: number }[]]
 }>()
 
 // 悬停状态
 const hoveredIndex = ref<number | null>(null)
+
+// 排序模式
+const isSortMode = ref(false)
+const showSortMenu = ref(false)
+const currentSort = ref<SortType>('default')
+
+// 本地副本用于拖拽排序
+const localItems = ref<PlaylistItem[]>([...props.items])
+
+// 监听 props.items 变化，更新本地副本
+watch(() => props.items, (newItems) => {
+  if (!isSortMode.value) {
+    localItems.value = [...newItems]
+  }
+}, { deep: true })
+
+// 排序选项
+const sortOptions: { label: string; value: SortType; icon: string }[] = [
+  { label: '默认顺序', value: 'default', icon: 'exchange' },
+  { label: '书名升序', value: 'name', icon: 'ascending' },
+  { label: '书名降序', value: 'nameDesc', icon: 'descending' },
+  { label: '添加时间升序', value: 'addedTime', icon: 'clock-o' },
+  { label: '添加时间降序', value: 'addedTimeDesc', icon: 'clock' },
+]
+
+// 根据排序方式显示的项目
+const displayItems = computed(() => {
+  const items = [...props.items]
+  switch (currentSort.value) {
+    case 'name':
+      return items.sort((a, b) => a.book_title.localeCompare(b.book_title))
+    case 'nameDesc':
+      return items.sort((a, b) => b.book_title.localeCompare(a.book_title))
+    case 'addedTime':
+      return items.sort((a, b) => new Date(a.added_at).getTime() - new Date(b.added_at).getTime())
+    case 'addedTimeDesc':
+      return items.sort((a, b) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime())
+    default:
+      return items
+  }
+})
+
+// 切换排序模式
+const toggleSortMode = () => {
+  if (isSortMode.value) {
+    // 退出排序模式，保存排序
+    isSortMode.value = false
+  } else {
+    // 进入排序模式
+    localItems.value = [...props.items]
+    isSortMode.value = true
+  }
+}
+
+// 处理拖拽结束
+const handleDragEnd = () => {
+  // 生成新的排序信息
+  const itemOrders = localItems.value.map((item, index) => ({
+    item_id: item.id,
+    sort_order: index
+  }))
+  emit('reorder', itemOrders)
+}
+
+// 处理排序选择
+const handleSortSelect = (sortType: SortType) => {
+  currentSort.value = sortType
+  showSortMenu.value = false
+}
 </script>
 
 <style scoped lang="less">
@@ -207,5 +359,113 @@ const hoveredIndex = ref<number | null>(null)
   p {
     margin: 16px 0;
   }
+}
+
+/* 头部操作按钮 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.header-icon {
+  font-size: 18px;
+  color: #666;
+  cursor: pointer;
+
+  &:hover {
+    color: #ee0a24;
+  }
+}
+
+/* 排序模式 */
+.sort-mode-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.sort-mode-icon {
+  font-size: 18px;
+  color: #666;
+  cursor: pointer;
+
+  &:hover,
+  &.active {
+    color: #07c160;
+  }
+}
+
+.sort-mode-text {
+  font-size: 12px;
+  color: #07c160;
+}
+
+/* 排序菜单 */
+.sort-menu {
+  padding: 8px 0;
+  min-width: 140px;
+}
+
+.sort-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+
+  &:hover {
+    background: #f5f5f5;
+  }
+
+  &.active {
+    color: #07c160;
+    background: #f0f9f0;
+  }
+
+  .van-icon {
+    font-size: 16px;
+  }
+}
+
+/* 拖拽排序样式 */
+.sort-item {
+  .drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    cursor: grab;
+    color: #999;
+
+    &:active {
+      cursor: grabbing;
+    }
+
+    .van-icon {
+      font-size: 18px;
+    }
+  }
+}
+
+.dragging-ghost {
+  opacity: 0.5;
+  background: #f0f0f0;
+}
+
+.dragging {
+  opacity: 0.8;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 </style>

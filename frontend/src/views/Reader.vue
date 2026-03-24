@@ -9,15 +9,33 @@
       @click-left="goBack"
     >
       <template #right>
+        <!-- 播放按钮：始终显示 -->
         <div class="nav-icon-btn" :class="{ 'playing': isPlayingAll }" @click="togglePlayAll">
           <van-icon :name="isPlayingAll ? 'pause-circle-o' : 'play-circle-o'" />
         </div>
-        <div class="nav-icon-btn" @click="openDictionaryDialog">
+        <!-- 横屏直接显示的按钮 -->
+        <div class="nav-icon-btn nav-more-actions" @click="openDictionaryDialog">
           <van-icon name="search" />
         </div>
-        <div class="nav-icon-btn" @click="openEditDialog">
+        <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" @click="openEditDialog">
           <van-icon name="description" />
         </div>
+        <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" @click="checkBookAudio">
+          <van-icon name="warning-o" />
+        </div>
+        <!-- 竖屏更多菜单 -->
+        <van-popover
+          v-model:show="showMorePopover"
+          placement="bottom-end"
+          :actions="moreActions"
+          @select="onMoreActionSelect"
+        >
+          <template #reference>
+            <div class="nav-icon-btn nav-more-trigger">
+              <van-icon name="ellipsis" />
+            </div>
+          </template>
+        </van-popover>
       </template>
     </van-nav-bar>
 
@@ -28,7 +46,18 @@
     <!-- 阅读模式：分页显示内容 -->
     <div v-else class="reader-content">
       <!-- 页面内容区域 -->
+      <!-- 内容过长时使用虚拟滚动，否则直接渲染 -->
+      <template v-if="useVirtualScroll">
+        <VirtualContent
+          class="page-content"
+          :class="{ 'landscape': isLandscape }"
+          :content="currentPageContent"
+          @click="handleContentClick"
+          @contextmenu="handleContextMenu"
+        />
+      </template>
       <div
+        v-else
         class="page-content"
         :class="{ 'landscape': isLandscape }"
         v-html="currentPageContent"
@@ -150,8 +179,15 @@
           <template v-if="dictData.source === 'ecdict'">
             <div class="dict-header">
               <h3 class="dict-word">{{ dictData.word }}</h3>
-             
+              <span class="dict-source-tag">本地词典</span>
               <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
+              <van-loading v-if="dictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
+              <van-icon
+                v-else-if="dictPhoneticAudio"
+                name="volume-o"
+                class="dict-audio-btn"
+                @click="playPhoneticAudio(dictPhoneticAudio)"
+              />
                <van-button
                 class="vocab-btn"
                 size="mini"
@@ -171,6 +207,14 @@
               <div class="dict-section-title">中文释义</div>
               <div class="dict-translation-content">{{ dictData.translation }}</div>
             </div>
+            <!-- 句子翻译结果 -->
+            <div v-if="currentSentenceText" class="dict-sentence-translation">
+              <div class="dict-section-title">句子翻译</div>
+              <div class="dict-sentence-original">{{ currentSentenceText }}</div>
+              <div v-if="dictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
+              <div v-else-if="dictSentenceError" class="dict-sentence-error">{{ dictSentenceError }}</div>
+              <div v-else class="dict-sentence-translated">{{ dictData.sentence_translation || '' }}</div>
+            </div>
             <!-- 分隔线 -->
             <div v-if="dictData.translation && dictData.definition" class="dict-divider"></div>
             <!-- 英文释义 -->
@@ -183,11 +227,29 @@
               <div class="dict-section-title">词形变换</div>
               <div class="dict-exchange-content">{{ formatExchange(dictData.exchange) }}</div>
             </div>
+            <!-- 相关词组 -->
+            <div v-if="dictData.related_phrases && dictData.related_phrases.length > 0" class="dict-related-phrases">
+              <div class="dict-section-title">相关词组</div>
+              <div class="dict-phrases-list">
+                <div v-for="(item, idx) in dictData.related_phrases" :key="idx" class="dict-phrase-item">
+                  <span class="dict-phrase">{{ item.phrase }}</span>
+                  <span class="dict-phrase-translation">{{ item.translation }}</span>
+                </div>
+              </div>
+            </div>
           </template>
-          <!-- API 格式显示（保持原有） -->
+          <!-- API 格式显示 -->
           <template v-else>
             <div class="dict-header">
               <h3 class="dict-word">{{ dictData.word }}</h3>
+              <span class="dict-source-tag">在线词典</span>
+              <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
+              <van-icon
+                v-if="dictData.phonetics?.[0]?.audio"
+                name="volume-o"
+                class="dict-audio-btn"
+                @click="playPhoneticAudio(dictData.phonetics[0].audio)"
+              />
               <van-button
                 class="vocab-btn"
                 size="mini"
@@ -198,13 +260,6 @@
               >
                 生词本
               </van-button>
-              <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
-              <van-icon
-                v-if="dictData.phonetics?.[0]?.audio"
-                name="volume-o"
-                class="dict-audio-btn"
-                @click="playPhoneticAudio(dictData.phonetics[0].audio)"
-              />
             </div>
             <div class="dict-meanings">
               <div
@@ -224,6 +279,14 @@
                   </li>
                 </ol>
               </div>
+            </div>
+            <!-- 句子翻译结果 -->
+            <div v-if="currentSentenceText" class="dict-sentence-translation">
+              <div class="dict-section-title">句子翻译</div>
+              <div class="dict-sentence-original">{{ currentSentenceText }}</div>
+              <div v-if="dictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
+              <div v-else-if="dictSentenceError" class="dict-sentence-error">{{ dictSentenceError }}</div>
+              <div v-else class="dict-sentence-translated">{{ dictData.sentence_translation || '' }}</div>
             </div>
           </template>
         </div>
@@ -251,7 +314,15 @@
           <template v-if="secondDictData.source === 'ecdict'">
             <div class="dict-header">
               <h3 class="dict-word">{{ secondDictData.word }}</h3>
+              <span class="dict-source-tag">本地词典</span>
               <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
+              <van-loading v-if="secondDictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
+              <van-icon
+                v-else-if="secondDictPhoneticAudio"
+                name="volume-o"
+                class="dict-audio-btn"
+                @click="playPhoneticAudio(secondDictPhoneticAudio)"
+              />
               <van-button
                 class="vocab-btn"
                 size="mini"
@@ -271,6 +342,16 @@
               <div class="dict-section-title">中文释义</div>
               <div class="dict-translation-content">{{ secondDictData.translation }}</div>
             </div>
+            <!-- 句子翻译结果 -->
+            <div v-if="secondDictSentenceLoading || secondDictData.sentence_translation || secondDictSentenceError" class="dict-sentence-translation">
+              <div class="dict-section-title">句子翻译</div>
+              <div v-if="secondDictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
+              <div v-else-if="secondDictSentenceError" class="dict-sentence-error">{{ secondDictSentenceError }}</div>
+              <template v-else>
+                <div class="dict-sentence-original">{{ secondDictSentence }}</div>
+                <div class="dict-sentence-translated">{{ secondDictData.sentence_translation }}</div>
+              </template>
+            </div>
             <!-- 分隔线 -->
             <div v-if="secondDictData.translation && secondDictData.definition" class="dict-divider"></div>
             <!-- 英文释义 -->
@@ -283,11 +364,29 @@
               <div class="dict-section-title">词形变换</div>
               <div class="dict-exchange-content">{{ formatExchange(secondDictData.exchange) }}</div>
             </div>
+            <!-- 相关词组 -->
+            <div v-if="secondDictData.related_phrases && secondDictData.related_phrases.length > 0" class="dict-related-phrases">
+              <div class="dict-section-title">相关词组</div>
+              <div class="dict-phrases-list">
+                <div v-for="(item, idx) in secondDictData.related_phrases" :key="idx" class="dict-phrase-item">
+                  <span class="dict-phrase">{{ item.phrase }}</span>
+                  <span class="dict-phrase-translation">{{ item.translation }}</span>
+                </div>
+              </div>
+            </div>
           </template>
           <!-- API 格式显示 -->
           <template v-else>
             <div class="dict-header">
               <h3 class="dict-word">{{ secondDictData.word }}</h3>
+              <span class="dict-source-tag">在线词典</span>
+              <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
+              <van-icon
+                v-if="secondDictData.phonetics?.[0]?.audio"
+                name="volume-o"
+                class="dict-audio-btn"
+                @click="playPhoneticAudio(secondDictData.phonetics[0].audio)"
+              />
               <van-button
                 class="vocab-btn"
                 size="mini"
@@ -298,13 +397,6 @@
               >
                 生词本
               </van-button>
-              <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
-              <van-icon
-                v-if="secondDictData.phonetics?.[0]?.audio"
-                name="volume-o"
-                class="dict-audio-btn"
-                @click="playPhoneticAudio(secondDictData.phonetics[0].audio)"
-              />
             </div>
             <div class="dict-meanings">
               <div
@@ -325,20 +417,43 @@
                 </ol>
               </div>
             </div>
+            <!-- 句子翻译结果 -->
+            <div v-if="secondDictSentenceLoading || secondDictData.sentence_translation || secondDictSentenceError" class="dict-sentence-translation">
+              <div class="dict-section-title">句子翻译</div>
+              <div v-if="secondDictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
+              <div v-else-if="secondDictSentenceError" class="dict-sentence-error">{{ secondDictSentenceError }}</div>
+              <template v-else>
+                <div class="dict-sentence-original">{{ secondDictSentence }}</div>
+                <div class="dict-sentence-translated">{{ secondDictData.sentence_translation }}</div>
+              </template>
+            </div>
           </template>
         </div>
       </div>
     </van-popup>
+
+    <!-- 音频检查修复弹窗 -->
+    <AudioFixDialog
+      v-model:show="showAudioFixDialog"
+      :fixed-list="audioFixedList"
+      :error-list="audioErrorList"
+      :book-id="bookId"
+      @edit-book="handleEditBookFromAudioFix"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import md5 from 'blueimp-md5'
-import { api } from '@/store/auth'
-import BookEditDialog from '@/components/BookEditDialog.vue'
+import { api, useAuthStore } from '@/store/auth'
+import VirtualContent from '@/components/VirtualContent.vue'
+
+// 懒加载编辑和音频检查对话框（代码分割）
+const BookEditDialog = defineAsyncComponent(() => import('@/components/BookEditDialog.vue'))
+const AudioFixDialog = defineAsyncComponent(() => import('@/components/AudioFixDialog.vue'))
 
 interface SentenceMapping {
   page: number
@@ -364,17 +479,58 @@ interface DictionaryData {
   translation?: string
   definition?: string
   exchange?: string
+  baidu_translation?: string
+  sentence_translation?: string
+  related_phrases?: Array<{ phrase: string; translation: string }>
 }
 
 const route = useRoute()
 const router = useRouter()
-const bookId = route.params.id as string
+const authStore = useAuthStore()
+const bookId = ref('')
+
+// 页面句子缓存：key = pageIndex, value = [{ index, text }]
+const pageSentencesCache = ref<Record<number, { index: number; text: string }[]>>({})
+
+// 监听路由参数变化，确保 bookId 正确获取
+watch(() => route.params.id, (newId: string | string[] | undefined) => {
+  if (newId) {
+    // 清除页面句子缓存（切换书籍时）
+    pageSentencesCache.value = {}
+    bookId.value = Array.isArray(newId) ? newId[0] : newId
+  }
+}, { immediate: true })
+
 const bookTitle = ref('')
 const bookPath = ref('')
 const loading = ref(true)
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const currentSentence = ref<HTMLElement | null>(null)
 const isPlayingAll = ref(false)
+
+// 更多菜单
+const showMorePopover = ref(false)
+const moreActions = computed(() => {
+  const actions = [{ text: '查词', icon: 'search' }]
+  if (authStore.isAdmin) {
+    actions.push({ text: '编辑', icon: 'description' })
+    actions.push({ text: '检查音频', icon: 'warning-o' })
+  }
+  return actions
+})
+const onMoreActionSelect = (action: { text: string }) => {
+  switch (action.text) {
+    case '查词':
+      openDictionaryDialog()
+      break
+    case '编辑':
+      openEditDialog()
+      break
+    case '检查音频':
+      checkBookAudio()
+      break
+  }
+}
 
 // 句子映射：key = "text_hash", value = { audio_file, text }
 const sentencesMap = ref<Record<string, SentenceMapping>>({})
@@ -393,6 +549,10 @@ const showDictPopup = ref(false)
 const dictLoading = ref(false)
 const dictError = ref('')
 const dictData = ref<DictionaryData | null>(null)
+const dictSentenceLoading = ref(false)  // 句子翻译加载状态
+const dictSentenceError = ref('')  // 句子翻译错误信息
+const dictPhoneticLoading = ref(false)  // 发音加载状态
+const dictPhoneticAudio = ref<string | null>(null)  // 发音音频URL
 let longPressTimer: number | null = null
 let isLongPress = false
 let currentTouchTarget: HTMLElement | null = null
@@ -407,6 +567,10 @@ const secondDictLoading = ref(false)
 const secondDictError = ref('')
 const secondDictData = ref<DictionaryData | null>(null)
 const secondDictSentence = ref('')
+const secondDictSentenceLoading = ref(false)  // 句子翻译加载状态
+const secondDictSentenceError = ref('')  // 句子翻译错误信息
+const secondDictPhoneticLoading = ref(false)  // 发音加载状态
+const secondDictPhoneticAudio = ref<string | null>(null)  // 发音音频URL
 
 // 生词本相关状态
 const addingToVocabulary = ref(false)
@@ -424,6 +588,11 @@ const pages = ref<(string | null)[]>([])  // 页面缓存数组，null表示未�
 const pageLoadStatus = ref<Record<number, 'loading' | 'loaded' | 'error'>>({})
 const totalPages = ref(0)
 const isInitialLoading = ref(true)
+
+// 音频检查相关状态
+const showAudioFixDialog = ref(false)
+const audioFixedList = ref<{ title: string; fixed_fields: string[]; warnings: string[] }[]>([])
+const audioErrorList = ref<{ title: string; issues: string[] }[]>([])
 
 // 预加载配置
 const PRELOAD_AHEAD = 2  // 预加载后面2页
@@ -446,6 +615,15 @@ const currentPageContent = computed(() => {
 const pageTitle = computed(() => {
   if (totalPages.value <= 1) return bookTitle.value
   return `${bookTitle.value} (${currentPage.value + 1}/${totalPages.value})`
+})
+
+// 检测当前页面内容是否过长（超过阈值启用虚拟滚动）
+const LONG_CONTENT_THRESHOLD = 5000  // 字符数阈值
+const useVirtualScroll = computed(() => {
+  const content = currentPageContent.value
+  // 移除 HTML 标签后计算纯文本长度
+  const textOnly = content.replace(/<[^>]+>/g, '')
+  return textOnly.length > LONG_CONTENT_THRESHOLD
 })
 
 // 检查页面是否已加载
@@ -476,33 +654,76 @@ const loadPages = async (startPage: number, endPage: number) => {
   pagesToLoad.forEach(p => pageLoadStatus.value[p] = 'loading')
 
   try {
-    // 计算连续范围进行批量加载
+    const MAX_CHUNK_SIZE = 5  // 每批最多 5 页，避免响应过大
+    
+    // 计算连续范围
     const minPage = Math.min(...pagesToLoad)
     const maxPage = Math.max(...pagesToLoad) + 1
+    const range = maxPage - minPage
+    
+    console.log('Loading pages:', minPage, 'to', maxPage, 'range:', range)
+    
+    // 如果范围太大，分批请求
+    if (range > MAX_CHUNK_SIZE) {
+      const promises = []
+      for (let i = minPage; i < maxPage; i += MAX_CHUNK_SIZE) {
+        const chunkEnd = Math.min(i + MAX_CHUNK_SIZE, maxPage)
+        console.log(`Chunk ${i} to ${chunkEnd}`)
+        promises.push(
+          api.get(`/books/${bookId.value}/pages`, {
+            params: { start_page: i, end_page: chunkEnd, chunk_size: MAX_CHUNK_SIZE }
+          })
+        )
+      }
+      const results = await Promise.all(promises)
+      
+      // 合并结果
+      results.forEach((res, idx) => {
+        const data = res.data
+        if (idx === 0) {
+          // 第一个结果设置基本信息
+          bookPath.value = data.book_path
+          bookTitle.value = data.title
+          if (totalPages.value === 0) {
+            totalPages.value = data.page_count
+          }
+        }
+        
+        // 修复图片路径并缓存页面
+        const baseUrl = `/books/${data.book_path}`
+        const newPages = [...pages.value]
+        data.pages.forEach((page: string, pageIndex: number) => {
+          const actualIndex = data.start_page + pageIndex
+          newPages[actualIndex] = page.replace(/src="\.\/assets\//g, `src="${baseUrl}/assets/`)
+          pageLoadStatus.value[actualIndex] = 'loaded'
+        })
+        pages.value = newPages
+      })
+    } else {
+      // 小范围直接请求
+      const res = await api.get(`/books/${bookId.value}/pages`, {
+        params: { start_page: minPage, end_page: maxPage, chunk_size: MAX_CHUNK_SIZE }
+      })
 
-    console.log('Loading pages:', minPage, 'to', maxPage)
-    const res = await api.get(`/books/${bookId}/pages`, {
-      params: { start_page: minPage, end_page: maxPage }
-    })
+      const data = res.data
+      console.log('Loaded data:', data.title, 'total pages:', data.page_count)
+      bookPath.value = data.book_path
+      bookTitle.value = data.title
 
-    const data = res.data
-    console.log('Loaded data:', data.title, 'total pages:', data.page_count)
-    bookPath.value = data.book_path
-    bookTitle.value = data.title
+      // 修复图片路径并缓存页面
+      const baseUrl = `/books/${data.book_path}`
+      const newPages = [...pages.value]
+      data.pages.forEach((page: string, idx: number) => {
+        const pageIndex = data.start_page + idx
+        newPages[pageIndex] = page.replace(/src="\.\/assets\//g, `src="${baseUrl}/assets/`)
+        pageLoadStatus.value[pageIndex] = 'loaded'
+      })
+      pages.value = newPages
 
-    // 修复图片路径并缓存页面
-    const baseUrl = `/books/${data.book_path}`
-    const newPages = [...pages.value]
-    data.pages.forEach((page: string, idx: number) => {
-      const pageIndex = data.start_page + idx
-      newPages[pageIndex] = page.replace(/src="\.\/assets\//g, `src="${baseUrl}/assets/`)
-      pageLoadStatus.value[pageIndex] = 'loaded'
-    })
-    pages.value = newPages
-
-    // 更新总页数（首次加载时）
-    if (totalPages.value === 0) {
-      totalPages.value = data.page_count
+      // 更新总页数（首次加载时）
+      if (totalPages.value === 0) {
+        totalPages.value = data.page_count
+      }
     }
 
   } catch (error) {
@@ -593,7 +814,7 @@ const handleKeyDown = (e: KeyboardEvent) => {
 const openEditDialog = async () => {
   // 加载原始MD内容
   try {
-    const res = await api.get<{ content: string }>(`/books/${bookId}/content`)
+    const res = await api.get<{ content: string }>(`/books/${bookId.value}/content`)
     rawEditContent.value = res.data.content
   } catch (error) {
     showToast('加载内容失败')
@@ -603,10 +824,41 @@ const openEditDialog = async () => {
   showEditDialog.value = true
 }
 
+// 从音频修复弹窗点击编辑书籍
+const handleEditBookFromAudioFix = async (_targetBookId: string) => {
+  // 关闭音频修复弹窗
+  showAudioFixDialog.value = false
+  // 打开编辑对话框
+  await openEditDialog()
+}
+
 // 打开词典输入对话框
 const openDictionaryDialog = () => {
   dictionaryInputWord.value = ''
   showDictionaryInputDialog.value = true
+}
+
+// 检查书籍音频配置
+const checkBookAudio = async () => {
+  try {
+    const res = await api.post(`/books/${bookId.value}/check-audio`)
+    const result = res.data
+    
+    // 设置弹窗数据
+    audioFixedList.value = result.audio_fixed || []
+    audioErrorList.value = result.audio_errors || []
+    showAudioFixDialog.value = true
+    
+    // 如果有修复，重新加载句子映射
+    if (result.audio_fixed?.length > 0) {
+      if (bookPath.value) {
+        await loadSentencesMap(`/books/${bookPath.value}`)
+      }
+    }
+  } catch (error: any) {
+    console.error('检查失败:', error)
+    showToast(error.response?.data?.detail || '检查失败')
+  }
 }
 
 // 处理词典输入确认
@@ -622,7 +874,27 @@ const handleDictionaryInputConfirm = () => {
 
 // 编辑保存后重新加载书籍内容
 const loadBookContent = async () => {
-  await loadBook()
+  // 清空页面缓存和加载状态
+  pages.value = []
+  pageLoadStatus.value = {}
+  totalPages.value = 0  // 重置总页数，让 loadPages 重新获取
+
+  // 重新加载当前页面
+  const current = currentPage.value
+  loading.value = true
+  try {
+    await loadPages(current, current + 1)
+    // 重新加载句子映射
+    if (bookPath.value) {
+      await loadSentencesMap(`/books/${bookPath.value}`)
+    }
+    // 预加载相邻页面
+    preloadPages()
+  } catch (error) {
+    console.error('重新加载内容失败:', error)
+  } finally {
+    loading.value = false
+  }
 }
 
 
@@ -659,16 +931,23 @@ const loadSentencesMap = async (baseUrl: string) => {
     const timestamp = Date.now()
     const res = await fetch(`${baseUrl}/audio/sentences.json?t=${timestamp}`)
     if (res.ok) {
-      const data: SentenceMapping[] = await res.json()
+      const data = await res.json()
+      // 支持两种格式：直接数组或 { sentences: [...], total_duration: ... }
+      const sentences: SentenceMapping[] = Array.isArray(data) ? data : data.sentences || []
       // 构建映射: key = "text_hash"（与音频文件名一致）
-      data.forEach((item) => {
-        // 根据文本计算哈希值，生成对应的音频文件名
-        const hash = md5Hash(item.text)
-        // 自动填充 audio_file 字段
-        item.audio_file = `${hash}.mp3`
+      sentences.forEach((item) => {
+        // 根据文本计算哈希值
+        const hash = md5Hash(item.text.trim())
+        // 如果后端没有返回 audio_file，则根据 hash 生成
+        if (!item.audio_file) {
+          item.audio_file = `${hash}.mp3`
+        }
         sentencesMap.value[hash] = item
       })
       console.log('Loaded sentences map:', Object.keys(sentencesMap.value).length, 'entries')
+    } else if (res.status === 404) {
+      // 404 是正常情况（音频尚未生成），静默处理
+      console.log('sentences.json 不存在，音频可能尚未生成')
     }
   } catch (e) {
     console.log('没有预生成的句子映射')
@@ -691,7 +970,7 @@ const playSentence = async (el: HTMLElement) => {
 
   // 尝试使用预生成音频（通过文本哈希查找）
   if (text && audioPlayer.value) {
-    const hash = md5Hash(text)
+    const hash = md5Hash(text.trim())
     const mapping = sentencesMap.value[hash]
     console.log('Looking for audio by hash:', hash, mapping)
     if (mapping && mapping.audio_file) {
@@ -713,17 +992,28 @@ const playSentence = async (el: HTMLElement) => {
     }
   }
 
-  // 没有预生成音频，提示用户
-  showToast('缺少语音，请先生成再使用')
-  if (isPlayingAll.value) stopPlayAll()
+  // 没有预生成音频（包括：text为空、audioPlayer为null、sentencesMap中无记录）
+  if (isPlayingAll.value) {
+    // 全文朗读模式：显示提示并跳到下一句
+    showToast('当前句子缺少语音，已跳过')
+    // 使用 setTimeout 确保状态更新后再播放下一句
+    setTimeout(() => {
+      handleAudioEnded()
+    }, 100)
+  } else {
+    // 单句播放模式：显示提示
+    showToast('当前句子缺少语音，请先生成')
+  }
 }
 
 const handleContentClick = (e: MouseEvent) => {
   const target = e.target as HTMLElement
-  if (target.classList.contains('tts-sentence')) {
+  // 向上查找最近的 .tts-sentence 元素（处理点击子元素的情况）
+  const sentenceEl = target.closest('.tts-sentence') as HTMLElement | null
+  if (sentenceEl) {
     // 点击句子时停止全文朗读，然后播放该句子
     stopPlayAll()
-    playSentence(target)
+    playSentence(sentenceEl)
   } else {
     // 点击书籍其他位置，停止朗读
     stopPlayAll()
@@ -740,18 +1030,26 @@ const handleTouchStart = (e: TouchEvent) => {
   touchStartY.value = touch.clientY
   isSwiping.value = false
 
-  // 只在tts-sentence上处理长按查词
-  if (!target.classList.contains('tts-sentence')) return
+  // 向上查找最近的 .tts-sentence 元素（处理点击子元素的情况）
+  const sentenceEl = target.closest('.tts-sentence') as HTMLElement | null
+  if (!sentenceEl) return
 
-  currentTouchTarget = target
+  currentTouchTarget = sentenceEl
   isLongPress = false
-  longPressTimer = window.setTimeout(() => {
+  longPressTimer = window.setTimeout(async () => {
     isLongPress = true
     // 获取触摸位置处的单词
-    const word = getWordAtPosition(target, touch.clientX, touch.clientY)
+    let word = getWordAtPosition(sentenceEl, touch.clientX, touch.clientY)
+    // 使用后端断句获取当前句子
+    let sentence = await findSentenceForWord(sentenceEl, touch.clientX, touch.clientY)
+
+    // 如果不是独立单词，使用整个句子
+    if (!word && sentence) {
+      word = sentence
+      sentence = ''
+    }
+
     if (word) {
-      // 获取句子文本
-      const sentence = target.textContent || ''
       lookupWord(word, sentence)
     }
   }, 500) // 500ms 长按触发
@@ -785,11 +1083,9 @@ const handleTouchEnd = (e: TouchEvent) => {
 
   // 如果不是长按且不是滑动，则触发朗读
   if (!isLongPress && currentTouchTarget) {
-    const target = e.target as HTMLElement
-    if (target.classList.contains('tts-sentence')) {
-      stopPlayAll()
-      playSentence(target)
-    }
+    // 使用 currentTouchTarget 而不是 e.target，因为触摸结束时手指可能不在同一个元素上
+    stopPlayAll()
+    playSentence(currentTouchTarget)
   }
   currentTouchTarget = null
 }
@@ -819,44 +1115,191 @@ const handleTouchMove = (e: TouchEvent) => {
 }
 
 // 鼠标右键查词（电脑端）
-const handleContextMenu = (e: MouseEvent) => {
+const handleContextMenu = async (e: MouseEvent) => {
+  console.log('Context menu triggered', e.target)
   const target = e.target as HTMLElement
-  if (!target.classList.contains('tts-sentence')) return
+
+  // 向上查找最近的 .tts-sentence 元素（处理点击子元素的情况）
+  const sentenceEl = target.closest('.tts-sentence') as HTMLElement | null
+  console.log('sentenceEl:', sentenceEl)
+  if (!sentenceEl) {
+    console.log('No sentence element found')
+    return
+  }
 
   // 阻止默认右键菜单
   e.preventDefault()
 
-  // 获取选中的文本或光标位置的单词
-  const selection = window.getSelection()
+  // 尝试使用 Range 获取点击位置的文本
   let word = ''
+  let sentence = ''
 
-  if (selection && selection.toString().trim()) {
-    // 如果有选中的文本，使用选中的内容
-    word = selection.toString().trim()
-  } else {
-    // 否则获取鼠标位置的单词
-    word = getWordAtPosition(target, e.clientX, e.clientY)
+  // 使用 caretRangeFromPoint 获取点击位置的 Range
+  let range: Range | null = null
+  if ((document as any).caretRangeFromPoint) {
+    range = (document as any).caretRangeFromPoint(e.clientX, e.clientY)
+  } else if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(e.clientX, e.clientY)
+    if (pos) {
+      range = document.createRange()
+      range.setStart(pos.offsetNode, pos.offset)
+      range.setEnd(pos.offsetNode, pos.offset)
+    }
   }
 
-  if (word) {
-    // 获取句子文本
-    const sentence = target.textContent || ''
-    lookupWord(word, sentence)
+  if (range) {
+    // 尝试选中点击位置附近的单词
+    const textNode = range.startContainer
+    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+      const text = textNode.textContent || ''
+      const offset = range.startOffset
+
+      // 向前找单词边界
+      let start = offset
+      while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) {
+        start--
+      }
+
+      // 向后找单词边界
+      let end = offset
+      while (end < text.length && /[a-zA-Z]/.test(text[end])) {
+        end++
+      }
+
+      if (start < end) {
+        word = text.substring(start, end)
+        // 清除选区
+        const sel = window.getSelection()
+        if (sel) sel.removeAllRanges()
+      }
+    }
+  }
+
+  // 无论是否找到单词，都获取句子
+  if (sentenceEl.dataset.tts) {
+    sentence = sentenceEl.dataset.tts
+  }
+
+  console.log('Word:', word, 'Sentence:', sentence)
+  if (word || sentence) {
+    await lookupWord(word, sentence)
   }
 }
 
-// 从文本中提取单词
-const extractWord = (text: string): string => {
-  // 清理文本并提取第一个有效单词
-  const cleaned = text.trim().replace(/[^a-zA-Z\s]/g, ' ')
-  const words = cleaned.split(/\s+/).filter(w => w.length > 0)
-  return words[0] || ''
+// 从后端加载指定页的句子
+const loadPageSentencesFromApi = async (pageIndex: number): Promise<{ index: number; text: string }[]> => {
+  // 如果已经有缓存，直接返回
+  if (pageSentencesCache.value[pageIndex]) {
+    return pageSentencesCache.value[pageIndex]
+  }
+
+  // 如果没有bookId，无法请求API
+  if (!bookId.value) {
+    return []
+  }
+
+  try {
+    const res = await api.get<{ sentences: { index: number; text: string }[] }>(
+      `/books/${bookId.value}/sentences?page=${pageIndex}`
+    )
+    const sentences = res.data.sentences || []
+    // 缓存结果
+    pageSentencesCache.value[pageIndex] = sentences
+    return sentences
+  } catch (error) {
+    console.error('加载页面句子失败:', error)
+    return []
+  }
+}
+
+// 根据单词找到所属句子（使用后端断句）
+const findSentenceForWord = async (element: HTMLElement, x: number, y: number): Promise<string> => {
+  // 先尝试从后端API获取句子
+  const sentences = await loadPageSentencesFromApi(currentPage.value)
+
+  if (sentences.length > 0) {
+    // 获取点击位置的单词
+    const word = getWordAtPosition(element, x, y)
+    if (!word) return ''
+
+    // 遍历句子，找到包含该单词的句子
+    for (const sentenceObj of sentences) {
+      const sentenceText = sentenceObj.text
+      // 检查句子是否包含该单词（作为完整单词，使用正则不区分大小写）
+      const regex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i')
+      if (regex.test(sentenceText)) {
+        return sentenceText
+      }
+    }
+  }
+
+  // 如果后端没有句子或没找到，回退到前端逻辑
+  return getSentenceAtPosition(element, x, y)
+}
+
+// 转义正则特殊字符
+const escapeRegExp = (str: string): string => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+
+// 提取当前位置所属的句子
+const getSentenceAtPosition = (element: HTMLElement, x: number, y: number): string => {
+  const text = element.textContent || ''
+  if (!text) return ''
+
+  // 尝试获取光标位置的偏移量
+  let offset = 0
+  if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y)
+    if (pos && pos.offsetNode && pos.offsetNode.nodeType === Node.TEXT_NODE) {
+      const textNode = pos.offsetNode as ChildNode
+      offset = Array.from(element.childNodes).indexOf(textNode) + pos.offset
+    }
+  } else if ((document as any).caretRangeFromPoint) {
+    const range = (document as any).caretRangeFromPoint(x, y)
+    if (range) {
+      const textNode = range.startContainer
+      if (textNode.nodeType === Node.TEXT_NODE) {
+        const preCaretRange = range.cloneRange()
+        preCaretRange.selectNodeContents(element)
+        preCaretRange.setEnd(range.startContainer, range.startOffset)
+        offset = preCaretRange.toString().length
+      }
+    }
+  }
+
+  // 向前查找句子开始
+  let start = offset
+  while (start > 0) {
+    const char = text[start - 1]
+    if (char === '.' || char === '!' || char === '?' || char === '\n') {
+      break
+    }
+    start--
+  }
+  // 跳过空白字符
+  while (start < offset && /\s/.test(text[start])) {
+    start++
+  }
+
+  // 向后查找句子结束
+  let end = offset
+  while (end < text.length) {
+    const char = text[end]
+    if (char === '.' || char === '!' || char === '?' || char === '\n') {
+      end++
+      break
+    }
+    end++
+  }
+
+  const sentence = text.substring(start, end).trim()
+  return sentence.length > 200 ? sentence.substring(0, 200) : sentence  // 限制长度
 }
 
 // 获取指定位置的单词
-const getWordAtPosition = (element: HTMLElement, x: number, y: number): string => {
-  const text = element.textContent || ''
-
+const getWordAtPosition = (_element: HTMLElement, x: number, y: number): string => {
   // 使用 Range 和 TextRange 来检测位置对应的文本
   let range: Range | null = null
 
@@ -882,25 +1325,56 @@ const getWordAtPosition = (element: HTMLElement, x: number, y: number): string =
       let startOffset = range.startOffset
       let endOffset = range.startOffset
 
-      // 向前查找单词边界
+      // 向前查找单词边界（遇到换行停止）
       while (startOffset > 0 && /[a-zA-Z]/.test(textContent[startOffset - 1])) {
+        if (textContent[startOffset - 1] === '\n') break
         startOffset--
       }
 
-      // 向后查找单词边界
+      // 向后查找单词边界（遇到换行停止）
       while (endOffset < textContent.length && /[a-zA-Z]/.test(textContent[endOffset])) {
+        if (textContent[endOffset] === '\n') break
         endOffset++
       }
 
       const word = textContent.substring(startOffset, endOffset)
+
       if (word.length > 0) {
-        return word
+        // 检查该文本节点中是否有换行符
+        const hasNewLine = textContent.includes('\n')
+
+        if (hasNewLine) {
+          // 如果文本中有换行，用换行来判定行的边界
+          const beforeWord = textContent.substring(0, startOffset)
+          const afterWord = textContent.substring(endOffset)
+
+          const lastNewLineBefore = beforeWord.lastIndexOf('\n')
+          const nextNewLineAfter = afterWord.indexOf('\n')
+
+          const lineStart = lastNewLineBefore >= 0 ? lastNewLineBefore + 1 : 0
+          const lineEnd = nextNewLineAfter >= 0 ? endOffset + nextNewLineAfter : textContent.length
+
+          const currentLine = textContent.substring(lineStart, lineEnd).trim()
+          const wordsInLine = currentLine.split(/\s+/).filter(w => /^[a-zA-Z]+$/.test(w))
+
+          // 只有当该行只有一个单词时才识别为单词
+          if (wordsInLine.length === 1 && wordsInLine[0] === word) {
+            return word
+          }
+        } else {
+          // 如果文本中没有换行，检查整个文本节点是否只有一个单词
+          const wordsInText = textContent.split(/\s+/).filter(w => /^[a-zA-Z]+$/.test(w))
+          // 只有当整个文本节点只有一个单词时才识别为单词
+          if (wordsInText.length === 1 && wordsInText[0] === word) {
+            return word
+          }
+        }
       }
     }
   }
 
-  // 降级方案：返回第一个单词
-  return extractWord(text)
+  // 降级方案：返回空字符串，由调用方处理
+  return ''
 }
 
 // 查询单词
@@ -917,15 +1391,67 @@ const lookupWord = async (word: string, sentence: string = '') => {
   dictLoading.value = true
   dictError.value = ''
   dictData.value = null
+  dictSentenceLoading.value = false
+  dictPhoneticLoading.value = false
+  dictPhoneticAudio.value = null
   currentSentenceText.value = sentence  // 保存当前句子
 
   try {
+    // 查询单词
     const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(word)}`)
     dictData.value = res.data
   } catch (error: any) {
     dictError.value = error.response?.data?.detail || '查询失败'
-  } finally {
     dictLoading.value = false
+    return
+  }
+
+  // 单词查询完成后关闭 loading
+  dictLoading.value = false
+
+  // 获取发音（仅本地词典需要）
+  if (dictData.value?.source === 'ecdict') {
+    dictPhoneticLoading.value = true
+    try {
+      const pronRes = await api.get<{audio_url: string, accent: string}>(`/pronunciation/${encodeURIComponent(word)}`)
+      if (pronRes.data.audio_url) {
+        dictPhoneticAudio.value = pronRes.data.audio_url
+      }
+    } catch (pronError: any) {
+      console.error('获取发音失败:', pronError)
+    } finally {
+      dictPhoneticLoading.value = false
+    }
+  }
+
+  // 如果有句子，在后台单独请求句子翻译
+  if (sentence) {
+    dictSentenceLoading.value = true
+    dictSentenceError.value = ''
+    try {
+      const transRes = await api.get<{translation: string}>(`/dictionary/translate-sentence?sentence=${encodeURIComponent(sentence)}`)
+      if (dictData.value) {
+        dictData.value.sentence_translation = transRes.data.translation
+      }
+    } catch (transError: any) {
+      console.error('句子翻译失败:', transError)
+      // 提取简短错误信息
+      const errorMsg = transError.response?.data?.detail
+      if (errorMsg) {
+        // 提取关键错误信息，避免过长
+        if (errorMsg.includes('未配置') || errorMsg.includes('请先')) {
+          dictSentenceError.value = '翻译未配置'
+        } else if (errorMsg.includes('联系管理员')) {
+          dictSentenceError.value = '请联系管理员'
+        } else if (errorMsg.includes('网络') || errorMsg.includes('超时')) {
+          dictSentenceError.value = '网络错误'
+        } else {
+          dictSentenceError.value = '翻译失败'
+        }
+      }
+    } finally {
+      dictSentenceLoading.value = false
+    }
   }
 }
 
@@ -938,14 +1464,65 @@ const lookupSecondWord = async (word: string, sentence: string = '') => {
   secondDictError.value = ''
   secondDictData.value = null
   secondDictSentence.value = sentence
+  secondDictSentenceLoading.value = false
+  secondDictPhoneticLoading.value = false
+  secondDictPhoneticAudio.value = null
 
   try {
+    // 查询单词
     const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(word)}`)
     secondDictData.value = res.data
   } catch (error: any) {
     secondDictError.value = error.response?.data?.detail || '查询失败'
-  } finally {
     secondDictLoading.value = false
+    return
+  }
+
+  // 单词查询完成后关闭 loading
+  secondDictLoading.value = false
+
+  // 获取发音（仅本地词典需要）
+  if (secondDictData.value?.source === 'ecdict') {
+    secondDictPhoneticLoading.value = true
+    try {
+      const pronRes = await api.get<{audio_url: string, accent: string}>(`/pronunciation/${encodeURIComponent(word)}`)
+      if (pronRes.data.audio_url) {
+        secondDictPhoneticAudio.value = pronRes.data.audio_url
+      }
+    } catch (pronError: any) {
+      console.error('获取发音失败:', pronError)
+    } finally {
+      secondDictPhoneticLoading.value = false
+    }
+  }
+
+  // 如果有句子，在后台单独请求句子翻译
+  if (sentence) {
+    secondDictSentenceLoading.value = true
+    secondDictSentenceError.value = ''
+    try {
+      const transRes = await api.get<{translation: string}>(`/dictionary/translate-sentence?sentence=${encodeURIComponent(sentence)}`)
+      if (secondDictData.value) {
+        secondDictData.value.sentence_translation = transRes.data.translation
+      }
+    } catch (transError: any) {
+      console.error('句子翻译失败:', transError)
+      // 提取简短错误信息
+      const errorMsg = transError.response?.data?.detail
+      if (errorMsg) {
+        if (errorMsg.includes('未配置') || errorMsg.includes('请先')) {
+          secondDictSentenceError.value = '翻译未配置'
+        } else if (errorMsg.includes('联系管理员')) {
+          secondDictSentenceError.value = '请联系管理员'
+        } else if (errorMsg.includes('网络') || errorMsg.includes('超时')) {
+          secondDictSentenceError.value = '网络错误'
+        } else {
+          secondDictSentenceError.value = '翻译失败'
+        }
+      }
+    } finally {
+      secondDictSentenceLoading.value = false
+    }
   }
 }
 
@@ -1017,8 +1594,12 @@ const handleDictPopupOverlayClick = () => {
 
 // 播放音标音频
 const playPhoneticAudio = (audioUrl: string) => {
+  if (!audioUrl) return
   const audio = new Audio(audioUrl)
-  audio.play()
+  audio.play().catch(err => {
+    console.error('播放发音失败:', err)
+    showToast('播放失败')
+  })
 }
 
 // 添加到生词本
@@ -1102,7 +1683,9 @@ const formatExchange = (exchange: string): string => {
     's:': '复数: ',
     'i:': '现在分词: ',
     'r:': '比较级: ',
-    't:': '最高级: '
+    't:': '最高级: ',
+    '0:': '原型: ',
+    '1:': '变形: '
   }
   return exchange.split('/').map(item => {
     for (const [key, label] of Object.entries(mapping)) {
@@ -1150,33 +1733,27 @@ const startPlayAll = () => {
     showToast('没有可朗读的内容')
     return
   }
+
+  // 检查是否有可用的语音
+  let hasAnyAudio = false
+  for (const sentence of allSentences) {
+    const text = sentence.dataset.tts
+    if (text) {
+      const hash = md5Hash(text.trim())
+      if (sentencesMap.value[hash]?.audio_file) {
+        hasAnyAudio = true
+        break
+      }
+    }
+  }
+
+  if (!hasAnyAudio) {
+    showToast('当前页面缺少语音，请先生成')
+    return
+  }
+
   isPlayingAll.value = true
   playSentence(allSentences[0])
-}
-
-// 朗读下一页的句子
-const playNextPage = async () => {
-  if (currentPage.value < totalPages.value - 1) {
-    const nextPageIndex = currentPage.value + 1
-
-    // 确保下一页已加载
-    if (!isPageLoaded(nextPageIndex)) {
-      await loadPages(nextPageIndex, nextPageIndex + 1)
-    }
-
-    goToNextPage()
-
-    // 页面切换后，等待DOM更新再开始朗读
-    setTimeout(() => {
-      const allSentences = Array.from(document.querySelectorAll('.tts-sentence')) as HTMLElement[]
-      if (allSentences.length > 0 && isPlayingAll.value) {
-        playSentence(allSentences[0])
-      }
-    }, 100)
-  } else {
-    stopPlayAll()
-    showToast('阅读完成')
-  }
 }
 
 const stopPlayAll = () => {
@@ -1196,15 +1773,24 @@ const handleAudioEnded = () => {
       // 当前页还有下一句
       playSentence(allSentences[currentIndex + 1])
     } else {
-      // 当前页朗读完毕，尝试翻到下一页
-      playNextPage()
+      // 当前页朗读完毕，停止播放
+      stopPlayAll()
     }
   }
 }
 
 const handleAudioError = () => {
   console.error('音频播放错误')
-  if (isPlayingAll.value) stopPlayAll()
+  if (isPlayingAll.value) {
+    // 全文朗读模式：显示提示并跳到下一句
+    showToast('当前句子语音加载失败，已跳过')
+    setTimeout(() => {
+      handleAudioEnded()
+    }, 100)
+  } else {
+    // 单句播放模式：显示提示
+    showToast('当前句子语音加载失败，请重新生成')
+  }
 }
 
 // 横屏状态检测
@@ -1285,6 +1871,28 @@ onUnmounted(() => {
   }
 }
 
+/* 竖屏：隐藏展开按钮，显示更多菜单 */
+@media (orientation: portrait) {
+  .nav-more-actions {
+    display: none;
+  }
+
+  .nav-more-trigger {
+    display: flex;
+  }
+}
+
+/* 横屏：显示所有按钮，隐藏更多菜单 */
+@media (orientation: landscape) {
+  .nav-more-actions {
+    display: flex;
+  }
+
+  .nav-more-trigger {
+    display: none;
+  }
+}
+
 /* 导航栏布局调整 */
 :deep(.van-nav-bar) {
   .van-nav-bar__left {
@@ -1342,10 +1950,10 @@ onUnmounted(() => {
     border-radius: 6px;
   }
 
-  /* 横屏状态下图片缩小50% */
+  /* 横屏状态下图片缩小为30% */
   &.landscape {
     img {
-      max-width: 40%;
+      max-width: 25%;
     }
   }
 
@@ -1641,6 +2249,15 @@ onUnmounted(() => {
   margin: 0;
 }
 
+.dict-source-tag {
+  font-size: 12px;
+  color: #969799;
+  background: #f7f8fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
 .vocab-btn {
   margin-left: auto;
 }
@@ -1768,6 +2385,91 @@ onUnmounted(() => {
   font-size: 13px;
   color: #666;
   line-height: 1.5;
+}
+
+.dict-related-phrases {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #eee;
+}
+
+.dict-phrases-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dict-phrase-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dict-phrase {
+  color: #1989fa;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dict-phrase-translation {
+  color: #666;
+}
+
+/* 百度翻译结果样式 */
+.dict-baidu-translation {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #eee;
+}
+
+.dict-baidu-translation .dict-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dict-baidu-translation-content {
+  font-size: 15px;
+  color: #07c160;
+  line-height: 1.6;
+  margin-top: 6px;
+}
+
+/* 句子翻译结果样式 */
+.dict-sentence-translation {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #eee;
+}
+
+.dict-sentence-original {
+  font-size: 14px;
+  color: #666;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+.dict-sentence-translated {
+  font-size: 15px;
+  color: #07c160;
+  line-height: 1.6;
+}
+
+.dict-sentence-loading {
+  font-size: 14px;
+  color: #969799;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.dict-sentence-error {
+  font-size: 13px;
+  color: #ee0a24;
+  line-height: 1.5;
+  margin-top: 4px;
 }
 
 /* 词典输入对话框样式（非模态） */

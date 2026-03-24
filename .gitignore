@@ -63,3 +63,19 @@ voices/
 
 # Cache directories
 cache/
+
+# Audio files (generated)
+*.mp3
+
+# WebP images (generated)
+*.webp
+
+# Docker images
+*.tar
+*.tar.gz
+
+# Book contents (generated audio, images)
+backend/Books/
+
+# Test data
+test/backend/Books/

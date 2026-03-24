@@ -92,8 +92,11 @@ class BookAudioInfo(BaseModel):
     """书籍音频信息"""
     text_hash: str = Field(..., description="文本哈希值（文件名）")
     text: str = Field(..., description="原文文本")
-    audio_url: str = Field(..., description="音频文件URL")
-    duration: float = Field(default=0.0, description="音频时长（秒）")
+    translation: Optional[str] = Field(default="", description="中文翻译")
+    audio_url: str = Field(..., description="英文音频文件URL")
+    audio_url_zh: Optional[str] = Field(default="", description="中文音频文件URL")
+    duration: float = Field(default=0.0, description="英文音频时长（秒）")
+    duration_zh: float = Field(default=0.0, description="中文音频时长（秒）")
 
 
 class BookAudioListResponse(BaseModel):
@@ -102,4 +105,26 @@ class BookAudioListResponse(BaseModel):
     book_title: str = Field(..., description="书籍标题")
     total: int = Field(..., description="音频文件总数")
     total_duration: float = Field(default=0.0, description="总时长（秒）")
+    has_chinese: bool = Field(default=False, description="是否有中文翻译")
     audio_list: List[BookAudioInfo] = Field(default_factory=list, description="音频列表")
+
+
+class BookAudioCheckResult(BaseModel):
+    """单本书籍音频检查结果"""
+    book_id: str = Field(..., description="书籍ID")
+    book_title: str = Field(..., description="书籍标题")
+    total_sentences: int = Field(..., description="总句子数")
+    en_audio_count: int = Field(..., description="英文音频数量")
+    zh_audio_count: int = Field(..., description="中文音频数量")
+    missing_en: int = Field(default=0, description="缺失英文音频数量")
+    missing_zh: int = Field(default=0, description="缺失中文音频数量")
+    is_complete_en: bool = Field(..., description="英文音频是否完整")
+    is_complete_zh: bool = Field(..., description="中文音频是否完整")
+
+
+class PlaylistAudioCheckResponse(BaseModel):
+    """播放列表音频完整性检查响应"""
+    total_books: int = Field(..., description="播放列表中的书籍总数")
+    complete_books_en: int = Field(..., description="英文音频完整的书籍数")
+    complete_books_zh: int = Field(..., description="中文音频完整的书籍数")
+    results: List[BookAudioCheckResult] = Field(default_factory=list, description="各书籍检查结果")

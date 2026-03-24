@@ -1,6 +1,19 @@
 import re
 import markdown
 
+
+def normalize_text_for_tts(text: str) -> str:
+    """统一的文本规范化函数，用于 TTS 哈希匹配
+    
+    规则：
+    1. 去除前后空白
+    2. 将多个连续空白字符（空格、制表符等）替换为单个空格
+    """
+    if not text:
+        return ""
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 class MarkdownParser:
     def __init__(self):
         self.md = markdown.Markdown(extensions=['tables', 'fenced_code'])
@@ -99,10 +112,11 @@ class MarkdownParser:
             sentences = re.split(r'(?<=\.)|\n+', content)
             wrapped_sentences = []
             for s in sentences:
-                s = s.strip()
-                if s:
-                    safe_text = s.replace('"', '&quot;')
-                    wrapped_sentences.append(f'<span class="tts-sentence" data-tts="{safe_text}">{s}</span>')
+                # 使用统一的规范化函数，确保与 book_service.py 一致
+                normalized = normalize_text_for_tts(s)
+                if normalized:
+                    safe_text = normalized.replace('"', '&quot;')
+                    wrapped_sentences.append(f'<span class="tts-sentence" data-tts="{safe_text}">{normalized}</span>')
             
             return f"{tag_open}{' '.join(wrapped_sentences)}{tag_close}"
 

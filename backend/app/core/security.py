@@ -1,7 +1,8 @@
 """JWT和密码哈希的安全工具"""
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from jose import JWTError, jwt
+from jwt import decode as jwt_decode, encode as jwt_encode
+from jwt.exceptions import PyJWTError
 import bcrypt
 from app.core.config import get_settings
 import uuid
@@ -54,7 +55,7 @@ def create_access_token(
         )
     
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt_encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
     return encoded_jwt
 
@@ -72,10 +73,10 @@ def verify_token(token: str) -> Optional[dict]:
     logger = logging.getLogger(__name__)
     
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt_decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         logger.info(f"[Token Verify] Success, payload: {payload}")
         return payload
-    except JWTError as e:
+    except PyJWTError as e:
         logger.warning(f"[Token Verify] Failed: {e}")
         return None
 

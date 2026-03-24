@@ -17,7 +17,9 @@ from app.schemas.audiobook import (
     BooksByGroupResponse,
     BookForPlaylistResponse,
     BookAudioListResponse,
-    BookAudioInfo
+    BookAudioInfo,
+    PlaylistAudioCheckResponse,
+    BookAudioCheckResult
 )
 from app.core.config import get_settings
 
@@ -160,12 +162,14 @@ class AudiobookService:
         self,
         db: AsyncSession,
         user_id: int,
-        direction: str = "next"
+        direction: str = "next",
+        force: bool = False
     ) -> NextBookResponse:
         """获取下一本/上一本书籍
 
         Args:
             direction: "next" 或 "prev"
+            force: 强制切换，忽略单曲循环模式限制（手动点击时使用）
         """
         playlist = await self.repository.get_user_playlist(db, user_id)
         if not playlist:
@@ -177,8 +181,8 @@ class AudiobookService:
 
         current_index = playlist.current_book_index
 
-        if playlist.play_mode == "single":
-            # 单曲循环模式：保持在当前书籍
+        if playlist.play_mode == "single" and not force:
+            # 单曲循环模式：自动播放时保持在当前书籍（手动切换时跳过此限制）
             return NextBookResponse(has_next=False, index=current_index)
         elif playlist.play_mode == "random":
             # 随机模式：随机选择一个索引（不包括当前）
@@ -221,70 +225,42 @@ class AudiobookService:
         db: AsyncSession,
         user_id: int
     ) -> List[BooksByGroupResponse]:
-        """获取可按分组添加的书籍列表"""
-        # 获取所有分组
-        result = await db.execute(
-            select(Category).where(Category.user_id == user_id)
-        )
-        categories = result.scalars().all()
-
+        """获取可按分组添加的书籍列表（用户已添加但未加入播放列表的书籍）"""
+        # 获取用户已添加的书籍分组（与主页一致）
+        from app.services.category_service import category_service
+        
+        user_book_groups = await category_service.get_books_grouped(db, user_id)
+        
+        # 获取用户播放列表中已有的书籍ID
+        playlist = await self.repository.get_user_playlist(db, user_id)
+        playlist_book_ids = {item.book_id for item in playlist.items} if playlist else set()
+        
+        # 获取用户已添加但未加入播放列表的书籍
         groups = []
-
-        # 处理每个分组
-        for category in categories:
-            # 获取该分组下的书籍
-            result = await db.execute(
-                select(Book)
-                .join(BookCategoryRel, Book.id == BookCategoryRel.book_id)
-                .where(
-                    BookCategoryRel.category_id == category.id,
-                    BookCategoryRel.user_id == user_id
-                )
-            )
-            books = result.scalars().all()
-
-            book_responses = []
-            for book in books:
-                book_responses.append(BookForPlaylistResponse(
-                    id=book.id,
-                    title=book.title,
-                    cover_path=book.cover_path,  # 直接使用数据库中的 cover_path
-                    level="Unknown"  # 可以从标签解析
+        for group in user_book_groups:
+            # 过滤掉已在播放列表中的书籍
+            filtered_books = [
+                book for book in group.books 
+                if book.id not in playlist_book_ids
+            ]
+            
+            if filtered_books:  # 只显示有可添加书籍的分组
+                book_responses = [
+                    BookForPlaylistResponse(
+                        id=book.id,
+                        title=book.title,
+                        cover_path=book.cover_path,
+                        level=book.level
+                    )
+                    for book in filtered_books
+                ]
+                
+                groups.append(BooksByGroupResponse(
+                    group_id=group.id,
+                    group_name=group.name,
+                    books=book_responses
                 ))
-
-            groups.append(BooksByGroupResponse(
-                group_id=category.id,
-                group_name=category.name,
-                books=book_responses
-            ))
-
-        # 添加"未分组"类别
-        result = await db.execute(
-            select(Book)
-            .outerjoin(
-                BookCategoryRel,
-                (Book.id == BookCategoryRel.book_id) & (BookCategoryRel.user_id == user_id)
-            )
-            .where(BookCategoryRel.book_id == None)
-        )
-        uncategorized_books = result.scalars().all()
-
-        if uncategorized_books:
-            book_responses = []
-            for book in uncategorized_books:
-                book_responses.append(BookForPlaylistResponse(
-                    id=book.id,
-                    title=book.title,
-                    cover_path=book.cover_path,  # 直接使用数据库中的 cover_path
-                    level="Unknown"
-                ))
-
-            groups.append(BooksByGroupResponse(
-                group_id=0,
-                group_name="未分组",
-                books=book_responses
-            ))
-
+        
         return groups
 
     async def clear_playlist(
@@ -354,10 +330,17 @@ class AudiobookService:
         if isinstance(mapping_data, list):
             sentences = mapping_data
             total_duration = 0.0
+            has_chinese = False
         else:
             # 新格式：包含 total_duration 和 sentences
             sentences = mapping_data.get('sentences', [])
             total_duration = mapping_data.get('total_duration', 0.0)
+            # 优先使用 has_chinese 字段，如果没有则根据 sentences 中是否有 audio_file_zh 来判断
+            has_chinese = mapping_data.get('has_chinese')
+            if has_chinese is None:
+                has_chinese = any(s.get('audio_file_zh') for s in sentences if isinstance(s, dict))
+            else:
+                has_chinese = bool(has_chinese)
 
         # 获取音频文件夹中所有mp3文件
         existing_audio_files = set()
@@ -369,18 +352,46 @@ class AudiobookService:
         for item in sentences:
             text = item.get('text', '')
             if text:
-                # 根据文本计算MD5哈希
-                text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
-                audio_file = f"{text_hash}.mp3"
+                # 使用 sentences.json 中的 audio_file 字段（不是 MD5 哈希）
+                audio_file = item.get('audio_file', '')
+                audio_file_zh = item.get('audio_file_zh', '')
 
-                # 检查音频文件是否存在
+                # 如果 audio_file 为空，尝试使用 MD5 哈希作为后备
+                if not audio_file:
+                    text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+                    audio_file = f"{text_hash}.mp3"
+
+                # 计算 text_hash 用于标识
+                text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+
+                # 获取英文音频时长：优先使用 duration 字段，如果没有则尝试从文件名推断或使用默认值
+                duration = item.get('duration', 0.0)
+                # 如果 duration 为 0 但有 duration_zh，可以估算英文时长（通常英文比中文短）
+                if duration == 0.0 and item.get('duration_zh'):
+                    duration = item.get('duration_zh', 0.0) * 0.8  # 估算英文比中文短 20%
+
+                # 获取中文音频时长
+                duration_zh = item.get('duration_zh', 0.0)
+
+                # 检查英文音频文件是否存在
+                audio_url = ""
                 if audio_file in existing_audio_files:
                     audio_url = f"/books/{book_folder.name}/audio/{audio_file}"
+
+                # 检查中文音频文件是否存在
+                audio_url_zh = ""
+                if audio_file_zh and audio_file_zh in existing_audio_files:
+                    audio_url_zh = f"/books/{book_folder.name}/audio/{audio_file_zh}"
+
+                if audio_url:  # 至少要有英文音频
                     audio_list.append(BookAudioInfo(
                         text_hash=text_hash,
                         text=text,
+                        translation=item.get('translation', ''),
                         audio_url=audio_url,
-                        duration=item.get('duration', 0.0)
+                        audio_url_zh=audio_url_zh,
+                        duration=duration,
+                        duration_zh=duration_zh
                     ))
 
         return BookAudioListResponse(
@@ -388,7 +399,107 @@ class AudiobookService:
             book_title=book.title,
             total=len(audio_list),
             total_duration=total_duration,
+            has_chinese=has_chinese,
             audio_list=audio_list
+        )
+
+    async def check_playlist_audio_completeness(
+        self,
+        db: AsyncSession,
+        user_id: int
+    ) -> PlaylistAudioCheckResponse:
+        """检查播放列表中所有书籍的音频完整性"""
+        playlist = await self.repository.get_or_create_playlist(db, user_id)
+        items = await self.repository.get_playlist_items(db, playlist.id)
+
+        results = []
+        complete_books_en = 0
+        complete_books_zh = 0
+
+        for item in items:
+            book = item.book
+            if not book:
+                continue
+
+            # 获取书籍音频信息
+            check_result = await self._check_book_audio_completeness(book)
+            results.append(check_result)
+
+            if check_result.is_complete_en:
+                complete_books_en += 1
+            if check_result.is_complete_zh:
+                complete_books_zh += 1
+
+        return PlaylistAudioCheckResponse(
+            total_books=len(items),
+            complete_books_en=complete_books_en,
+            complete_books_zh=complete_books_zh,
+            results=results
+        )
+
+    async def _check_book_audio_completeness(self, book) -> BookAudioCheckResult:
+        """检查单本书籍的音频完整性"""
+        book_folder = Path(book.file_path).parent
+        audio_folder = book_folder / "audio"
+        mapping_file = audio_folder / "sentences.json"
+
+        total_sentences = 0
+        en_audio_count = 0
+        zh_audio_count = 0
+
+        if mapping_file.exists():
+            try:
+                with open(mapping_file, 'r', encoding='utf-8') as f:
+                    mapping_data = json.load(f)
+
+                if isinstance(mapping_data, list):
+                    sentences = mapping_data
+                else:
+                    sentences = mapping_data.get('sentences', [])
+
+                total_sentences = len(sentences)
+
+                # 获取音频文件夹中所有mp3文件
+                existing_audio_files = set()
+                if audio_folder.exists():
+                    existing_audio_files = {f.name for f in audio_folder.glob('*.mp3')}
+
+                for sentence in sentences:
+                    text = sentence.get('text', '')
+                    if text:
+                        # 使用 sentences.json 中的 audio_file 字段
+                        audio_file = sentence.get('audio_file', '')
+                        audio_file_zh = sentence.get('audio_file_zh', '')
+
+                        # 如果 audio_file 为空，尝试使用 MD5 哈希作为后备
+                        if not audio_file:
+                            text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+                            audio_file = f"{text_hash}.mp3"
+
+                        # 检查英文音频
+                        if audio_file in existing_audio_files:
+                            en_audio_count += 1
+
+                        # 检查中文音频
+                        if audio_file_zh and audio_file_zh in existing_audio_files:
+                            zh_audio_count += 1
+
+            except Exception as e:
+                print(f"检查书籍音频完整性失败 {book.id}: {e}")
+
+        missing_en = max(0, total_sentences - en_audio_count)
+        missing_zh = max(0, total_sentences - zh_audio_count)
+
+        return BookAudioCheckResult(
+            book_id=book.id,
+            book_title=book.title,
+            total_sentences=total_sentences,
+            en_audio_count=en_audio_count,
+            zh_audio_count=zh_audio_count,
+            missing_en=missing_en,
+            missing_zh=missing_zh,
+            is_complete_en=missing_en == 0 and total_sentences > 0,
+            is_complete_zh=missing_zh == 0 and total_sentences > 0
         )
 
 

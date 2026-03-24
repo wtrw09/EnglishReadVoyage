@@ -61,6 +61,44 @@ class BookImportResponse(BaseModel):
     book_id: str = Field(None, description="导入的书籍ID（单本导入时）")
     title: str = Field(None, description="导入的书籍标题")
     book_ids: List[str] = Field(default_factory=list, description="导入的书籍ID列表（批量导入时）")
+    failed_sentences: List[dict] = Field(default_factory=list, description="翻译失败的句子列表")
+
+
+class TranslationFailedSentence(BaseModel):
+    """翻译失败的句子"""
+    text: str = Field(..., description="英文原文")
+    translation: Optional[str] = Field(None, description="翻译结果（失败时为空）")
+    error: str = Field(..., description="错误信息")
+    page: int = Field(..., description="页码")
+    index: int = Field(..., description="句子索引")
+
+
+class TranslationStatusResponse(BaseModel):
+    """翻译状态响应"""
+    success: bool = Field(..., description="整体成功状态")
+    total_count: int = Field(..., description="总句子数")
+    success_count: int = Field(..., description="成功翻译数")
+    failed_count: int = Field(..., description="失败翻译数")
+    failed_sentences: List[TranslationFailedSentence] = Field(default_factory=list, description="失败的句子列表")
+
+
+class RetryTranslateResponse(BaseModel):
+    """重试翻译响应"""
+    success: bool = Field(..., description="重试是否成功")
+    message: str = Field(..., description="结果消息")
+    translation: Optional[str] = Field(None, description="翻译结果")
+
+
+class UpdateSentenceTranslationRequest(BaseModel):
+    """手动更新句子翻译请求"""
+    text: str = Field(..., description="英文原文")
+    translation: str = Field(..., description="用户输入的翻译")
+
+
+class UpdateSentenceTranslationResponse(BaseModel):
+    """手动更新句子翻译响应"""
+    success: bool = Field(..., description="更新是否成功")
+    message: str = Field(..., description="结果消息")
 
 
 class BookUpdateRequest(BaseModel):
@@ -80,6 +118,32 @@ class BookRenameRequest(BaseModel):
     new_title: str = Field(..., description="新的书籍标题")
 
 
+class SentencePreview(BaseModel):
+    """句子预览"""
+    page: int = Field(..., description="页码")
+    index: int = Field(..., description="句子索引")
+    text: str = Field(..., description="句子内容")
+
+
+class SentenceUpdateRequest(BaseModel):
+    """更新句子请求"""
+    page: int = Field(..., description="页码")
+    index: int = Field(..., description="句子索引")
+    text: str = Field(..., description="新的句子内容")
+
+
+class SentencePreviewResponse(BaseModel):
+    """断句预览响应"""
+    total_count: int = Field(..., description="总句子数")
+    sentences: List[SentencePreview] = Field(..., description="句子列表")
+
+
+class SentenceUpdateResponse(BaseModel):
+    """更新句子响应"""
+    success: bool = Field(..., description="更新是否成功")
+    message: str = Field(..., description="结果消息")
+
+
 class BookRenameResponse(BaseModel):
     """书籍重命名响应"""
     success: bool = Field(..., description="重命名成功状态")
@@ -88,3 +152,8 @@ class BookRenameResponse(BaseModel):
     new_title: Optional[str] = Field(None, description="重命名后的新标题")
     new_file_path: Optional[str] = Field(None, description="重命名后的新文件路径")
     new_cover_path: Optional[str] = Field(None, description="重命名后的新封面路径")
+
+
+class BookSentencesResponse(BaseModel):
+    """书籍句子列表响应"""
+    sentences: List[dict] = Field(..., description="句子列表，每项包含 index 和 text")

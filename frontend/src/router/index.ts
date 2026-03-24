@@ -7,7 +7,7 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'Home',
     component: () => import('@/views/Home.vue'),
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, keepAlive: true }
   },
   {
     path: '/book/:id',
@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Audiobook',
     component: () => import('@/views/AudiobookPlayer.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/admin/user-books/:userId',
+    name: 'UserBookAssignment',
+    component: () => import('@/components/UserBookAssignment.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
   }
 ]
 

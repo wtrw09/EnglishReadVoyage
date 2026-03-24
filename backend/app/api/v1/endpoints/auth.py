@@ -2,10 +2,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.database import get_db
+from app.core.config import get_settings
 from app.api.dependencies import get_current_user, get_current_admin
-from app.models.database_models import User
+from app.models.database_models import User, UserSettings
 from app.services.auth_service import AuthService
 from app.schemas.auth import (
     LoginResponse,
@@ -64,29 +66,61 @@ async def login_detail(
     db: AsyncSession = Depends(get_db)
 ):
     """用户登录并返回JWT令牌和用户详情。
-    
+
     扩展的登录端点,返回完整的用户信息。
-    
+
+    如果是管理员账户登录，会自动检查并设置微软Edge-TTS作为默认朗读服务。
+
     Args:
         form_data: 来自OAuth2表单的用户名和密码
         db: 数据库会话
-        
+
     Returns:
         JWT令牌和用户信息
-        
+
     Raises:
         HTTPException: 如果凭证无效
     """
     token = await AuthService.login(db, form_data.username, form_data.password)
-    
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码无效"
         )
-    
+
     # 获取用户信息
     user = await AuthService.get_user_by_username(db, form_data.username)
+
+    # 如果是管理员账户，检查并设置默认TTS服务为微软Edge-TTS
+    if user.role == "admin":
+        # 检查用户设置
+        result = await db.execute(
+            select(UserSettings).where(UserSettings.user_id == user.id)
+        )
+        user_settings = result.scalars().first()
+
+        settings = get_settings()
+        need_commit = False
+
+        if not user_settings:
+            # 如果没有设置，创建新的用户设置
+            user_settings = UserSettings(user_id=user.id)
+            db.add(user_settings)
+            need_commit = True
+
+        if not user_settings.tts_service_name:
+            # 如果没有设置TTS服务，设置为edge-tts
+            user_settings.tts_service_name = "edge-tts"
+            need_commit = True
+
+        # 如果使用edge-tts但没有设置语音，设置默认英文语音
+        if user_settings.tts_service_name == "edge-tts" and not user_settings.edge_tts_voice:
+            user_settings.edge_tts_voice = settings.EDGE_TTS_DEFAULT_VOICE
+            need_commit = True
+
+        if need_commit:
+            await db.commit()
 
     return LoginResponse(
         access_token=token,

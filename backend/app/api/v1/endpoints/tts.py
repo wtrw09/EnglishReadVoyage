@@ -22,7 +22,10 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "bf_v0isabella"
     speed: float = 1.0
-    service_name: Optional[str] = None  # 可选，指定服务名称 'kokoro-tts' 或 'doubao-tts'
+    service_name: Optional[str] = None  # 可选，指定服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts' 或 'edge-tts'
+    # 硅基流动额外参数
+    siliconflow_api_key: Optional[str] = None
+    siliconflow_model: Optional[str] = None
 
 
 @router.get("/", response_model=TTSResponse)
@@ -32,15 +35,22 @@ async def text_to_speech(
         default="bf_v0isabella",
         description="TTS语音ID（例如：'bf_v0isabella'、'bf_alice'）"
     ),
+    service_name: str = Query(
+        default=None,
+        description="TTS服务名称：kokoro-tts, doubao-tts, siliconflow-tts, edge-tts"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    使用Kokoro TTS将文本转换为语音（GET方式）。
+    使用TTS将文本转换为语音（GET方式）。
+
+    根据用户设置自动选择TTS服务，或使用service_name参数指定服务。
 
     Args:
         text: 要转换的文本
         voice: 要使用的语音ID
+        service_name: 可选，指定TTS服务名称
         db: 数据库会话
         current_user: 当前已认证用户
 
@@ -51,7 +61,24 @@ async def text_to_speech(
         HTTPException: 如果TTS服务失败返回500错误
     """
     try:
-        result = await tts_service.generate_speech(text, voice)
+        # 获取用户设置
+        result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id))
+        user_settings = result.scalars().first()
+        default_config = get_default_tts_config()
+
+        # 确定使用哪个服务
+        actual_service_name = service_name or (user_settings.tts_service_name if user_settings else None) or default_config.get("service_name", "kokoro-tts")
+
+        # 确定语音ID（如果用户使用的是edge-tts，使用edge_tts_voice）
+        actual_voice = voice
+        if actual_service_name == "edge-tts" and user_settings and user_settings.edge_tts_voice:
+            actual_voice = user_settings.edge_tts_voice
+
+        result = await tts_service.generate_speech(
+            text,
+            voice=actual_voice,
+            service_name=actual_service_name
+        )
         return result
     except Exception as e:
         raise HTTPException(
@@ -90,17 +117,29 @@ async def text_to_speech_post(
 
         # 确定使用哪个服务及其配置
         # 优先使用请求中指定的服务名称，其次是用户设置，最后是默认值
-        service_name = request.service_name or (user_settings.tts_service_name if user_settings else None) or "kokoro-tts"
+        service_name = request.service_name or (user_settings.tts_service_name if user_settings else None) or settings.DEFAULT_TTS_SERVICE
         voice = None
         speed = 1.0
         doubao_app_id = None
         doubao_access_key = None
         doubao_resource_id = None
+        siliconflow_api_key = None
+        siliconflow_model = None
 
         if service_name == "kokoro-tts":
             # 使用 Kokoro 独立设置
             voice = user_settings.kokoro_voice if user_settings else None
             speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else default_config["kokoro_speed"]
+        elif service_name == "siliconflow-tts":
+            # 使用硅基流动独立设置（不支持语速调节）
+            voice = user_settings.siliconflow_voice if user_settings else None
+            speed = None  # 硅基流动不支持语速
+            siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
+            siliconflow_model = user_settings.siliconflow_model if user_settings else None
+        elif service_name == "edge-tts":
+            # 使用 Edge-TTS 独立设置
+            voice = user_settings.edge_tts_voice if user_settings else None
+            speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
         else:
             # 使用豆包独立设置
             voice = user_settings.doubao_voice if user_settings else None
@@ -112,9 +151,14 @@ async def text_to_speech_post(
         # 如果请求中指定了voice，使用请求的voice
         if request.voice:
             voice = request.voice
-        # 如果请求中指定了speed，使用请求的speed
-        if request.speed is not None:
+        # 如果请求中指定了speed，使用请求的speed（硅基流动不支持）
+        if request.speed is not None and service_name not in ("siliconflow-tts",):
             speed = request.speed
+        # 如果请求中指定了硅基流动参数，使用请求中的
+        if request.siliconflow_api_key:
+            siliconflow_api_key = request.siliconflow_api_key
+        if request.siliconflow_model:
+            siliconflow_model = request.siliconflow_model
 
         print(f"TTS POST请求: service={service_name}, text={request.text[:50]}..., voice={voice}, speed={speed}")
 
@@ -125,7 +169,9 @@ async def text_to_speech_post(
             doubao_app_id=doubao_app_id,
             doubao_access_key=doubao_access_key,
             doubao_resource_id=doubao_resource_id,
-            speed=speed
+            siliconflow_api_key=siliconflow_api_key,
+            siliconflow_model=siliconflow_model,
+            speed=speed if service_name != "siliconflow-tts" else None
         )
         print(f"TTS生成成功: {result}")
         return result

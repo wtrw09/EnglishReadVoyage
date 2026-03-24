@@ -15,8 +15,100 @@ from app.repositories.book_repository import book_repository
 from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateResponse, BookPagesResponse, BookRenameResponse
 from app.utils.parser import MarkdownParser
 from app.services.tts_service import tts_service
+from app.services.translation_service import translation_service
 from app.core.config import get_settings
-from app.models.database_models import UserSettings
+from app.models.database_models import UserSettings, TranslationAPI, User
+from mutagen.mp3 import MP3
+
+
+# 任务取消事件管理
+# key: book_id, value: asyncio.Event 用于取消任务
+active_tasks: Dict[str, asyncio.Event] = {}
+
+
+def get_cancel_event(book_id: str) -> asyncio.Event:
+    """获取或创建书籍的取消事件"""
+    if book_id not in active_tasks:
+        active_tasks[book_id] = asyncio.Event()
+    return active_tasks[book_id]
+
+
+def clear_cancel_event(book_id: str):
+    """清除书籍的取消事件"""
+    if book_id in active_tasks:
+        del active_tasks[book_id]
+
+
+def is_cancelled(book_id: str) -> bool:
+    """检查书籍任务是否被取消"""
+    if book_id in active_tasks:
+        return active_tasks[book_id].is_set()
+    return False
+
+
+async def get_effective_translation_api_config(db: AsyncSession, user_id: int) -> tuple[Optional[TranslationAPI], str]:
+    """
+    获取用户实际可用的翻译API配置
+    - 如果用户是管理员，使用用户自己的翻译API
+    - 如果用户不是管理员，使用admin用户的翻译API
+    返回: (translation_api, error_message)
+    """
+    # 获取用户信息
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+
+    if not user:
+        return None, "用户不存在"
+
+    # 获取用户设置
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
+    user_settings = result.scalars().first()
+
+    # 如果是管理员，使用自己的翻译API
+    if user.role == "admin":
+        if not user_settings or not user_settings.selected_translation_api_id:
+            return None, "请先配置百度翻译API：设置 → 词典设置"
+
+        result = await db.execute(
+            select(TranslationAPI).where(
+                TranslationAPI.id == user_settings.selected_translation_api_id,
+                TranslationAPI.user_id == user_id,
+                TranslationAPI.is_active == True
+            )
+        )
+        api = result.scalars().first()
+
+        if not api:
+            return None, "翻译API未启用或不存在"
+
+        return api, None
+
+    # 非管理员：使用admin的翻译API
+    result = await db.execute(select(User).where(User.username == "admin"))
+    admin_user = result.scalars().first()
+
+    if not admin_user:
+        return None, "管理员账户不存在"
+
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == admin_user.id))
+    admin_settings = result.scalars().first()
+
+    if not admin_settings or not admin_settings.selected_translation_api_id:
+        return None, "管理员未配置翻译API"
+
+    result = await db.execute(
+        select(TranslationAPI).where(
+            TranslationAPI.id == admin_settings.selected_translation_api_id,
+            TranslationAPI.user_id == admin_user.id,
+            TranslationAPI.is_active == True
+        )
+    )
+    api = result.scalars().first()
+
+    if not api:
+        return None, "管理员的翻译API未启用"
+
+    return api, None
 
 
 class BookService:
@@ -423,7 +515,8 @@ class BookService:
         1. 保存新内容到md文件
         2. 提取新内容中引用的图片文件
         3. 删除未被引用的图片文件
-        4. 更新数据库中的页数
+        4. 清理不再需要的音频文件
+        5. 更新数据库中的页数
         """
         book = await self.repository.get(db, book_id)
         if not book:
@@ -457,17 +550,13 @@ class BookService:
                 if len(parts) > 1:
                     referenced_files.add(parts[1])
 
-        # 3. 获取assets目录下的所有文件
+        # 3. 获取assets目录下的所有文件，删除无用文件
         assets_folder = book_folder / "assets"
         deleted_files = []
 
         if assets_folder.exists():
             all_files = set(f.name for f in assets_folder.iterdir() if f.is_file())
-
-            # 找出需要删除的文件（在新内容中未引用）
             files_to_delete = all_files - referenced_files
-
-            # 删除无用文件
             for filename in files_to_delete:
                 file_path = assets_folder / filename
                 try:
@@ -476,14 +565,102 @@ class BookService:
                 except Exception as e:
                     print(f"删除文件失败 {filename}: {e}")
 
-        # 4. 更新数据库中的页数
+        # 4. 清理不再需要的音频文件
+        audio_folder = book_folder / "audio"
+        deleted_audio_files = []
+        deleted_translation_files = []
+
+        if audio_folder.exists():
+            # 提取新内容中的所有句子
+            pages = re.split(r'\n---\n', new_content)
+            needed_audio_files = set()  # 英文音频
+            needed_translation_files = set()  # 中文音频
+
+            for page in pages:
+                sentences = self._extract_text_for_tts(page)
+                for sentence in sentences:
+                    if sentence.strip():
+                        text_hash = hashlib.md5(sentence.encode()).hexdigest()
+                        needed_audio_files.add(f"{text_hash}.mp3")
+                        needed_translation_files.add(f"{text_hash}_zh.mp3")
+
+            # 扫描audio目录，删除不再需要的音频文件
+            for audio_file in audio_folder.iterdir():
+                if audio_file.is_file() and audio_file.suffix == '.mp3':
+                    filename = audio_file.name
+                    # 跳过非句子音频文件（如背景音乐等）
+                    if filename.startswith('bg_') or filename.startswith('ambient_'):
+                        continue
+                    # 检查是否需要保留
+                    if filename not in needed_audio_files and filename not in needed_translation_files:
+                        try:
+                            audio_file.unlink()
+                            if filename.endswith('_zh.mp3'):
+                                deleted_translation_files.append(filename)
+                            else:
+                                deleted_audio_files.append(filename)
+                        except Exception as e:
+                            print(f"删除音频文件失败 {filename}: {e}")
+
+            # 更新 sentences.json - 只保留新内容中存在的句子
+            mapping_path = audio_folder / 'sentences.json'
+            if mapping_path.exists():
+                try:
+                    with open(mapping_path, 'r', encoding='utf-8') as f:
+                        mapping_data = json.load(f)
+
+                    if isinstance(mapping_data, dict):
+                        sentences_list = mapping_data.get('sentences', [])
+                    else:
+                        sentences_list = mapping_data
+
+                    # 过滤出在新内容中存在的句子
+                    needed_texts = set()
+                    for page in pages:
+                        sentences = self._extract_text_for_tts(page)
+                        for sentence in sentences:
+                            if sentence.strip():
+                                needed_texts.add(sentence)
+
+                    filtered_sentences = [
+                        s for s in sentences_list
+                        if s.get('text') in needed_texts
+                    ]
+
+                    # 保存更新后的 sentences.json
+                    if isinstance(mapping_data, dict):
+                        mapping_data['sentences'] = filtered_sentences
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump(mapping_data, f, ensure_ascii=False, indent=2)
+                    else:
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump(filtered_sentences, f, ensure_ascii=False, indent=2)
+
+                except Exception as e:
+                    print(f"更新 sentences.json 失败: {e}")
+
+        # 5. 更新数据库中的页数
         page_count = len(re.split(r'\n---\n', new_content))
         await self.repository.update(db, book, {"page_count": page_count})
         await db.commit()
 
+        # 构建删除文件统计信息
+        deleted_count = len(deleted_files)
+        deleted_audio_count = len(deleted_audio_files) + len(deleted_translation_files)
+
+        if deleted_count > 0 or deleted_audio_count > 0:
+            message_parts = []
+            if deleted_count > 0:
+                message_parts.append(f"删除了 {deleted_count} 个无用图片")
+            if deleted_audio_count > 0:
+                message_parts.append(f"清理了 {deleted_audio_count} 个无用音频")
+            message = "书籍更新成功，" + "，".join(message_parts)
+        else:
+            message = "书籍更新成功"
+
         return BookUpdateResponse(
             success=True,
-            message=f"书籍更新成功，删除了 {len(deleted_files)} 个无用资源文件",
+            message=message,
             deleted_files=deleted_files
         )
 
@@ -2328,6 +2505,364 @@ class BookService:
         
         await db.commit()
         return result
+
+    async def supplement_all_books(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        progress_callback: Optional[callable] = None,
+        force: bool = False
+    ) -> dict:
+        """
+        补充所有书籍的翻译和中文语音
+        遍历所有书籍，对缺少翻译或中文音频的句子进行补充
+        force=True: 强制重新生成所有内容
+        force=False: 只补充缺失部分
+        """
+        async def update_progress(percentage: int, message: str, book_title: str = None, book_index: int = 0, total_books: int = 0):
+            if progress_callback:
+                await progress_callback(percentage, message, book_title, book_index, total_books)
+
+        await update_progress(0, "正在获取书籍列表...")
+
+        # 获取所有书籍
+        all_books = await self.repository.get_multi(db)
+
+        if not all_books:
+            return {
+                "success": True,
+                "message": "没有找到任何书籍",
+                "total_books": 0,
+                "processed_books": 0,
+                "failed_books": 0,
+                "details": []
+            }
+
+        total_books = len(all_books)
+        result = {
+            "success": True,
+            "total_books": total_books,
+            "processed_books": 0,
+            "failed_books": 0,
+            "details": []
+        }
+
+        await update_progress(5, f"共找到 {total_books} 本书籍，开始处理...")
+
+        # 获取用户设置
+        settings = get_settings()
+        user_settings = None
+        result_settings = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
+        user_settings = result_settings.scalars().first()
+
+        # 获取翻译API配置
+        translation_api = None
+        result_api = await db.execute(
+            select(TranslationAPI).where(
+                TranslationAPI.user_id == user_id,
+                TranslationAPI.is_active == True
+            ).order_by(TranslationAPI.id.desc())
+        )
+        translation_api = result_api.scalars().first()
+
+        if not translation_api:
+            # 尝试使用admin的配置
+            admin_result = await db.execute(select(User).where(User.username == "admin"))
+            admin_user = admin_result.scalars().first()
+            if admin_user:
+                result_api = await db.execute(
+                    select(TranslationAPI).where(
+                        TranslationAPI.user_id == admin_user.id,
+                        TranslationAPI.is_active == True
+                    ).order_by(TranslationAPI.id.desc())
+                )
+                translation_api = result_api.scalars().first()
+
+        if not translation_api:
+            await update_progress(100, "错误: 未配置翻译API，请先在设置中配置百度翻译API")
+            return {
+                "success": False,
+                "message": "未配置翻译API，请先在设置中配置百度翻译API",
+                "total_books": total_books,
+                "processed_books": 0,
+                "failed_books": total_books,
+                "details": []
+            }
+
+        # 获取TTS配置
+        service_name = user_settings.tts_service_name if user_settings and user_settings.tts_service_name else "kokoro-tts"
+        voice_zh = None
+        speed = 1.0
+        doubao_app_id = None
+        doubao_access_key = None
+        doubao_resource_id = None
+
+        if service_name == "kokoro-tts":
+            voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else settings.KOKORO_DEFAULT_VOICE_ZH
+            speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else 1.0
+        elif service_name == "doubao-tts":
+            voice_zh = user_settings.doubao_voice_zh if user_settings and user_settings.doubao_voice_zh else settings.DOUBAO_DEFAULT_VOICE_ZH
+            speed = user_settings.doubao_speed if user_settings and user_settings.doubao_speed is not None else 1.0
+            doubao_app_id = user_settings.doubao_app_id if user_settings else None
+            doubao_access_key = user_settings.doubao_access_key if user_settings else None
+            doubao_resource_id = user_settings.doubao_resource_id if user_settings else settings.DOUBAO_DEFAULT_RESOURCE_ID
+        elif service_name == "edge-tts":
+            voice_zh = settings.EDGE_TTS_DEFAULT_VOICE_ZH
+            speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
+        else:
+            voice_zh = user_settings.siliconflow_voice if user_settings and user_settings.siliconflow_voice else settings.SILICONFLOW_DEFAULT_VOICE
+
+        for idx, book in enumerate(all_books):
+            book_index = idx + 1
+            book_title = book.title
+
+            # 计算当前书籍在总进度中的占比
+            base_percentage = 5
+            progress_range = 90
+            per_book_progress = progress_range / total_books if total_books > 0 else 0
+
+            await update_progress(
+                int(base_percentage + (book_index - 1) * per_book_progress),
+                f"[{book_index}/{total_books}] 正在处理: {book_title}",
+                book_title,
+                book_index,
+                total_books
+            )
+
+            try:
+                # 定义单个书籍的进度回调
+                async def book_progress_callback(percentage: int, message: str):
+                    book_progress = base_percentage + (book_index - 1) * per_book_progress + (percentage / 100) * per_book_progress
+                    await update_progress(
+                        int(book_progress),
+                        f"[{book_index}/{total_books}] {book_title}: {message}",
+                        book_title,
+                        book_index,
+                        total_books
+                    )
+
+                # 处理单本书籍
+                book_result = await self._supplement_single_book(
+                    db=db,
+                    book=book,
+                    translation_api=translation_api,
+                    service_name=service_name,
+                    voice_zh=voice_zh,
+                    speed=speed,
+                    doubao_app_id=doubao_app_id,
+                    doubao_access_key=doubao_access_key,
+                    doubao_resource_id=doubao_resource_id,
+                    progress_callback=book_progress_callback,
+                    force=force
+                )
+
+                result["processed_books"] += 1
+                result["details"].append({
+                    "book_id": book.id,
+                    "title": book_title,
+                    "status": "success" if book_result["success"] else "failed",
+                    "message": book_result["message"]
+                })
+                print(f"处理完成 [{book_index}/{total_books}]: {book_title} - {book_result['message']}")
+
+            except Exception as e:
+                error_msg = str(e)
+                result["failed_books"] += 1
+                result["details"].append({
+                    "book_id": book.id,
+                    "title": book_title,
+                    "status": "failed",
+                    "message": error_msg
+                })
+                print(f"处理异常 [{book_index}/{total_books}]: {book_title} - {error_msg}")
+
+        # 最终进度
+        await update_progress(100, f"处理完成！成功 {result['processed_books']} 本，失败 {result['failed_books']} 本")
+
+        if result["failed_books"] > 0:
+            result["success"] = False
+            result["message"] = f"处理完成，成功 {result['processed_books']} 本，失败 {result['failed_books']} 本"
+        else:
+            result["message"] = f"全部 {result['processed_books']} 本书籍处理完成"
+
+        return result
+
+    async def _supplement_single_book(
+        self,
+        db: AsyncSession,
+        book,
+        translation_api,
+        service_name: str,
+        voice_zh: str,
+        speed: float,
+        doubao_app_id: str,
+        doubao_access_key: str,
+        doubao_resource_id: str,
+        progress_callback: Optional[callable] = None,
+        force: bool = False
+    ) -> dict:
+        """补充单本书籍的翻译和中文音频"""
+        async def update_progress_local(percentage: int, message: str):
+            if progress_callback:
+                await progress_callback(percentage, message)
+
+        await update_progress_local(0, "正在检查现有数据...")
+
+        # 获取书籍路径
+        book_path = Path(book.file_path)
+        book_folder = book_path.parent
+        audio_folder = book_folder / "audio"
+        mapping_path = audio_folder / "sentences.json"
+
+        # 确保音频目录存在
+        audio_folder.mkdir(parents=True, exist_ok=True)
+
+        # 读取书籍内容
+        with open(book_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 提取句子
+        pages = re.split(r'\n---\n', content)
+        sentences_mapping = []
+        for page_idx, page in enumerate(pages):
+            page_sentences = self._extract_text_for_tts(page)
+            for sent_idx, text in enumerate(page_sentences):
+                if text.strip():
+                    sentences_mapping.append({
+                        'page': page_idx,
+                        'index': sent_idx,
+                        'text': text
+                    })
+
+        # 读取现有的 sentences.json
+        existing_sentences = []
+        if mapping_path.exists():
+            try:
+                with open(mapping_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        existing_sentences = data.get('sentences', [])
+                    else:
+                        existing_sentences = data
+            except:
+                existing_sentences = []
+
+        # 构建现有数据的映射
+        existing_map = {}
+        for s in existing_sentences:
+            existing_map[s.get('text', '')] = s
+
+        await update_progress_local(10, f"共 {len(sentences_mapping)} 个句子，开始补充...")
+
+        # 处理每个句子
+        semaphore = asyncio.Semaphore(3)
+        updated_count = [0]
+        total_count = len(sentences_mapping)
+
+        async def process_sentence(sent_info: dict) -> dict:
+            async with semaphore:
+                text = sent_info['text']
+                text_hash = hashlib.md5(text.encode()).hexdigest()
+
+                # 检查是否需要补充
+                existing = existing_map.get(text, {})
+
+                # 确定音频文件名
+                audio_file_zh = existing.get('audio_file_zh', f"{text_hash}_zh.mp3")
+                translation = existing.get('translation', '')
+                audio_file = existing.get('audio_file', f"{text_hash}.mp3")
+
+                # 检查是否需要翻译
+                need_translate = force or not translation
+                # 检查是否需要生成中文音频
+                need_chinese_audio = force or not existing.get('audio_file_zh')
+
+                # 如果都不需要，跳过
+                if not need_translate and not need_chinese_audio:
+                    updated_count[0] += 1
+                    current = updated_count[0]
+                    progress = 10 + int((current / total_count) * 85)
+                    await update_progress_local(progress, f"跳过已有 ({current}/{total_count})")
+                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file}
+
+                # 需要翻译
+                if need_translate and not translation:
+                    try:
+                        trans_result = await translation_service.translate_with_baidu(
+                            text=text,
+                            app_id=translation_api.app_id,
+                            app_key=translation_api.app_key
+                        )
+                        if trans_result:
+                            translation = trans_result
+                    except Exception as e:
+                        print(f"翻译失败: {text[:30]}... - {e}")
+
+                # 需要生成中文音频
+                if need_chinese_audio and translation:
+                    try:
+                        tts_result = await tts_service.generate_speech(
+                            text=translation,
+                            voice=voice_zh,
+                            service_name=service_name,
+                            doubao_app_id=doubao_app_id,
+                            doubao_access_key=doubao_access_key,
+                            doubao_resource_id=doubao_resource_id,
+                            speed=speed
+                        )
+
+                        if tts_result and tts_result.audio_data:
+                            import base64
+                            audio_path = audio_folder / audio_file_zh
+                            audio_bytes = base64.b64decode(tts_result.audio_data)
+                            with open(audio_path, "wb") as f:
+                                f.write(audio_bytes)
+                            # 获取时长
+                            try:
+                                audio = MP3(str(audio_path))
+                                duration_zh = audio.info.length
+                            except:
+                                duration_zh = 0.0
+                        else:
+                            duration_zh = 0.0
+                    except Exception as e:
+                        print(f"生成中文音频失败: {text[:30]}... - {e}")
+                        duration_zh = 0.0
+
+                updated_count[0] += 1
+                current = updated_count[0]
+                progress = 10 + int((current / total_count) * 85)
+                await update_progress_local(progress, f"处理中 ({current}/{total_count})")
+
+                return {
+                    **sent_info,
+                    'text': text,
+                    'translation': translation,
+                    'audio_file': audio_file,
+                    'audio_file_zh': audio_file_zh,
+                    'duration': existing.get('duration', 0.0),
+                    'duration_zh': existing.get('duration_zh', 0.0)
+                }
+
+        # 并发处理所有句子
+        tasks = [process_sentence(sent) for sent in sentences_mapping]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 过滤成功的结果
+        successful_results = [r for r in results if isinstance(r, dict)]
+
+        # 保存更新的 sentences.json
+        mapping_data = {
+            'sentences': successful_results
+        }
+        with open(mapping_path, 'w', encoding='utf-8') as f:
+            json.dump(mapping_data, f, ensure_ascii=False, indent=2)
+
+        await update_progress_local(100, "完成")
+        return {
+            "success": True,
+            "message": f"补充完成，{len(successful_results)} 个句子"
+        }
 
 
 book_service = BookService()
