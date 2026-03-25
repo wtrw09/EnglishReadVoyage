@@ -99,10 +99,19 @@ class UserSettings(Base):
     siliconflow_api_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     siliconflow_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     siliconflow_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    siliconflow_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
 
     # Edge-TTS 设置（独立存储）
     edge_tts_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    edge_tts_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
     edge_tts_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
+
+    # MiniMax TTS 设置（独立存储）
+    minimax_api_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    minimax_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    minimax_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    minimax_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
+    minimax_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
 
     # 音标设置：'uk' 表示英式音标，'us' 表示美式音标
     phonetic_accent: Mapped[str] = mapped_column(String, default="uk", nullable=False)

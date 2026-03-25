@@ -4,34 +4,107 @@ import io
 import zipfile
 import os
 import json
+import logging
 from pathlib import Path
 import hashlib
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Query, Path as FastAPIPath
 from fastapi.responses import StreamingResponse
-from typing import List, Optional
+from typing import List, Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateRequest, BookUpdateResponse, BookPagesResponse, BookRenameRequest, BookRenameResponse, TranslationStatusResponse, RetryTranslateResponse, UpdateSentenceTranslationRequest, UpdateSentenceTranslationResponse, SentencePreviewResponse, SentenceUpdateRequest, SentenceUpdateResponse, BookSentencesResponse
 from app.services.book_service import book_service, get_effective_translation_api_config, get_cancel_event, clear_cancel_event
 from app.core.database import get_db
-
-
-def format_sse_message(percentage: int, message: str, success: bool = None, book_id: str = None) -> str:
-    """格式化SSE消息，对特殊字符进行转义"""
-    # 转义特殊字符
-    message = message.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
-    # 截断过长消息
-    message = message[:500]
-
-    data = {'percentage': percentage, 'message': message}
-    if success is not None:
-        data['success'] = success
-    if book_id is not None:
-        data['book_id'] = book_id
-    return f"data: {json.dumps(data)}\n\n"
+from app.utils.sse_utils import format_sse_message
 from app.api.dependencies import get_current_user, get_current_admin
 from app.models.database_models import User
 from app.core.config import get_settings
+
+
+# ========== SSE 生成器辅助函数 ==========
+
+
+def create_progress_callback(queue: asyncio.Queue):
+    """
+    创建进度回调函数
+
+    参数:
+        queue: asyncio.Queue 实例，用于存储进度消息
+
+    返回:
+        进度回调函数
+    """
+    async def progress_callback(percentage: int, message: str):
+        await queue.put({"percentage": percentage, "message": message})
+    return progress_callback
+
+
+def create_progress_callback_with_extra(queue: asyncio.Queue, extra_fields: dict):
+    """
+    创建带额外字段的进度回调函数
+
+    参数:
+        queue: asyncio.Queue 实例
+        extra_fields: 额外的字段字典
+
+    返回:
+        进度回调函数
+    """
+    async def progress_callback(percentage: int, message: str, **extra):
+        data = {"percentage": percentage, "message": message}
+        data.update(extra_fields)
+        data.update(extra)
+        await queue.put(data)
+    return progress_callback
+
+
+def create_sse_stream_generator(
+    queue: asyncio.Queue,
+    task: asyncio.Task,
+    final_message: str = "任务完成",
+    error_message: str = "任务执行失败"
+):
+    """
+    创建 SSE 流响应生成器
+
+    参数:
+        queue: asyncio.Queue 实例
+        task: 已创建的任务对象（asyncio.Task）
+        final_message: 完成时的消息
+        error_message: 错误消息
+
+    返回:
+        异步生成器
+    """
+    async def event_generator():
+        while True:
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=0.5)
+                # 构建额外的参数（排除 percentage 和 message）
+                extra = {k: v for k, v in data.items() if k not in ("percentage", "message")}
+                yield format_sse_message(data.get("percentage", 0), data.get("message", ""), **extra)
+            except asyncio.TimeoutError:
+                if task.done():
+                    try:
+                        result = task.result()
+                        if hasattr(result, "success") and hasattr(result, "message"):
+                            yield format_sse_message(100, result.message, result.success)
+                        elif hasattr(result, "success"):
+                            yield format_sse_message(100, final_message, result.success)
+                        else:
+                            yield format_sse_message(100, final_message, True)
+                    except Exception as e:
+                        logger.error(f"SSE任务异常: {e}")
+                        import traceback
+                        logger.error(f"SSE任务堆栈: {traceback.format_exc()}")
+                        yield format_sse_message(0, f"{error_message}: {str(e)}", False)
+                    break
+
+    # 返回调用的结果（async generator对象），不是函数本身
+    return event_generator()
+
 
 
 router = APIRouter()
@@ -154,9 +227,7 @@ async def import_book(
     async def event_generator():
         # 存储进度消息用于异步回调
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
+        progress_callback = create_progress_callback(queue)
 
         # 启动后台任务运行导入（不生成音频，让用户选择是否生成）
         import_task = asyncio.create_task(
@@ -190,7 +261,7 @@ async def import_book(
                         yield format_sse_message(0, f"导入失败: {str(e)}", False)
                     break
             except Exception as e:
-                print(f"SSE error: {e}")
+                logger.error(f"SSE error: {e}")
                 break
 
         # 发送最终结果
@@ -207,7 +278,7 @@ async def import_book(
                                 db, bid, category_id, admin.id
                             )
                 except Exception as e:
-                    print(f"添加书籍到分类失败: {e}")
+                    logger.error(f"添加书籍到分类失败: {e}")
 
             # 如果没有指定分类，自动创建"未分组"分类关联
             if not category_id:
@@ -253,7 +324,7 @@ async def import_book(
                                     db, bid, ungrouped_cat.id, admin.id
                                 )
                 except Exception as e:
-                    print(f"创建未分组关联失败: {e}")
+                    logger.error(f"创建未分组关联失败: {e}")
 
             # 构建返回的book_id字符串（单本用book_id，多本用逗号分隔）
             return_book_id = result.book_id if result.book_id else ",".join(result.book_ids) if result.book_ids else ""
@@ -280,7 +351,7 @@ async def import_book_overwrite(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    print(f"Overwrite import called with book_id: {book_id}, category_id: {category_id}")
+    logger.info(f"Overwrite import called with book_id: {book_id}, category_id: {category_id}")
     """
     覆盖导入书籍（仅管理员可用）。
     删除旧内容，保存新内容，不生成音频。
@@ -301,9 +372,7 @@ async def import_book_overwrite(
     async def event_generator():
         # 存储进度消息用于异步回调
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
+        progress_callback = create_progress_callback(queue)
 
         # 启动后台任务运行导入
         import_task = asyncio.create_task(
@@ -337,7 +406,7 @@ async def import_book_overwrite(
                         yield format_sse_message(0, f"导入失败: {str(e)}", False)
                     break
             except Exception as e:
-                print(f"SSE error: {e}")
+                logger.error(f"SSE error: {e}")
                 break
 
         # 发送最终结果
@@ -352,7 +421,7 @@ async def import_book_overwrite(
                         db, target_book_id, category_id, admin.id
                     )
                 except Exception as e:
-                    print(f"添加书籍到分类失败: {e}")
+                    logger.error(f"添加书籍到分类失败: {e}")
 
             # 如果没有指定分类，自动创建"未分组"分类关联
             if not category_id:
@@ -397,7 +466,7 @@ async def import_book_overwrite(
                                 db, target_book_id, ungrouped_cat.id, admin.id
                             )
                 except Exception as e:
-                    print(f"创建未分组关联失败: {e}")
+                    logger.error(f"创建未分组关联失败: {e}")
 
             # 使用book_id参数传入的ID，或者使用result中的book_id
             target_book_id = book_id if book_id else result.book_id
@@ -440,9 +509,7 @@ async def regenerate_book_audio(
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
+        progress_callback = create_progress_callback(queue)
 
         # 启动后台任务
         regen_task = asyncio.create_task(
@@ -455,29 +522,11 @@ async def regenerate_book_audio(
             )
         )
 
-        result = None
-        while True:
-            try:
-                try:
-                    data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    yield format_sse_message(data['percentage'], data['message'])
-                except asyncio.TimeoutError:
-                    pass
-
-                if regen_task.done():
-                    try:
-                        result = regen_task.result()
-                    except Exception as e:
-                        yield format_sse_message(0, f"生成失败: {str(e)}", False)
-                    break
-            except Exception as e:
-                print(f"SSE error: {e}")
-                break
-
-        if result and result.success:
-            yield format_sse_message(100, result.message, True)
-        elif result:
-            yield format_sse_message(0, result.message, False)
+        # 使用统一的 SSE 生成器（异步迭代）
+        async for sse_msg in create_sse_stream_generator(
+            queue, regen_task, final_message="音频生成完成", error_message="生成失败"
+        ):
+            yield sse_msg
 
     return StreamingResponse(
         event_generator(),
@@ -503,55 +552,49 @@ async def regenerate_book_audio_bilingual(
     2. 翻译每个句子为中文
     3. 生成英文和中文语音
     """
+    logger.info(f"[DEBUG] regenerate-audio-bilingual 请求: book_id={book_id}, force={force}, user_id={current_user.id}")
+    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
+        logger.warning(f"[DEBUG] 书籍未找到: {book_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="书籍未找到"
         )
-
+    
+    logger.info(f"[DEBUG] 找到书籍: {book.title}, file_path={book.file_path}")
+    
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
-
-        # 启动后台任务
-        regen_task = asyncio.create_task(
-            book_service.regenerate_audio_bilingual(
-                db=db,
-                book_id=book_id,
-                user_id=current_user.id,
-                progress_callback=progress_callback,
-                force=force
+        progress_callback = create_progress_callback(queue)
+        
+        logger.info(f"[DEBUG] 开始执行 regenerate_audio_bilingual")
+        
+        try:
+            # 启动后台任务
+            regen_task = asyncio.create_task(
+                book_service.regenerate_audio_bilingual(
+                    db=db,
+                    book_id=book_id,
+                    user_id=current_user.id,
+                    progress_callback=progress_callback,
+                    force=force
+                )
             )
-        )
 
-        result = None
-        while True:
-            try:
-                try:
-                    data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    yield format_sse_message(data['percentage'], data['message'])
-                except asyncio.TimeoutError:
-                    pass
-
-                if regen_task.done():
-                    try:
-                        result = regen_task.result()
-                    except Exception as e:
-                        yield format_sse_message(0, f"生成失败: {str(e)}", False)
-                    break
-            except Exception as e:
-                print(f"SSE error: {e}")
-                break
-
-        if result and result.success:
-            yield format_sse_message(100, result.message, True)
-        elif result:
-            yield format_sse_message(0, result.message, False)
+            # 使用统一的 SSE 生成器（异步迭代）
+            async for sse_msg in create_sse_stream_generator(
+                queue, regen_task, final_message="双语音频生成完成", error_message="生成失败"
+            ):
+                yield sse_msg
+                
+        except Exception as e:
+            logger.error(f"[DEBUG] event_generator 异常: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"[DEBUG] event_generator 堆栈: {traceback.format_exc()}")
+            yield format_sse_message(0, f"发生错误: {type(e).__name__}: {str(e)}", False)
 
     return StreamingResponse(
         event_generator(),
@@ -577,55 +620,49 @@ async def generate_book_translation(
     2. 翻译每个句子为中文
     3. 保存到 sentences.json（不生成音频）
     """
+    logger.info(f"[DEBUG] generate-translation 请求: book_id={book_id}, force={force}, user_id={current_user.id}")
+    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
+        logger.warning(f"[DEBUG] 书籍未找到: {book_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="书籍未找到"
         )
+    
+    logger.info(f"[DEBUG] 找到书籍: {book.title}")
 
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
+        progress_callback = create_progress_callback(queue)
 
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
-
-        # 启动后台任务
-        task = asyncio.create_task(
-            book_service.generate_translation(
-                db=db,
-                book_id=book_id,
-                user_id=current_user.id,
-                progress_callback=progress_callback,
-                force=force
+        logger.info(f"[DEBUG] 开始执行 generate_translation")
+        
+        try:
+            # 启动后台任务
+            task = asyncio.create_task(
+                book_service.generate_translation(
+                    db=db,
+                    book_id=book_id,
+                    user_id=current_user.id,
+                    progress_callback=progress_callback,
+                    force=force
+                )
             )
-        )
 
-        result = None
-        while True:
-            try:
-                try:
-                    data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    yield format_sse_message(data['percentage'], data['message'])
-                except asyncio.TimeoutError:
-                    pass
-
-                if task.done():
-                    try:
-                        result = task.result()
-                    except Exception as e:
-                        yield format_sse_message(0, f"生成失败: {str(e)}", False)
-                    break
-            except Exception as e:
-                print(f"SSE error: {e}")
-                break
-
-        if result and result.success:
-            yield format_sse_message(100, result.message, True)
-        elif result:
-            yield format_sse_message(0, result.message, False)
+            # 使用统一的 SSE 生成器（异步迭代）
+            async for sse_msg in create_sse_stream_generator(
+                queue, task, final_message="翻译生成完成", error_message="生成失败"
+            ):
+                yield sse_msg
+                
+        except Exception as e:
+            logger.error(f"[DEBUG] event_generator 异常: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"[DEBUG] event_generator 堆栈: {traceback.format_exc()}")
+            yield format_sse_message(0, f"发生错误: {type(e).__name__}: {str(e)}", False)
 
     return StreamingResponse(
         event_generator(),
@@ -676,14 +713,20 @@ async def check_chinese_audio(
                 data = json.load(f)
                 sentences = data.get('sentences', [])
                 total_sentences = len(sentences)
-                # 统计中文音频数量
-                chinese_audio_count = sum(1 for s in sentences if s.get('audio_file_zh'))
-                # 统计英文音频数量
-                english_audio_count = sum(1 for s in sentences if s.get('audio_file'))
+                # 统计中文音频数量（需要文件真实存在）
+                chinese_audio_count = sum(
+                    1 for s in sentences
+                    if s.get('audio_file_zh') and (audio_folder / s['audio_file_zh']).exists()
+                )
+                # 统计英文音频数量（需要文件真实存在）
+                english_audio_count = sum(
+                    1 for s in sentences
+                    if s.get('audio_file') and (audio_folder / s['audio_file']).exists()
+                )
                 # 统计翻译数量
                 translation_count = sum(1 for s in sentences if s.get('translation'))
         except Exception as e:
-            print(f"读取sentences.json失败: {e}")
+            logger.error(f"读取sentences.json失败: {e}")
 
     return {
         "has_chinese_audio": chinese_audio_count > 0,
@@ -725,9 +768,7 @@ async def generate_book_chinese_audio(
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str):
-            await queue.put({"percentage": percentage, "message": message})
+        progress_callback = create_progress_callback(queue)
 
         # 启动后台任务
         task = asyncio.create_task(
@@ -740,29 +781,11 @@ async def generate_book_chinese_audio(
             )
         )
 
-        result = None
-        while True:
-            try:
-                try:
-                    data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    yield format_sse_message(data['percentage'], data['message'])
-                except asyncio.TimeoutError:
-                    pass
-
-                if task.done():
-                    try:
-                        result = task.result()
-                    except Exception as e:
-                        yield format_sse_message(0, f"生成失败: {str(e)}", False)
-                    break
-            except Exception as e:
-                print(f"SSE error: {e}")
-                break
-
-        if result and result.success:
-            yield format_sse_message(100, result.message, True)
-        elif result:
-            yield format_sse_message(0, result.message, False)
+        # 使用统一的 SSE 生成器（异步迭代）
+        async for sse_msg in create_sse_stream_generator(
+            queue, task, final_message="中文音频生成完成", error_message="生成失败"
+        ):
+            yield sse_msg
 
     return StreamingResponse(
         event_generator(),
@@ -831,15 +854,15 @@ async def get_book_content_from_file(
     # 直接读取文件内容
     import os
     file_path = book.file_path
-    print(f"Reading content from file: {file_path}")
-    print(f"File exists: {os.path.exists(file_path)}")
+    logger.debug(f"Reading content from file: {file_path}")
+    logger.debug(f"File exists: {os.path.exists(file_path)}")
 
     # 如果文件存在，直接读取
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        print(f"Content length: {len(content)}")
-        print(f"First 200 chars: {content[:200]}")
+        logger.debug(f"Content length: {len(content)}")
+        logger.debug(f"First 200 chars: {content[:200]}")
         return {"content": content}
 
     # 如果文件不存在，返回空
@@ -882,7 +905,7 @@ async def update_book_cover(
     from app.utils.image_utils import compress_cover, delete_existing_covers
     
     cover_path = request.get('cover_path') if request else None
-    print(f"update_book_cover called: book_id={book_id}, cover_path={cover_path}")
+    logger.info(f"update_book_cover called: book_id={book_id}, cover_path={cover_path}")
     
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
@@ -921,15 +944,15 @@ async def update_book_cover(
                     import shutil
                     final_path = book_folder / "cover.jpg"
                     shutil.copy2(source_image_path, final_path)
-                    print(f"警告: 封面压缩失败，使用原始文件")
+                    logger.warning(f"警告: 封面压缩失败，使用原始文件")
                 else:
-                    print(f"封面压缩成功: {final_path}, 大小: {file_size / 1024:.1f}KB")
+                    logger.info(f"封面压缩成功: {final_path}, 大小: {file_size / 1024:.1f}KB")
                 
                 # 更新 cover_path 为根目录下的封面
                 cover_path = f"/books/{book_folder.name}/{final_path.name}"
-                print(f"已将 assets 图片压缩为封面: {cover_path}")
+                logger.info(f"已将 assets 图片压缩为封面: {cover_path}")
         except Exception as e:
-            print(f"处理封面图片失败: {e}")
+            logger.error(f"处理封面图片失败: {e}")
     elif cover_path == '' or cover_path is None:
         # 清空封面，删除封面文件
         delete_existing_covers(book_folder)
@@ -981,7 +1004,7 @@ async def delete_book(
             )
         return {"success": True, "message": "书籍删除成功"}
     except Exception as e:
-        print(f"删除书籍错误: {e}")
+        logger.error(f"删除书籍错误: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除失败: {str(e)}"
@@ -1031,9 +1054,9 @@ async def upload_cover(
             f.write(content)
         final_path = cover_path
         file_size = len(content)
-        print(f"警告: 封面压缩失败，使用原始文件: {final_path}")
+        logger.warning(f"警告: 封面压缩失败，使用原始文件: {final_path}")
     else:
-        print(f"封面压缩成功: {final_path}, 大小: {file_size / 1024:.1f}KB")
+        logger.info(f"封面压缩成功: {final_path}, 大小: {file_size / 1024:.1f}KB")
 
     # 返回相对路径
     # 处理路径计算，确保返回正确的相对路径
@@ -1093,18 +1116,18 @@ async def upload_book_image(
     assets_folder = book_folder / "assets"
 
     # 调试：打印路径信息
-    print(f"[UPLOAD] 书籍ID: {PROJECT_ROOT}")
-    print(f"[UPLOAD] PROJECT_ROOT: {PROJECT_ROOT}")
-    print(f"[UPLOAD] book.file_path: {book.file_path}")
-    print(f"[UPLOAD] book_path: {book_path}")
-    print(f"[UPLOAD] book_folder: {book_folder}")
-    print(f"[UPLOAD] assets_folder: {assets_folder}")
-    print(f"[UPLOAD] assets_folder exists: {assets_folder.exists()}")
+    logger.debug(f"[UPLOAD] 书籍ID: {PROJECT_ROOT}")
+    logger.debug(f"[UPLOAD] PROJECT_ROOT: {PROJECT_ROOT}")
+    logger.debug(f"[UPLOAD] book.file_path: {book.file_path}")
+    logger.debug(f"[UPLOAD] book_path: {book_path}")
+    logger.debug(f"[UPLOAD] book_folder: {book_folder}")
+    logger.debug(f"[UPLOAD] assets_folder: {assets_folder}")
+    logger.debug(f"[UPLOAD] assets_folder exists: {assets_folder.exists()}")
 
     # 确保 assets 目录存在
     assets_folder.mkdir(exist_ok=True)
-    print(f"[UPLOAD] After mkdir, exists: {assets_folder.exists()}")
-    print(f"[UPLOAD] CWD: {os.getcwd()}")
+    logger.debug(f"[UPLOAD] After mkdir, exists: {assets_folder.exists()}")
+    logger.debug(f"[UPLOAD] CWD: {os.getcwd()}")
 
     # 生成简单的 image_X.ext 文件名（避免清理时被删除）
     existing_images = list(assets_folder.glob(f'image_*'))
@@ -1117,11 +1140,11 @@ async def upload_book_image(
             pass
     safe_filename = f"image_{max_num + 1}{file_ext}"
     target_path = assets_folder / safe_filename
-    print(f"[UPLOAD] target_path: {target_path}")
+    logger.debug(f"[UPLOAD] target_path: {target_path}")
 
     # 读取并保存文件
     content = await file.read()
-    print(f"[UPLOAD] file content length: {len(content)}")
+    logger.debug(f"[UPLOAD] file content length: {len(content)}")
     
     # 压缩并转换为WebP格式
     from app.utils.image_utils import compress_to_webp
@@ -1136,7 +1159,7 @@ async def upload_book_image(
         )
         
         if success:
-            print(f"[UPLOAD] 图片压缩并转换为WebP成功: {final_path.name}, 大小: {file_size / 1024:.1f}KB")
+            logger.info(f"[UPLOAD] 图片压缩并转换为WebP成功: {final_path.name}, 大小: {file_size / 1024:.1f}KB")
             # 返回相对于 md 文件的路径（用于 Markdown）
             relative_path = f"./assets/{final_path.name}"
             return {
@@ -1149,14 +1172,14 @@ async def upload_book_image(
             # 压缩失败，直接保存原文件
             raise Exception("WebP转换失败")
     except Exception as e:
-        print(f"[UPLOAD] 图片压缩失败: {e}, 使用原始文件保存")
+        logger.warning(f"[UPLOAD] 图片压缩失败: {e}, 使用原始文件保存")
         with open(temp_path, 'wb') as f:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
         
-        print(f"[UPLOAD] After write, file exists: {temp_path.exists()}")
-        print(f"[UPLOAD] File size on disk: {os.path.getsize(temp_path) if temp_path.exists() else 'N/A'}")
+        logger.debug(f"[UPLOAD] After write, file exists: {temp_path.exists()}")
+        logger.debug(f"[UPLOAD] File size on disk: {os.path.getsize(temp_path) if temp_path.exists() else 'N/A'}")
         
         file_size = len(content)
         relative_path = f"./assets/{safe_filename}"
@@ -1232,7 +1255,7 @@ async def export_books(
                     try:
                         zf.write(file_path, arc_name)
                     except Exception as e:
-                        print(f"[Export Error] file_path={file_path}, arc_name={arc_name}, error={e}")
+                        logger.error(f"[Export Error] file_path={file_path}, arc_name={arc_name}, error={e}")
                         raise
 
     # 准备响应
@@ -1338,8 +1361,8 @@ async def check_book_integrity(
                 with open(mapping_file, 'r', encoding='utf-8') as f:
                     mapping = json.load(f)
                     has_mapping = len(mapping) > 0
-            except:
-                pass
+            except Exception:
+                pass  # 忽略JSON解析错误
 
         # 读取markdown内容检查图片引用
         missing_images = []
@@ -1364,7 +1387,7 @@ async def check_book_integrity(
                             if not full_path.exists():
                                 missing_images.append(img_path)
             except Exception as e:
-                print(f"检查图片引用失败: {e}")
+                logger.error(f"检查图片引用失败: {e}")
 
         # 判断完整性
         is_complete = has_assets and has_audio and has_mapping and len(missing_images) == 0
@@ -1872,17 +1895,23 @@ async def get_sentence_preview(
     try:
         # 读取书籍内容进行断句
         book_path = Path(book.file_path)
+        logger.debug(f"[DEBUG] sentence-preview: book_path = {book_path}, exists = {book_path.exists()}")
         with open(book_path, 'r', encoding='utf-8') as f:
             content = f.read()
+        logger.debug(f"[DEBUG] sentence-preview: content length = {len(content)}")
 
         # 解析句子
         sentences = book_service.get_sentence_preview(content)
+        logger.debug(f"[DEBUG] sentence-preview: sentences count = {len(sentences)}")
 
         return SentencePreviewResponse(
             total_count=len(sentences),
             sentences=sentences
         )
     except Exception as e:
+        import traceback
+        logger.error(f"[ERROR] sentence-preview failed: {e}")
+        logger.error(f"[ERROR] traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取断句预览失败: {str(e)}"
@@ -2089,15 +2118,7 @@ async def supplement_all_books(
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
-
-        async def progress_callback(percentage: int, message: str, book_title: str = None, book_index: int = 0, total_books: int = 0):
-            await queue.put({
-                "percentage": percentage,
-                "message": message,
-                "book_title": book_title,
-                "book_index": book_index,
-                "total_books": total_books
-            })
+        progress_callback = create_progress_callback(queue)
 
         # 启动后台任务
         supplement_task = asyncio.create_task(
@@ -2109,7 +2130,7 @@ async def supplement_all_books(
             )
         )
 
-        result = None
+        # 发送进度消息
         while True:
             try:
                 try:
@@ -2129,14 +2150,19 @@ async def supplement_all_books(
                         yield format_sse_message(0, f"处理失败: {str(e)}", False)
                     break
             except Exception as e:
-                print(f"SSE error: {e}")
+                logger.error(f"SSE error: {e}")
                 break
 
-        if result:
-            if result.get("success"):
-                yield format_sse_message(100, result.get("message", "处理完成"), True)
-            else:
-                yield format_sse_message(0, result.get("message", "处理失败"), False)
+        # 发送最终结果
+        if supplement_task.done():
+            try:
+                result = supplement_task.result()
+                if result and result.get("success"):
+                    yield format_sse_message(100, result.get("message", "处理完成"), True)
+                elif result:
+                    yield format_sse_message(0, result.get("message", "处理失败"), False)
+            except Exception as e:
+                logger.error(f"获取结果失败: {e}")
 
     return StreamingResponse(
         event_generator(),

@@ -28,7 +28,7 @@
               </van-button>
             </template>
           </van-popover>
-          <van-button size="small" type="primary" :loading="saving" @click="handleSave">保存</van-button>
+          <van-button size="small" type="primary" :disabled="saving || !isModified" :loading="saving" @click="handleSave">保存</van-button>
         </div>
       </div>
       <!-- 生成音频进度显示 -->
@@ -131,24 +131,28 @@
       </div>
 
       <div class="preview-stats">
-        <span>共 {{ previewSentences.length }} 个句子</span>
-        <span v-if="hasEditedSentences" class="edited-badge">有修改</span>
+        <span v-if="!loadingPreview">共 {{ previewSentences.length }} 个句子</span>
+        <van-loading v-else size="small">分析中...</van-loading>
+        <span v-if="hasEditedSentences && !loadingPreview" class="edited-badge">有修改</span>
       </div>
 
       <div class="preview-list">
-        <div
-          v-for="(sentence, index) in previewSentences"
-          :key="`${sentence.page}-${sentence.index}`"
-          class="preview-item"
-          @click="editSentence(index)"
-        >
-          <div class="sentence-index">{{ index + 1 }}</div>
-          <div class="sentence-content">
-            <div class="sentence-text">{{ sentence.text }}</div>
-            <div class="sentence-meta">第 {{ sentence.page + 1 }} 页，第 {{ sentence.index + 1 }} 句</div>
+        <van-loading v-if="loadingPreview" type="spinner" class="preview-loading" />
+        <template v-else>
+          <div
+            v-for="(sentence, index) in previewSentences"
+            :key="`${sentence.page}-${sentence.index}`"
+            class="preview-item"
+            @click="editSentence(index)"
+          >
+            <div class="sentence-index">{{ index + 1 }}</div>
+            <div class="sentence-content">
+              <div class="sentence-text">{{ sentence.text }}</div>
+              <div class="sentence-meta">第 {{ sentence.page + 1 }} 页，第 {{ sentence.index + 1 }} 句</div>
+            </div>
+            <van-icon name="edit" class="edit-icon" />
           </div>
-          <van-icon name="edit" class="edit-icon" />
-        </div>
+        </template>
       </div>
 
       <div class="preview-footer">
@@ -221,6 +225,8 @@ const emit = defineEmits<Emits>()
 
 const show = ref(props.modelValue)
 const content = ref(props.initialContent)
+const originalContent = ref(props.initialContent) // 保存原始内容用于比较
+const isModified = ref(false) // 是否已修改
 const bookEditorRef = ref<{ closeImagePreview: () => void } | null>(null)
 const saving = ref(false)
 const generatingAudio = ref(false)
@@ -264,6 +270,8 @@ watch(() => props.modelValue, (val) => {
   show.value = val
   if (val) {
     content.value = props.initialContent
+    originalContent.value = props.initialContent
+    isModified.value = false
   }
 })
 
@@ -276,6 +284,15 @@ watch(show, (val) => {
 watch(() => props.initialContent, (val) => {
   if (props.modelValue) {
     content.value = val
+    originalContent.value = val
+    isModified.value = false
+  }
+})
+
+// 监听content变化，检查是否已修改
+watch(content, (newContent) => {
+  if (newContent !== originalContent.value) {
+    isModified.value = true
   }
 })
 
@@ -283,6 +300,7 @@ const loading = ref(false)
 
 // 断句预览相关状态
 const showSentencePreview = ref(false)
+const loadingPreview = ref(false) // 是否正在加载断句预览
 const showSentenceEdit = ref(false)
 const previewSentences = ref<{
   page: number
@@ -307,17 +325,19 @@ const saveButtonText = computed(() => {
   }
 })
 
-// 预览断句（保留原有逻辑，用于翻译+生成双语）
-const handlePreviewSentences = async () => {
-  // 设置标志：保存后需要生成双语
-  shouldGenerateBilingual.value = true
+// 辅助函数：仅在内容已修改时保存，然后执行后续操作
+const saveIfModified = async (onSaved?: () => void): Promise<boolean> => {
+  if (!isModified.value) {
+    // 内容未修改，跳过保存
+    console.log('[保存] 内容未修改，跳过保存')
+    return true
+  }
 
   if (!props.bookId) {
     showErrorDialog('书籍ID无效')
-    return
+    return false
   }
 
-  // 先保存当前内容
   saving.value = true
   try {
     const res = await api.put<{ success: boolean; message: string }>(`/books/${props.bookId}`, {
@@ -327,15 +347,37 @@ const handlePreviewSentences = async () => {
     if (!res.data.success) {
       showErrorDialog(res.data.message)
       saving.value = false
-      return
+      return false
     }
     showToast('内容已保存')
+    // 保存成功后更新原始内容并重置修改标志
+    originalContent.value = content.value
+    isModified.value = false
+    saving.value = false
+    emit('saved')
+    if (onSaved) onSaved()
+    return true
   } catch (error: any) {
     showErrorDialog('保存失败')
     saving.value = false
-    return
+    return false
   }
-  saving.value = false
+}
+
+// 预览断句（保留原有逻辑，用于翻译+生成双语）
+const handlePreviewSentences = async () => {
+  // 设置标志：保存后需要生成双语
+  shouldGenerateBilingual.value = true
+
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
+
+  // 先显示预览弹窗和加载状态
+  previewSentences.value = []
+  hasEditedSentences.value = false
+  showSentencePreview.value = true
+  loadingPreview.value = true
 
   // 获取断句预览
   try {
@@ -349,9 +391,11 @@ const handlePreviewSentences = async () => {
       edited: false
     }))
     hasEditedSentences.value = false
-    showSentencePreview.value = true
   } catch (error: any) {
     showErrorDialog('获取断句预览失败: ' + (error.message || '未知错误'))
+    showSentencePreview.value = false
+  } finally {
+    loadingPreview.value = false
   }
 }
 
@@ -365,30 +409,15 @@ const handlePreviewSentencesOnly = async () => {
   // 设置标志：保存后不需要生成双语
   shouldGenerateBilingual.value = false
 
-  if (!props.bookId) {
-    showErrorDialog('书籍ID无效')
-    return
-  }
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
-  // 先保存当前内容
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${props.bookId}`, {
-      content: content.value
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('内容已保存')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-    return
-  }
-  saving.value = false
+  // 先显示预览弹窗和加载状态
+  previewSentences.value = []
+  hasEditedSentences.value = false
+  showSentencePreview.value = true
+  loadingPreview.value = true
 
   // 获取断句预览
   try {
@@ -402,9 +431,11 @@ const handlePreviewSentencesOnly = async () => {
       edited: false
     }))
     hasEditedSentences.value = false
-    showSentencePreview.value = true
   } catch (error: any) {
     showErrorDialog('获取断句预览失败: ' + (error.message || '未知错误'))
+    showSentencePreview.value = false
+  } finally {
+    loadingPreview.value = false
   }
 }
 
@@ -493,31 +524,13 @@ const handleClose = () => {
   emit('closed')
 }
 
-// 保存
+// 保存（仅在内容已修改时保存）
 const handleSave = async () => {
-  if (!props.bookId) {
-    showErrorDialog('书籍ID无效')
-    return
-  }
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${props.bookId}`, {
-      content: content.value
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('保存成功')
-    saving.value = false
-    emit('saved')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-  }
+  showToast('保存成功')
 }
 
 // 处理下拉菜单选择
@@ -630,28 +643,10 @@ const handleGenerateAudio = async () => {
 // 继续生成英文音频
 const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
   const bookId = props.bookId
-  const bookContent = content.value
 
-  // 先保存当前内容
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${bookId}`, {
-      content: bookContent
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('内容已保存')
-    emit('saved')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-    return
-  }
-  saving.value = false
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
   // 然后生成音频
   generatingAudio.value = true
@@ -963,26 +958,9 @@ const onGenerateModeSelect = async (action: { name: string }) => {
 const continueGenerateAll = async (forceGenerate: boolean) => {
   if (!props.bookId) return
 
-  // 先保存当前内容
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${props.bookId}`, {
-      content: content.value
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('内容已保存')
-    emit('saved')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-    return
-  }
-  saving.value = false
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
   // 调用中英文音频生成API
   generatingAudio.value = true
@@ -1231,28 +1209,10 @@ const handleGenerateTranslation = async () => {
 // 继续生成翻译
 const continueGenerateTranslation = async (forceGenerate: boolean) => {
   const bookId = props.bookId
-  const bookContent = content.value
 
-  // 先保存当前内容
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${bookId}`, {
-      content: bookContent
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('内容已保存')
-    emit('saved')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-    return
-  }
-  saving.value = false
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
   // 然后生成翻译
   generatingAudio.value = true
@@ -1653,28 +1613,10 @@ const handleGenerateChineseAudio = async () => {
 // 继续生成中文音频
 const continueGenerateChineseAudio = async (forceRegenerate: boolean) => {
   const bookId = props.bookId
-  const bookContent = content.value
 
-  // 先保存当前内容
-  saving.value = true
-  try {
-    const res = await api.put<{ success: boolean; message: string }>(`/books/${bookId}`, {
-      content: bookContent
-    })
-
-    if (!res.data.success) {
-      showErrorDialog(res.data.message)
-      saving.value = false
-      return
-    }
-    showToast('内容已保存')
-    emit('saved')
-  } catch (error: any) {
-    showErrorDialog('保存失败')
-    saving.value = false
-    return
-  }
-  saving.value = false
+  // 仅在内容已修改时保存
+  const saved = await saveIfModified()
+  if (!saved) return
 
   // 然后生成中文音频
   generatingAudio.value = true
@@ -2092,6 +2034,14 @@ const handleCancelAudioTask = async () => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.preview-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  min-height: 200px;
 }
 
 .preview-item {

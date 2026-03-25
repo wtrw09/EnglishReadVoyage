@@ -629,6 +629,7 @@
               <option value="doubao-tts">豆包 TTS (在线)</option>
               <option value="siliconflow-tts">硅基流动 TTS (在线)</option>
               <option value="edge-tts">Edge-TTS (微软在线)</option>
+              <option value="minimax-tts">MiniMax TTS (speech-2.8-hd)</option>
             </select>
           </template>
         </van-field>
@@ -647,7 +648,7 @@
           </template>
         </van-field>
 
-        <!-- 朗读速度 (硅基流动不支持) -->
+        <!-- 朗读速度 (硅基流动和MiniMax不支持) -->
         <template v-if="ttsServiceName !== 'siliconflow-tts'">
           <van-field
             label="朗读速度"
@@ -667,7 +668,7 @@
             </template>
           </van-field>
           <div class="field-hint">
-            范围: {{ ttsServiceName === 'kokoro-tts' ? '0.25 - 4.0' : '0.5 - 2.0' }} (默认 1.0)
+            范围: {{ ttsServiceName === 'kokoro-tts' || ttsServiceName === 'minimax-tts' ? '0.25 - 4.0' : '0.5 - 2.0' }} (默认 1.0)
           </div>
         </template>
 
@@ -709,6 +710,35 @@
               </select>
             </template>
           </van-field>
+        </template>
+
+        <!-- MiniMax TTS配置 (仅在使用MiniMax时显示) -->
+        <template v-if="ttsServiceName === 'minimax-tts'">
+          <van-field
+            v-model="ttsMinimaxApiKey"
+            label="API Key"
+            placeholder="留空使用系统默认"
+            type="password"
+          />
+          <van-field
+            v-model="ttsMinimaxModel"
+            label="模型"
+            placeholder="speech-2.8-hd"
+          />
+          <div class="field-hint">
+            Token Plan Plus用户每日4000字符限额
+          </div>
+          <van-button
+            type="default"
+            size="small"
+            plain
+            class="usage-check-btn"
+            :loading="minimaxUsageChecking"
+            :disabled="minimaxUsageChecking"
+            @click="handleCheckMinimaxUsage"
+          >
+            {{ minimaxUsageChecking ? '查询中...' : '查询剩余配额' }}
+          </van-button>
         </template>
 
         <!-- 服务地址 (仅在使用Kokoro时显示) -->
@@ -1060,7 +1090,11 @@ const defaultTtsConfig = ref({
   siliconflow_model: 'fnlp/MOSS-TTSD-v0.5',
   siliconflow_voice: 'anna',
   edge_tts_voice: 'en-US-AriaNeural',
-  edge_tts_speed: 1.0
+  edge_tts_speed: 1.0,
+  minimax_api_key: '',
+  minimax_model: 'speech-2.8-hd',
+  minimax_voice: 'male-qn-qingse',
+  minimax_speed: 1.0
 })
 const ttsVoices = ref<{id: string, name: string}[]>([])
 // 硅基流动固定模型和语音列表
@@ -1081,6 +1115,14 @@ const siliconflowVoices = [
 ]
 // Edge-TTS语音列表（从后端动态获取）
 const edgeTtsVoices = ref<{id: string, name: string}[]>([])
+// MiniMax TTS配置
+const ttsMinimaxApiKey = ref('')
+const ttsMinimaxModel = ref('')
+const ttsMinimaxVoice = ref('')
+const ttsMinimaxSpeed = ref(1.0)
+// MiniMax TTS语音列表（从后端动态获取）
+const minimaxVoices = ref<{id: string, name: string}[]>([])
+const minimaxUsageChecking = ref(false)
 const ttsTesting = ref(false)
 const ttsTestText = "She meticulously practiced the intricate piano sonata, her fingers dancing across the ivory keys with a grace that belied the immense concentration required."
 let currentTestAudio: HTMLAudioElement | null = null
@@ -1132,7 +1174,11 @@ const loadUserSettings = async () => {
       siliconflow_model: res.data.tts?.siliconflow_model || 'fnlp/MOSS-TTSD-v0.5',
       siliconflow_voice: res.data.tts?.siliconflow_voice || 'anna',
       edge_tts_voice: res.data.tts?.edge_tts_voice || 'en-US-AriaNeural',
-      edge_tts_speed: res.data.tts?.edge_tts_speed ?? 1.0
+      edge_tts_speed: res.data.tts?.edge_tts_speed ?? 1.0,
+      minimax_api_key: res.data.tts?.minimax_api_key || '',
+      minimax_model: res.data.tts?.minimax_model || 'speech-2.8-hd',
+      minimax_voice: res.data.tts?.minimax_voice || 'male-qn-qingse',
+      minimax_speed: res.data.tts?.minimax_speed ?? 1.0
     }
     // 使用后端返回的值（已包含.env默认值）
     ttsServiceName.value = defaultTtsConfig.value.service_name
@@ -1148,6 +1194,11 @@ const loadUserSettings = async () => {
     ttsSiliconFlowModel.value = res.data.tts?.siliconflow_model || 'fnlp/MOSS-TTSD-v0.5'
     // Edge-TTS配置
     ttsEdgeTtsVoice.value = res.data.tts?.edge_tts_voice || 'en-US-AriaNeural'
+    // MiniMax TTS配置
+    ttsMinimaxApiKey.value = res.data.tts?.minimax_api_key || ''
+    ttsMinimaxModel.value = res.data.tts?.minimax_model || 'speech-2.8-hd'
+    ttsMinimaxVoice.value = res.data.tts?.minimax_voice || 'male-qn-qingse'
+    ttsMinimaxSpeed.value = res.data.tts?.minimax_speed ?? 1.0
 
     // 加载UI设置（隐藏已读书籍状态）
     if (res.data.ui?.hide_read_books_map) {
@@ -1207,6 +1258,42 @@ const loadEdgeTtsVoices = async () => {
   }
 }
 
+// 加载MiniMax TTS语音列表
+const loadMinimaxVoices = async () => {
+  try {
+    const res = await api.get('/settings/tts/minimax/voices')
+    if (res.data.error) {
+      console.warn('获取MiniMax语音列表失败:', res.data.error)
+      minimaxVoices.value = []
+    } else if (res.data.voices && res.data.voices.length > 0) {
+      minimaxVoices.value = res.data.voices
+    } else {
+      minimaxVoices.value = []
+    }
+  } catch (error) {
+    console.error('加载MiniMax语音列表失败:', error)
+    minimaxVoices.value = []
+  }
+}
+
+// 检查MiniMax用量
+const checkMinimaxUsage = async () => {
+  try {
+    console.log('开始查询MiniMax用量...')
+    const res = await api.get('/settings/tts/minimax/usage')
+    console.log('MiniMax用量响应:', res.data)
+    if (res.data.error) {
+      showNotify({ type: 'warning', message: res.data.error })
+      return null
+    }
+    return res.data
+  } catch (error: any) {
+    console.error('检查MiniMax用量失败:', error)
+    showNotify({ type: 'warning', message: error.message || '无法查询MiniMax用量' })
+    return null
+  }
+}
+
 // 豆包TTS音色列表映射
 const doubaoVoices = [
   { id: 'en_male_corey_emo_v2_mars_bigtts', name: '英式英语 - Corey' },
@@ -1233,6 +1320,9 @@ const availableVoices = computed(() => {
   }
   if (ttsServiceName.value === 'edge-tts') {
     return edgeTtsVoices.value
+  }
+  if (ttsServiceName.value === 'minimax-tts') {
+    return minimaxVoices.value
   }
   return ttsVoices.value
 })
@@ -1285,6 +1375,21 @@ watch(ttsServiceName, async (newService, oldService) => {
           ttsVoice.value = edgeTtsVoices.value[0].id
         }
         ttsSpeed.value = savedSpeed ?? 1.0
+      } else if (newService === 'minimax-tts') {
+        // 恢复 MiniMax TTS 设置
+        await loadMinimaxVoices()
+        const savedVoice = ttsSettings?.minimax_voice
+        const savedSpeed = ttsSettings?.minimax_speed
+        const savedModel = ttsSettings?.minimax_model
+
+        // 恢复语音、语速和模型
+        if (savedVoice) {
+          ttsVoice.value = savedVoice
+        } else if (minimaxVoices.value.length > 0) {
+          ttsVoice.value = minimaxVoices.value[0].id
+        }
+        ttsSpeed.value = savedSpeed ?? 1.0
+        ttsMinimaxModel.value = savedModel || 'speech-2.8-hd'
       } else {
         // 恢复豆包设置
         const savedVoice = ttsSettings?.doubao_voice
@@ -1308,6 +1413,10 @@ watch(ttsServiceName, async (newService, oldService) => {
       } else if (newService === 'edge-tts') {
         ttsVoice.value = ''
         ttsSpeed.value = 1.0
+      } else if (newService === 'minimax-tts') {
+        ttsVoice.value = 'male-qn-qingse'
+        ttsSpeed.value = 1.0
+        ttsMinimaxModel.value = 'speech-2.8-hd'
       } else {
         ttsVoice.value = 'en_male_corey_emo_v2_mars_bigtts'
         ttsSpeed.value = 1.0
@@ -1456,6 +1565,51 @@ const showTtsUrlHelp = () => {
   })
 }
 
+// 查询MiniMax用量
+const handleCheckMinimaxUsage = async () => {
+  minimaxUsageChecking.value = true
+  try {
+    const usage = await checkMinimaxUsage()
+    console.log('[DEBUG] MiniMax usage response:', JSON.stringify(usage, null, 2))
+    if (usage && usage.model_remains) {
+      // 从 model_remains 数组中找到 speech-hd 的配额
+      const speechHdRemain = usage.model_remains.find((item: any) => 
+        item.model_name && item.model_name.toLowerCase().includes('speech-hd')
+      )
+      
+      let message = ''
+      
+      if (speechHdRemain) {
+        // current_interval_usage_count 实际是剩余配额（非已用）
+        const dailyRemaining = speechHdRemain.current_interval_usage_count || 0
+        const dailyTotal = speechHdRemain.current_interval_total_count || 0
+        const dailyUsed = dailyTotal - dailyRemaining
+        const weeklyRemaining = speechHdRemain.current_weekly_usage_count || 0
+        const weeklyTotal = speechHdRemain.current_weekly_total_count || 0
+        const weeklyUsed = weeklyTotal - weeklyRemaining
+        
+        message = `【speech-hd 语音配额】\n\n`
+        if (dailyTotal > 0) {
+          message += `今日配额: ${dailyTotal} 字符\n已用: ${dailyUsed} 字符\n剩余: ${dailyRemaining} 字符\n\n`
+        }
+        if (weeklyTotal > 0) {
+          message += `本周配额: ${weeklyTotal} 字符\n已用: ${weeklyUsed} 字符\n剩余: ${weeklyRemaining} 字符`
+        }
+      } else {
+        message = '未找到 speech-hd 配额信息'
+      }
+      
+      showConfirmDialog({
+        title: 'MiniMax 语音配额',
+        message: message,
+        confirmButtonText: '确定'
+      })
+    }
+  } finally {
+    minimaxUsageChecking.value = false
+  }
+}
+
 // 停止TTS测试播放
 const stopTtsTest = () => {
   if (currentTestAudio) {
@@ -1493,6 +1647,12 @@ const testTts = async () => {
     if (ttsServiceName.value === 'siliconflow-tts') {
       requestBody.siliconflow_api_key = ttsSiliconFlowApiKey.value || null
       requestBody.siliconflow_model = ttsSiliconFlowModel.value || null
+    }
+    
+    // 如果是MiniMax，添加额外参数
+    if (ttsServiceName.value === 'minimax-tts') {
+      requestBody.minimax_api_key = ttsMinimaxApiKey.value || null
+      requestBody.minimax_model = ttsMinimaxModel.value || null
     }
     
     const response = await fetch('/api/v1/tts/', {
@@ -1570,11 +1730,16 @@ const saveTtsSettings = async () => {
   const isKokoro = ttsServiceName.value === 'kokoro-tts'
   const isSiliconFlow = ttsServiceName.value === 'siliconflow-tts'
   const isEdgeTts = ttsServiceName.value === 'edge-tts'
+  const isMinimax = ttsServiceName.value === 'minimax-tts'
   if (isKokoro && (ttsSpeed.value < 0.25 || ttsSpeed.value > 4.0)) {
     showNotify({ type: 'warning', message: 'Kokoro 朗读速度必须在 0.25 到 4.0 之间' })
     return
   }
-  if ((isEdgeTts || !isKokoro && !isSiliconFlow) && (ttsSpeed.value < 0.5 || ttsSpeed.value > 2.0)) {
+  if (isMinimax && (ttsSpeed.value < 0.25 || ttsSpeed.value > 4.0)) {
+    showNotify({ type: 'warning', message: 'MiniMax 朗读速度必须在 0.25 到 4.0 之间' })
+    return
+  }
+  if ((isEdgeTts || !isKokoro && !isSiliconFlow && !isMinimax) && (ttsSpeed.value < 0.5 || ttsSpeed.value > 2.0)) {
     showNotify({ type: 'warning', message: '朗读速度必须在 0.5 到 2.0 之间' })
     return
   }
@@ -1599,6 +1764,12 @@ const saveTtsSettings = async () => {
       // Edge-TTS 配置
       requestBody.edge_tts_voice = ttsVoice.value.trim()
       requestBody.edge_tts_speed = ttsSpeed.value
+    } else if (isMinimax) {
+      // MiniMax TTS 配置
+      requestBody.minimax_api_key = ttsMinimaxApiKey.value.trim() || null
+      requestBody.minimax_voice = ttsVoice.value.trim()
+      requestBody.minimax_speed = ttsSpeed.value
+      requestBody.minimax_model = ttsMinimaxModel.value.trim() || 'speech-2.8-hd'
     } else {
       // 豆包 TTS 配置
       requestBody.doubao_voice = ttsVoice.value.trim()
@@ -1734,6 +1905,9 @@ const onSettingsSelect = (action: PopoverAction) => {
     if (ttsServiceName.value === 'doubao-tts' && !ttsResourceId.value) {
       ttsResourceId.value = defaultTtsConfig.value.resource_id || 'seed-tts-1.0'
     }
+    loadTtsVoices()
+    loadEdgeTtsVoices()
+    loadMinimaxVoices()  // 加载 MiniMax 语音列表
     showTtsSettingsDialog.value = true
   } else if (action.key === 'dictionarySettings') {
     loadTranslationSettings()
@@ -4610,6 +4784,11 @@ onUnmounted(() => {
   color: #969799;
   padding: 4px 16px 12px;
   margin-top: 0;
+}
+
+.usage-check-btn {
+  margin: 12px 16px;
+  width: calc(100% - 32px);
 }
 
 /* 翻译设置样式 */

@@ -8,10 +8,33 @@ from app.core.security import verify_token
 from app.core.config import get_settings
 from app.models.database_models import User
 from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 # OAuth2PasswordBearer，tokenUrl参数使Swagger在登录后自动授权
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+
+def _mask_token(token: str) -> str:
+    """脱敏token，只显示前5字符"""
+    if not token:
+        return "None"
+    return f"{token[:5]}...***"
+
+
+def _mask_headers(headers: dict, max_len: int = 200) -> str:
+    """脱敏请求头，只显示部分信息"""
+    if not headers:
+        return "{}"
+    # 只记录关键header名称，不记录值
+    header_names = list(headers.keys())
+    masked = f"[{', '.join(header_names)}]"
+    # 限制长度
+    if len(masked) > max_len:
+        masked = masked[:max_len] + "..."
+    return masked
 
 
 async def get_current_user(
@@ -42,13 +65,14 @@ async def get_current_user(
     
     # 直接读取原始请求的 Authorization header
     # 注意：这里只是为了调试，实际应该使用 Depends(oauth2_scheme)
-    logger.info(f"[Auth] Token from oauth2_scheme: {token[:20]}..." if token else "[Auth] No token from oauth2_scheme")
+    logger.debug(f"[Auth] Token from oauth2_scheme: {_mask_token(token) if token else 'None'}")
     
-    # 调试：打印所有请求头
+    # 调试：打印所有请求头（脱敏）
     if request:
         auth_header = request.headers.get('authorization')
-        logger.info(f"[Auth] Raw Authorization header from request: {auth_header[:30]}..." if auth_header else "[Auth] No Authorization header in request")
-        logger.info(f"[Auth] All headers: {dict(request.headers)}")
+        masked_auth = f"{auth_header[:10]}...***" if auth_header and len(auth_header) > 10 else (auth_header or "None")
+        logger.debug(f"[Auth] Raw Authorization header: {masked_auth}")
+        logger.debug(f"[Auth] Request headers: {_mask_headers(dict(request.headers))}")
     
     if token is None:
         logger.warning("[Auth] Token is None")

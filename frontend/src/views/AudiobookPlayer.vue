@@ -36,34 +36,51 @@
             </div>
           </div>
           <h2 class="book-title">{{ currentBook?.book_title || '暂无书籍' }}</h2>
-          <!-- 定时器状态显示 -->
-          <p v-if="sleepTimer && sleepTimerType" class="timer-status">
-            <van-icon name="clock-o" />
-            <span v-if="sleepTimerType === 'time'">
-              {{ sleepTimerRemaining > 0 ? sleepTimerRemainingLabel + '后关闭' : sleepTimer + '分钟后关闭' }}
-            </span>
-            <span v-else-if="sleepTimerType === 'episode'">还剩{{ episodesToPlay }}集</span>
-          </p>
-          <!-- 当前朗读模式显示 -->
-          <p v-if="isBilingualMode && currentBookTotalDuration > 0" class="read-mode-display">
-            <van-icon name="volume-o" />
-            <span>{{ getCurrentModeDisplay() }}</span>
-          </p>
+          <!-- 定时器状态和朗读模式显示在封面区域 -->
+          <div class="status-info-row">
+            <p v-if="sleepTimer && sleepTimerType" class="timer-status">
+              <van-icon name="clock-o" />
+              <span v-if="sleepTimerType === 'time'">
+                {{ sleepTimerRemaining > 0 ? sleepTimerRemainingLabel + '后关闭' : sleepTimer + '分钟后关闭' }}
+              </span>
+              <span v-else-if="sleepTimerType === 'episode'">还剩{{ episodesToPlay }}集</span>
+            </p>
+            <p v-if="isBilingualMode && currentBookTotalDuration > 0" class="read-mode-display">
+              <van-icon name="volume-o" />
+              <span>{{ getCurrentModeDisplay() }}</span>
+            </p>
+          </div>
         </div>
 
         <!-- 播放控制区 -->
         <div class="player-controls">
-          <!-- 书籍整体进度 -->
+          <!-- 书籍整体进度 + 音频播放进度 -->
           <div v-if="currentBookTotalDuration > 0" class="book-progress-section">
             <div class="book-progress-info">
               <span class="book-progress-label">书籍进度</span>
               <span class="book-progress-value">{{ bookProgressPercent }}%</span>
             </div>
-            <div class="book-progress-bar">
-              <div class="book-progress-fill" :style="{ width: bookProgressPercent + '%' }"></div>
-            </div>
-            <div class="book-progress-time">
-              {{ formatTime(bookProgressTime) }} / {{ formatTime(currentBookTotalDuration) }}
+            <!-- 可拖动的书籍进度条 -->
+            <div class="audio-progress-wrapper">
+              <span class="audio-time current">{{ formatTime(isDragging ? seekProgressTime : bookProgressTime) }}</span>
+              <van-slider
+                :model-value="isDragging ? seekProgressTime : bookProgressTime"
+                :max="currentBookTotalDuration"
+                :step="0.1"
+                :disabled="currentBookTotalDuration === 0"
+                active-color="#07c160"
+                inactive-color="#e0e0e0"
+                bar-height="4px"
+                @update:model-value="onSliderUpdate"
+                @drag-start="onSeekStart"
+                @drag-end="onSeekEnd"
+                @change="onSliderChange"
+              >
+                <template #button>
+                  <div class="slider-button"></div>
+                </template>
+              </van-slider>
+              <span class="audio-time total">{{ formatTime(currentBookTotalDuration) }}</span>
             </div>
           </div>
 
@@ -95,6 +112,8 @@
               <i :class="['fas', (sleepTimer ?? 0) > 0 ? 'fa-clock' : 'fa-regular fa-clock']"></i>
             </div>
           </div>
+
+
         </div>
       </div>
 
@@ -717,7 +736,9 @@ const bookProgressTime = computed(() => {
 // 当前书籍整体进度百分比
 const bookProgressPercent = computed(() => {
   if (currentBookTotalDuration.value <= 0) return 0
-  return Math.min(100, Math.round((bookProgressTime.value / currentBookTotalDuration.value) * 100))
+  // 拖动时使用拖动位置的进度
+  const progressTime = isDragging.value ? seekProgressTime.value : bookProgressTime.value
+  return Math.min(100, Math.round((progressTime / currentBookTotalDuration.value) * 100))
 })
 
 // 计算单个音频在双语模式下的时长
@@ -787,6 +808,7 @@ const userEnabledBilingual = ref(false)  // 用户是否主动启用了双语模
 const currentTime = ref(0) // 当前播放时间（秒）
 const duration = ref(0) // 当前音频总时长（秒）
 const isDragging = ref(false) // 是否正在拖动进度条
+const seekProgressTime = ref(0) // 拖动时的临时进度时间（秒）
 
 // 加载书籍音频信息
 const loadBookAudioInfo = async (bookId: string) => {
@@ -822,6 +844,7 @@ const loadBookAudioInfo = async (bookId: string) => {
     currentAudioIndex.value = 0
     currentTime.value = 0
     duration.value = 0
+    seekProgressTime.value = 0  // 重置进度条位置
 
     // 重置朗读段索引
     currentSegmentIndex.value = 0
@@ -996,9 +1019,12 @@ const playBilingualAudio = async (audioInfo: AudioInfo) => {
   // 播放当前段
   if (!audioPlayer.value) return
 
-  // 清除之前的 onended 回调，防止冲突
+  // 清除之前的 onended 和 onloadedmetadata 回调，防止冲突
   audioPlayer.value.onended = null
+  audioPlayer.value.onloadedmetadata = null
 
+  // 重置播放时间，防止切换音频源时从之前的位置开始播放
+  audioPlayer.value.currentTime = 0
   audioPlayer.value.src = audioUrl
   isPlaying.value = true
 
@@ -1065,9 +1091,11 @@ const prevBook = async () => {
       currentBookIndex.value = res.data.index
       currentAudioIndex.value = 0
 
-      // 如果之前在播放，加载新书籍音频后继续播放
+      // 始终加载新书籍音频信息（无论是否播放）
+      await loadBookAudioInfo(res.data.book_id)
+
+      // 如果之前在播放，继续播放
       if (wasPlaying) {
-        await loadBookAudioInfo(res.data.book_id)
         await playAudio()
       }
       // 延迟重置切换标记
@@ -1097,9 +1125,11 @@ const nextBook = async () => {
       currentBookIndex.value = res.data.index
       currentAudioIndex.value = 0
 
-      // 如果之前在播放，加载新书籍音频后继续播放
+      // 始终加载新书籍音频信息（无论是否播放）
+      await loadBookAudioInfo(res.data.book_id)
+
+      // 如果之前在播放，继续播放
       if (wasPlaying) {
-        await loadBookAudioInfo(res.data.book_id)
         await playAudio()
       }
       // 延迟重置切换标记
@@ -1193,6 +1223,22 @@ const handleBilingualModeConfirm = (presetId: string, segments: ReadSegment[]) =
   isBilingualMode.value = true
   userEnabledBilingual.value = true  // 标记用户主动启用了双语模式
   saveReadConfig()
+  
+  // 重置播放状态，从头开始
+  if (audioPlayer.value) {
+    audioPlayer.value.pause()
+  }
+  isPlaying.value = false
+  currentAudioIndex.value = 0
+  currentTime.value = 0
+  currentSegmentIndex.value = 0
+  currentSegmentRepeat.value = 0
+  
+  // 重新计算总时长
+  if (currentBookAudioList.value.length > 0) {
+    currentBookTotalDuration.value = calculateTotalBilingualDuration()
+  }
+  
   showToast(`已启用朗读模式: ${getPresetName(presetId)}`)
 }
 
@@ -1344,6 +1390,7 @@ watch(showCustomTimer, (show) => {
 })
 
 // 监听双语模式或朗读配置变化，重新计算总时长
+// 注意：handleBilingualModeConfirm 已经处理了重置逻辑，这里只处理配置变化的情况
 watch([isBilingualMode, userReadConfig], () => {
   if (currentBookAudioList.value.length > 0) {
     if (isBilingualMode.value && hasChineseAudio.value) {
@@ -1358,10 +1405,7 @@ watch([isBilingualMode, userReadConfig], () => {
         }, 0
       )
     }
-    // 重置播放进度
-    currentTime.value = 0
-    currentSegmentIndex.value = 0
-    currentSegmentRepeat.value = 0
+    // 注意：不在这里重置播放状态，由调用方负责重置
   }
 }, { deep: true })
 
@@ -1604,8 +1648,188 @@ const handleTimeUpdate = () => {
   }
 }
 
+// 拖动开始 - 暂停播放和时间更新，初始化拖动位置
+const onSeekStart = () => {
+  // 防止重复触发
+  if (isDragging.value) return
+  
+  isDragging.value = true
+  seekProgressTime.value = bookProgressTime.value
+  // 暂停当前播放
+  if (audioPlayer.value && isPlaying.value) {
+    audioPlayer.value.pause()
+    // 注意：不设置 isPlaying.value = false，保持 wasPlaying 的正确性
+  }
+}
 
+// 滑块值更新时触发（拖动过程中或点击轨道时）
+const onSliderUpdate = (value: number) => {
+  // 如果还没进入拖动状态，先进入拖动状态（处理事件顺序问题）
+  if (!isDragging.value) {
+    isDragging.value = true
+    seekProgressTime.value = bookProgressTime.value
+    // 暂停当前播放
+    if (audioPlayer.value && isPlaying.value) {
+      audioPlayer.value.pause()
+    }
+  }
+  // 更新进度值
+  seekProgressTime.value = value
+}
 
+// 根据书籍进度时间跳转到对应位置
+const seekToBookPosition = async (targetTime: number) => {
+  if (!currentBookAudioList.value.length || !audioPlayer.value) return
+
+  const config = userReadConfig.value
+  const isBilingual = isBilingualMode.value && hasChineseAudio.value
+
+  // 记录是否之前在播放
+  const wasPlaying = isPlaying.value
+
+  // 计算每个句子的累计时长，找到目标位置
+  let accumulatedTime = 0
+  let targetAudioIndex = 0
+  let targetTimeInAudio = 0
+
+  for (let i = 0; i < currentBookAudioList.value.length; i++) {
+    const audioInfo = currentBookAudioList.value[i]
+    const audioDuration = isBilingual
+      ? calculateBilingualDuration(audioInfo, config)
+      : (audioInfo.duration || 0)
+
+    if (accumulatedTime + audioDuration > targetTime) {
+      // 目标位置在这个音频内
+      targetAudioIndex = i
+      targetTimeInAudio = targetTime - accumulatedTime
+      break
+    }
+    accumulatedTime += audioDuration
+
+    // 如果循环结束还没找到，说明目标是最后一首
+    if (i === currentBookAudioList.value.length - 1) {
+      targetAudioIndex = i
+      targetTimeInAudio = audioDuration
+    }
+  }
+
+  // 检查是否需要切换到其他音频
+  if (targetAudioIndex !== currentAudioIndex.value) {
+    // 暂停当前播放
+    audioPlayer.value.pause()
+    isPlaying.value = false
+
+    // 切换到目标音频
+    currentAudioIndex.value = targetAudioIndex
+    const targetAudioInfo = currentBookAudioList.value[targetAudioIndex]
+
+    // 重置双语模式状态
+    currentSegmentIndex.value = 0
+    currentSegmentRepeat.value = 0
+
+    // 设置新的音频源并跳转
+    if (isBilingual) {
+      // 双语模式：需要计算目标时间落在哪个段
+      let segmentAccumulatedTime = 0
+      let targetSegmentIndex = 0
+      let targetTimeInSegment = 0
+
+      for (let segIdx = 0; segIdx < config.segments.length; segIdx++) {
+        const segment = config.segments[segIdx]
+        const segDuration = segment.lang === 'en'
+          ? (targetAudioInfo.duration || 0)
+          : (targetAudioInfo.duration_zh || 0)
+        const segTotalTime = segDuration * segment.count
+
+        if (segmentAccumulatedTime + segTotalTime > targetTimeInAudio) {
+          // 目标时间在这个段内
+          targetSegmentIndex = segIdx
+          targetTimeInSegment = targetTimeInAudio - segmentAccumulatedTime
+          // 计算是该段的第几次重复
+          const repeatIndex = Math.floor(targetTimeInSegment / segDuration)
+          targetTimeInSegment = targetTimeInSegment % segDuration
+          currentSegmentRepeat.value = repeatIndex
+          break
+        }
+        segmentAccumulatedTime += segTotalTime
+      }
+
+      currentSegmentIndex.value = targetSegmentIndex
+      const segment = config.segments[targetSegmentIndex]
+      const audioUrl = segment.lang === 'en' ? targetAudioInfo.audio_url : targetAudioInfo.audio_url_zh
+
+      if (audioUrl) {
+        // 重置 currentTime 防止从之前位置播放
+        audioPlayer.value.currentTime = 0
+        audioPlayer.value.src = audioUrl
+        // 等待加载后跳转并播放
+        const handleLoaded = () => {
+          if (audioPlayer.value) {
+            audioPlayer.value.currentTime = Math.min(targetTimeInSegment, audioPlayer.value.duration || 0)
+            if (wasPlaying) {
+              audioPlayer.value.play()
+              isPlaying.value = true
+            }
+          }
+        }
+        // 如果已经加载过，直接执行
+        if (audioPlayer.value.readyState >= 1) {
+          handleLoaded()
+        } else {
+          audioPlayer.value.onloadedmetadata = handleLoaded
+        }
+      }
+    } else {
+      // 普通模式
+      // 重置 currentTime 防止从之前位置播放
+      audioPlayer.value.currentTime = 0
+      audioPlayer.value.src = targetAudioInfo.audio_url
+      // 等待加载后跳转并播放
+      const handleLoaded = () => {
+        if (audioPlayer.value) {
+          audioPlayer.value.currentTime = Math.min(targetTimeInAudio, audioPlayer.value.duration)
+          if (wasPlaying) {
+            audioPlayer.value.play()
+            isPlaying.value = true
+          }
+        }
+      }
+      // 如果已经加载过，直接执行
+      if (audioPlayer.value.readyState >= 1) {
+        handleLoaded()
+      } else {
+        audioPlayer.value.onloadedmetadata = handleLoaded
+      }
+    }
+  } else {
+    // 在同一音频内跳转
+    if (audioPlayer.value.duration && targetTimeInAudio <= audioPlayer.value.duration) {
+      audioPlayer.value.currentTime = targetTimeInAudio
+      // 如果之前在播放，继续播放
+      if (wasPlaying) {
+        audioPlayer.value.play()
+      }
+    }
+  }
+}
+
+// 拖动结束 - 更新播放位置
+const onSeekEnd = () => {
+  if (!isDragging.value) return
+  seekToBookPosition(seekProgressTime.value)
+  isDragging.value = false
+}
+
+// 滑块值变化后触发（点击轨道或拖动结束时）
+// 注意：change 事件在 drag-end 之后触发，也在点击轨道时触发
+const onSliderChange = (_value: number) => {
+  if (isDragging.value) {
+    // 拖动结束，执行跳转
+    seekToBookPosition(seekProgressTime.value)
+    isDragging.value = false
+  }
+  // 如果 isDragging 已经是 false，说明已经由其他方式处理过了
+}
 
 // 监听当前书籍变化，自动加载音频列表
 watch(currentBook, async (newBook: PlaylistItem | null) => {
@@ -1735,15 +1959,15 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 20px;
-  overflow-y: auto;
+  justify-content: flex-start; // 改为顶部对齐，避免内容过多时挤压下方
+  padding: 12px 16px;
+  overflow-y: auto; // 允许垂直滚动
   min-height: 0;
 
   .cover-container {
     width: min(240px, 50vw);
     height: min(336px, 70vw);
-    max-height: 50vh;
+    max-height: 35vh; // 减小最大高度，避免占用过多空间
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
@@ -1807,19 +2031,34 @@ onUnmounted(() => {
       font-size: 14px;
     }
   }
+
+  // 状态信息行：水平排列
+  .status-info-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+    flex-wrap: wrap; // 允许在小屏幕上换行
+
+    .timer-status,
+    .read-mode-display {
+      margin: 0;
+    }
+  }
 }
 
 // 播放控制区
 .player-controls {
-  padding: 16px 20px 24px;
+  padding: 12px 16px 16px; // 减小 padding
   background: #fff;
   border-top: 1px solid #eee;
   flex-shrink: 0;
 
   // 书籍整体进度
   .book-progress-section {
-    margin-bottom: 16px;
-    padding: 12px 0;
+    margin-bottom: 12px;
+    padding: 8px 0;
     background: transparent;
     border-radius: 0;
 
@@ -1841,25 +2080,45 @@ onUnmounted(() => {
       }
     }
 
-    .book-progress-bar {
-      height: 4px;
-      background: #e0e0e0;
-      border-radius: 2px;
-      overflow: hidden;
-      margin-bottom: 6px;
-
-      .book-progress-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #07c160, #10b981);
-        border-radius: 2px;
-        transition: width 0.3s ease;
-      }
-    }
-
     .book-progress-time {
       font-size: 11px;
       color: #999;
       text-align: right;
+    }
+
+    // 音频进度条容器
+    .audio-progress-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+
+      .audio-time {
+        font-size: 11px;
+        color: #666;
+        min-width: 40px;
+        font-variant-numeric: tabular-nums;
+
+        &.current {
+          text-align: left;
+        }
+
+        &.total {
+          text-align: right;
+        }
+      }
+
+      .van-slider {
+        flex: 1;
+
+        .slider-button {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #07c160;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+      }
     }
   }
 
@@ -2316,6 +2575,47 @@ onUnmounted(() => {
   }
 }
 
+// 横屏模式优化
+.audiobook-player.landscape {
+  .book-cover-section {
+    padding: 12px 20px;
+
+    .cover-container {
+      width: min(180px, 35vh);
+      height: min(252px, 49vh);
+      max-height: 40vh;
+    }
+
+    .book-title {
+      margin-top: 8px;
+      font-size: clamp(14px, 3vh, 18px);
+    }
+
+    // 状态信息行：横屏模式下水平排列
+    .status-info-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      margin-top: 8px;
+
+      .timer-status,
+      .read-mode-display {
+        margin: 0;
+      }
+    }
+  }
+
+  .player-controls {
+    padding: 12px 20px 16px;
+
+    .book-progress-section {
+      margin-bottom: 12px;
+      padding: 8px 0;
+    }
+  }
+}
+
 // 竖屏模式适配（基于宽高比判断，不是固定宽度）
 .audiobook-player:not(.landscape) {
   .player-layout {
@@ -2333,8 +2633,52 @@ onUnmounted(() => {
 
   .book-cover-section {
     .cover-container {
-      width: min(200px, 60vw);
-      height: min(280px, 84vw);
+      width: min(160px, 50vw);
+      height: min(224px, 70vw);
+      max-height: 28vh; // 小屏幕上进一步减小封面高度
+    }
+
+    .book-title {
+      margin-top: 6px; // 进一步减小间距
+      font-size: clamp(14px, 4vw, 18px); // 减小字体
+    }
+
+    .status-info-row {
+      margin-top: 6px;
+      gap: 8px; // 减小状态信息间距
+
+      .timer-status,
+      .read-mode-display {
+        font-size: 12px; // 减小字体
+      }
+    }
+  }
+
+  // 竖屏模式下减小控制按钮大小
+  .player-controls {
+    padding: 10px 12px 12px;
+
+    .book-progress-section {
+      margin-bottom: 10px;
+      padding: 6px 0;
+
+      .book-progress-info {
+        margin-bottom: 6px;
+      }
+    }
+
+    .control-buttons {
+      gap: clamp(16px, 5vw, 24px);
+
+      .control-btn {
+        .fas {
+          font-size: 24px; // 减小普通按钮图标
+        }
+
+        &.play-btn .fas {
+          font-size: 48px; // 减小播放按钮图标
+        }
+      }
     }
   }
 }
