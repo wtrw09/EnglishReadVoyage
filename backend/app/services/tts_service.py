@@ -5,11 +5,14 @@ import hashlib
 import httpx
 import asyncio
 import json
+import logging
 from typing import Optional, List, Set
 
 from app.core.config import get_settings
 from app.schemas.tts import TTSResponse
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 class TTSService:
@@ -22,6 +25,30 @@ class TTSService:
         self._edge_semaphore = asyncio.Semaphore(1)
         self._edge_last_request_time = 0.0
         self._edge_min_interval = 1.0  # 最小请求间隔（秒），确保QPS<=1
+        # MiniMax TTS 限速：20 RPM，充值用户
+        self._minimax_semaphore = asyncio.Semaphore(1)
+        self._minimax_last_request_time = 0.0
+        self._minimax_min_interval = 3.0  # 最小请求间隔（秒），确保 20 RPM
+
+    def _validate_edge_voice(self, voice: str, default_voice: str) -> str:
+        """
+        验证 Edge-TTS 语音名称是否有效
+        有效格式示例: en-US-AriaNeural, zh-CN-XiaoxiaoNeural
+        """
+        if not voice:
+            return default_voice
+        
+        # 检查是否是有效的语音格式（包含 Neural 后缀或有效的语言前缀）
+        voice_upper = voice.upper()
+        valid_prefixes = ('en-', 'zh-', 'yue-', 'wuu-', 'mn-', 'cmn-', 'ja-', 'ko-')
+        
+        if ('NEURAL' in voice_upper or
+            any(voice.startswith(prefix) for prefix in valid_prefixes)):
+            return voice
+        
+        # 无效的语音名称，使用默认值
+        logger.warning(f"Edge-TTS 语音名称无效: '{voice}'，使用默认值: '{default_voice}'")
+        return default_voice
 
     async def generate_speech(
         self,
@@ -34,6 +61,8 @@ class TTSService:
         doubao_resource_id: Optional[str] = None,
         siliconflow_api_key: Optional[str] = None,
         siliconflow_model: Optional[str] = None,
+        minimax_api_key: Optional[str] = None,
+        minimax_model: Optional[str] = None,
         speed: Optional[float] = None
     ) -> TTSResponse:
         """
@@ -43,12 +72,14 @@ class TTSService:
             text: 要转换为语音的文本
             voice: 语音ID（默认为配置的默认语音）
             api_url: 自定义TTS服务地址，为空则使用系统默认
-            service_name: 服务名称 'kokoro-tts', 'doubao-tts' 或 'siliconflow-tts'
+            service_name: 服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts', 'edge-tts' 或 'minimax-tts'
             doubao_app_id: 豆包APP ID
             doubao_access_key: 豆包Access Key
             doubao_resource_id: 豆包Resource ID
             siliconflow_api_key: 硅基流动API Key
             siliconflow_model: 硅基流动模型名称
+            minimax_api_key: MiniMax API Key
+            minimax_model: MiniMax模型名称
             speed: 朗读速度 (0.5-2.0)
 
         返回:
@@ -83,6 +114,16 @@ class TTSService:
                 speed=speed
             )
 
+        if service_name == "minimax-tts":
+            logger.debug("进入 minimax-tts 分支")
+            return await self.generate_minimax_speech(
+                text=text,
+                voice=voice,
+                api_key=minimax_api_key,
+                model=minimax_model,
+                speed=speed
+            )
+
         # 默认使用Kokoro
         if voice is None:
             voice = self.settings.KOKORO_DEFAULT_VOICE
@@ -91,7 +132,7 @@ class TTSService:
         tts_api_url = api_url if api_url else self.settings.KOKORO_API_URL
 
         # 调用Kokoro Docker API
-        print(f"调用TTS API: {tts_api_url}, voice={voice}, speed={speed}, text={text[:50]}...")
+        logger.info(f"调用TTS API: {tts_api_url}, voice={voice}, speed={speed}, text={text[:50]}...")
         async with httpx.AsyncClient(timeout=self.settings.TTS_TIMEOUT) as client:
             payload = {
                 "model": "kokoro",
@@ -100,24 +141,24 @@ class TTSService:
                 "response_format": "mp3",
                 "speed": speed if speed is not None else 1.0
             }
-            print(f"TTS请求payload: {payload}")
+            logger.debug(f"TTS请求payload: {payload}")
             response = await client.post(tts_api_url, json=payload)
-            print(f"TTS API响应: status={response.status_code}")
+            logger.info(f"TTS API响应: status={response.status_code}")
 
             if response.status_code != 200:
-                print(f"TTS API错误: {response.text}")
+                logger.error(f"TTS API错误: {response.text}")
                 raise Exception(
                     f"TTS API returned {response.status_code}: {response.text}"
                 )
 
             # 检查响应内容是否为空
             if not response.content or len(response.content) == 0:
-                print(f"TTS API返回空内容: status={response.status_code}")
+                logger.warning(f"TTS API返回空内容: status={response.status_code}")
                 raise Exception("未收到音频数据")
 
             # 返回音频数据（base64编码）
             audio_base64 = base64.b64encode(response.content).decode('utf-8')
-            print(f"TTS音频生成成功, 大小: {len(response.content)} bytes")
+            logger.info(f"TTS音频生成成功, 大小: {len(response.content)} bytes")
 
         return TTSResponse(audio_data=audio_base64)
 
@@ -196,8 +237,8 @@ class TTSService:
             }
         }
 
-        print(f"调用豆包TTS API: {url}, voice={voice}, resource_id={resource_id}, speed={speed}")
-        print(f"  text={text[:50]}...")
+        logger.info(f"调用豆包TTS API: {url}, voice={voice}, resource_id={resource_id}, speed={speed}")
+        logger.debug(f"  text={text[:50]}...")
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -205,7 +246,7 @@ class TTSService:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
-                        print(f"豆包TTS API错误: {response.status_code}, {error_text}")
+                        logger.warning(f"豆包TTS API错误: {response.status_code}, {error_text}")
                         raise Exception(f"豆包TTS API returned {response.status_code}: {error_text}")
 
                     # 流式读取音频数据
@@ -224,7 +265,7 @@ class TTSService:
                                 break
                             # 检查错误
                             elif data.get("code", 0) > 0:
-                                print(f"豆包TTS错误: {data}")
+                                logger.warning(f"豆包TTS错误: {data}")
                                 break
                         except json.JSONDecodeError:
                             continue
@@ -232,7 +273,7 @@ class TTSService:
                     if audio_data:
                         # 返回音频数据（base64编码）
                         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                        print(f"豆包TTS生成成功, 大小: {len(audio_data)} bytes")
+                        logger.info(f"豆包TTS生成成功, 大小: {len(audio_data)} bytes")
                     else:
                         raise Exception("未收到音频数据")
 
@@ -289,8 +330,8 @@ class TTSService:
             "stream": True
         }
 
-        print(f"调用硅基流动TTS API: {url}, model={model}, voice={full_voice}")
-        print(f"  text={text[:50]}...")
+        logger.info(f"调用硅基流动TTS API: {url}, model={model}, voice={full_voice}")
+        logger.debug(f"  text={text[:50]}...")
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -298,7 +339,7 @@ class TTSService:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
-                        print(f"硅基流动TTS API错误: {response.status_code}, {error_text}")
+                        logger.warning(f"硅基流动TTS API错误: {response.status_code}, {error_text}")
                         raise Exception(f"硅基流动TTS API returned {response.status_code}: {error_text}")
 
                     # 流式读取音频数据
@@ -310,7 +351,7 @@ class TTSService:
                     if audio_data:
                         # 返回音频数据（base64编码）
                         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                        print(f"硅基流动TTS生成成功, 大小: {len(audio_data)} bytes")
+                        logger.info(f"硅基流动TTS生成成功, 大小: {len(audio_data)} bytes")
                     else:
                         raise Exception("未收到音频数据")
 
@@ -343,7 +384,11 @@ class TTSService:
         # 使用默认值
         if voice is None or voice.strip() == "":
             voice = self.settings.EDGE_TTS_DEFAULT_VOICE
-            print(f"使用默认Edge-TTS语音: {voice}")
+            logger.info(f"使用默认Edge-TTS语音: {voice}")
+        
+        # 验证语音名称是否有效（无效时使用默认语音）
+        voice = self._validate_edge_voice(voice, self.settings.EDGE_TTS_DEFAULT_VOICE)
+        
         if speed is None or speed <= 0:
             speed = 1.0
 
@@ -352,8 +397,8 @@ class TTSService:
         # 确保 rate_str 始终有效
         rate_str = f"{rate_percent:+d}%"
 
-        print(f"调用Edge-TTS API: voice={voice}, speed={speed}, rate={rate_str}")
-        print(f"  text长度={len(text)}, text前100字符={text[:100]!r}")
+        logger.info(f"调用Edge-TTS API: voice={voice}, speed={speed}, rate={rate_str}")
+        logger.debug(f"  text长度={len(text)}, text前100字符={text[:100]!r}")
 
         # Edge-TTS 限速控制：确保QPS<=1
         async with self._edge_semaphore:
@@ -361,7 +406,7 @@ class TTSService:
             time_since_last = current_time - self._edge_last_request_time
             if time_since_last < self._edge_min_interval:
                 wait_time = self._edge_min_interval - time_since_last
-                print(f"Edge-TTS 限速等待 {wait_time:.2f} 秒")
+                logger.debug(f"Edge-TTS 限速等待 {wait_time:.2f} 秒")
                 await asyncio.sleep(wait_time)
             self._edge_last_request_time = asyncio.get_event_loop().time()
 
@@ -388,7 +433,7 @@ class TTSService:
                     venv_scripts = os.path.join(base_dir, 'Scripts')
                     if os.path.exists(venv_scripts):
                         venv_path = venv_scripts
-                        print(f"检测到虚拟环境路径: {venv_path}")
+                        logger.debug(f"检测到虚拟环境路径: {venv_path}")
 
                 # 根据操作系统选择不同的路径列表
                 if sys.platform == 'win32':
@@ -418,18 +463,18 @@ class TTSService:
                     expanded_path = os.path.expandvars(path)
                     if os.path.exists(expanded_path):
                         edge_tts_path = expanded_path
-                        print(f"使用备用路径: {edge_tts_path}")
+                        logger.debug(f"使用备用路径: {edge_tts_path}")
                         break
 
                 # 如果找不到，尝试shutil.which (这个在Linux/Docker中最可靠)
                 if not edge_tts_path:
                     edge_tts_path = shutil.which("edge-tts")
-                    print(f"edge-tts 路径查找结果: {edge_tts_path}")
+                    logger.debug(f"edge-tts 路径查找结果: {edge_tts_path}")
 
                 # 如果还找不到，抛出错误
                 if not edge_tts_path:
                     # 打印当前PATH环境变量，帮助调试
-                    print(f"当前PATH: {os.environ.get('PATH', '')[:200]}...")
+                    logger.debug(f"当前PATH: {os.environ.get('PATH', '')[:200]}...")
                     raise FileNotFoundError("edge-tts 命令未找到")
 
                 # 创建临时输出文件（使用系统临时目录）
@@ -453,8 +498,8 @@ class TTSService:
                         "--write-media", output_file
                     ]
 
-                    print(f"执行Edge-TTS命令: path={edge_tts_path}, voice={voice}, rate={rate_str}")
-                    print(f"  text={text[:50]!r}..., output_file={output_file}")
+                    logger.info(f"执行Edge-TTS命令: path={edge_tts_path}, voice={voice}, rate={rate_str}")
+                    logger.debug(f"  text={text[:50]!r}..., output_file={output_file}")
 
                     # 在Windows上使用线程池执行子进程，避免NotImplementedError
                     import sys
@@ -518,44 +563,44 @@ class TTSService:
                         # 检查是否是 503 服务不可用错误
                         if "503" in error_msg or "WSServerHandshakeError" in error_msg:
                             last_error = Exception(f"Edge-TTS服务暂时不可用 (503): {error_msg[:100]}")
-                            print(f"Edge-TTS 503错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
+                            logger.warning(f"Edge-TTS 503错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
                             # 等待后重试
                             await asyncio.sleep(retry_delay)
                             continue
                         else:
-                            print(f"Edge-TTS错误: stderr={stderr_text}, stdout={stdout_text}")
+                            logger.error(f"Edge-TTS错误: stderr={stderr_text}, stdout={stdout_text}")
                             raise Exception(f"Edge-TTS执行失败: {stderr_text}")
 
                     # 读取生成的音频文件
-                    print(f"检查输出文件: {output_file}, exists={os.path.exists(output_file)}")
+                    logger.debug(f"检查输出文件: {output_file}, exists={os.path.exists(output_file)}")
                     with open(output_file, 'rb') as f:
                         audio_data = f.read()
 
                     if not audio_data or len(audio_data) == 0:
-                        print(f"Edge-TTS错误: 文件为空, returncode={returncode}, stdout={stdout_text[:200]}, stderr={stderr_text[:200]}")
+                        logger.error(f"Edge-TTS错误: 文件为空, returncode={returncode}")
                         raise Exception("Edge-TTS未生成音频数据")
 
                     # 返回base64编码的音频数据
                     audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                    print(f"Edge-TTS生成成功, 大小: {len(audio_data)} bytes")
+                    logger.info(f"Edge-TTS生成成功, 大小: {len(audio_data)} bytes")
 
                 finally:
                     # 清理临时文件
                     try:
                         if os.path.exists(output_file):
                             os.unlink(output_file)
-                            print(f"已清理临时文件: {output_file}")
+                            logger.debug(f"已清理临时文件: {output_file}")
                         if os.path.exists(text_file):
                             os.unlink(text_file)
-                            print(f"已清理临时文本文件: {text_file}")
+                            logger.debug(f"已清理临时文本文件: {text_file}")
                     except Exception as e:
-                        print(f"清理临时文件失败: {e}")
+                        logger.warning(f"清理临时文件失败: {e}")
 
                 # 成功，跳出重试循环
                 break
 
             except FileNotFoundError as e:
-                print(f"Edge-TTS命令未找到: {e}")
+                logger.error(f"Edge-TTS命令未找到: {e}")
                 raise Exception("Edge-TTS未安装，请运行: pip install edge-tts")
             except Exception as e:
                 # 如果是 503 错误，已经在循环中处理了
@@ -565,12 +610,140 @@ class TTSService:
                 # 其他错误直接抛出
                 import traceback
                 error_detail = traceback.format_exc()
-                print(f"Edge-TTS详细错误: {error_detail}")
+                logger.error(f"Edge-TTS详细错误: {error_detail}")
                 raise Exception(f"Edge-TTS生成失败: {str(e)}")
 
         # 如果所有重试都失败
         if last_error:
             raise Exception(f"Edge-TTS服务暂时不可用，已重试{max_retries}次，请稍后重试")
+
+        return TTSResponse(audio_data=audio_base64)
+
+    async def generate_minimax_speech(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        speed: Optional[float] = None
+    ) -> TTSResponse:
+        """
+        使用 MiniMax TTS API 从文本生成语音
+        - 支持并发控制（QPS <= 1）
+        - 支持限流重试机制
+
+        参数:
+            text: 要转换为语音的文本
+            voice: 语音ID
+            api_key: MiniMax API Key
+            model: 模型名称
+            speed: 朗读速度 (0.5-2.0)
+
+        返回:
+            包含音频数据的TTSResponse
+
+        异常:
+            Exception: 如果TTS API调用失败
+        """
+        import os
+
+        # 使用默认值
+        if voice is None:
+            voice = self.settings.MINIMAX_DEFAULT_VOICE
+        if model is None:
+            model = self.settings.MINIMAX_DEFAULT_MODEL
+        if speed is None:
+            speed = 1.0
+        if not api_key:
+            raise Exception("MiniMax TTS需要配置API Key，请在朗读设置中填写")
+
+        masked_key = "已设置" if api_key else "未设置"
+        logger.debug(f"MiniMax TTS配置: api_key={masked_key}, model={model}, voice={voice}, speed={speed}")
+
+        url = self.settings.MINIMAX_API_URL
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # 构建请求体
+        payload = {
+            "model": model,
+            "text": text,
+            "stream": False,
+            "voice_setting": {
+                "voice_id": voice,
+                "speed": speed,
+                "vol": 1,
+                "pitch": 0
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+                "channel": 1
+            }
+        }
+
+        logger.info(f"调用MiniMax TTS API: {url}, model={model}, voice={voice}, speed={speed}")
+        logger.debug(f"  text长度={len(text)}, text前50字符={text[:50]}...")
+
+        # MiniMax TTS 限流控制：确保 20 RPM
+        async with self._minimax_semaphore:
+            current_time = asyncio.get_event_loop().time()
+            time_since_last = current_time - self._minimax_last_request_time
+            if time_since_last < self._minimax_min_interval:
+                wait_time = self._minimax_min_interval - time_since_last
+                logger.debug(f"MiniMax TTS 限流等待 {wait_time:.2f} 秒")
+                await asyncio.sleep(wait_time)
+            self._minimax_last_request_time = asyncio.get_event_loop().time()
+
+        # 重试配置（限流通常约1分钟恢复）
+        max_retries = 3
+        retry_delay = 60  # 秒
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(url, headers=headers, json=payload)
+
+                    if response.status_code != 200:
+                        error_text = response.text
+                        # 检查是否是限流错误
+                        if response.status_code in (429, 503):
+                            last_error = Exception(f"MiniMax TTS限流 ({response.status_code}): {error_text[:200]}")
+                            logger.warning(f"MiniMax TTS 限流，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
+                            await asyncio.sleep(retry_delay)
+                            continue
+                        raise Exception(f"MiniMax TTS API returned {response.status_code}: {error_text}")
+
+                    result = response.json()
+
+                    # 检查业务错误码
+                    if result.get("base_resp", {}).get("status_code", 0) != 0:
+                        status_msg = result.get("base_resp", {}).get("status_msg", "未知错误")
+                        raise Exception(f"MiniMax TTS业务错误: {status_msg}")
+
+                    # 解析 hex 编码的音频
+                    audio_hex = result.get("data", {}).get("audio")
+                    if not audio_hex:
+                        raise Exception("未收到音频数据")
+
+                    audio_data = bytes.fromhex(audio_hex)
+                    audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                    logger.info(f"MiniMax TTS生成成功, 大小: {len(audio_data)} bytes")
+                    break
+
+            except httpx.RequestError as e:
+                last_error = Exception(f"MiniMax TTS网络请求失败: {str(e)}")
+                logger.warning(f"MiniMax TTS 网络错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
+                await asyncio.sleep(retry_delay)
+                continue
+
+        # 所有重试都失败
+        if last_error:
+            raise last_error
 
         return TTSResponse(audio_data=audio_base64)
 
@@ -641,7 +814,7 @@ class TTSService:
                         response = await client.post(tts_api_url, json=payload)
 
                         if response.status_code != 200:
-                            print(f"TTS API returned {response.status_code}: {response.text}")
+                            logger.warning(f"TTS API returned {response.status_code}: {response.text}")
                             return None
 
                         # 保存文件
@@ -655,11 +828,11 @@ class TTSService:
                             try:
                                 await progress_callback(len(generated_files), total, f"正在生成语音 ({len(generated_files)}/{total})...")
                             except Exception as e:
-                                print(f"进度回调失败: {e}")
+                                logger.warning(f"进度回调失败: {e}")
 
                         return file_name
                 except Exception as e:
-                    print(f"生成语音失败: {e}")
+                    logger.error(f"生成语音失败: {e}")
                     return None
 
         # 并发生成所有语音

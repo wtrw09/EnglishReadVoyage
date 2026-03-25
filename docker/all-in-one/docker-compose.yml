@@ -6,6 +6,9 @@ services:
     container_name: englishread
     ports:
       - "8888:80"
+    # 加载 .env 文件中的环境变量
+    env_file:
+      - ../../backend/.env
     volumes:
       # 持久化数据库
       - ./backend/data.db:/app/data.db
@@ -13,16 +16,10 @@ services:
       - ./backend/data:/app/data
       # 书籍目录
       - ./backend/Books:/app/Books
+    # 仅覆盖 .env 中需要运行时动态设置的值
     environment:
       - DEBUG=False
-      - HOST=0.0.0.0
-      - PORT=8000
-      - CORS_ORIGINS=["*"]
-      - SECRET_KEY=your-secret-key-change-in-production
-      - ACCESS_TOKEN_EXPIRE_MINUTES=3000
-      - KOKORO_API_URL=http://localhost:8880/v1/audio/speech
-      - KOKORO_DEFAULT_VOICE=bf_v0isabella
-      - KOKORO_DEFAULT_SPEED=1.0
+      - IS_PRODUCTION=True
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/api/v1/dictionary/status"]

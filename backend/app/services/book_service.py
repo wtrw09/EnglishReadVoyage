@@ -6,6 +6,7 @@ import hashlib
 import asyncio
 import zipfile
 import io
+import logging
 from typing import List, Optional, Dict, Set
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,38 @@ from app.services.translation_service import translation_service
 from app.core.config import get_settings
 from app.models.database_models import UserSettings, TranslationAPI, User
 from mutagen.mp3 import MP3
+
+from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
+
+# Edge-TTS 有效英文语音名称前缀
+VALID_EDGE_TTS_EN_PREFIXES = ('en-',)
+# Edge-TTS 有效中文语音名称前缀
+VALID_EDGE_TTS_ZH_PREFIXES = ('zh-', 'yue-', 'wuu-', 'mn-', 'cmn-')
+
+
+def validate_edge_tts_voice(voice: Optional[str], default_voice: str) -> str:
+    """
+    验证 Edge-TTS 语音名称是否有效
+    - 英文语音必须以 'en-' 开头
+    - 中文语音必须以 'zh-', 'yue-', 'wuu-', 'mn-', 'cmn-' 开头
+    - 或者包含 'Neural' 后缀
+    如果无效，返回默认语音
+    """
+    if not voice:
+        return default_voice
+    
+    # 检查是否是有效的语音格式
+    voice_upper = voice.upper()
+    if ('NEURAL' in voice_upper or  # 包含 Neural 后缀
+        voice.startswith(VALID_EDGE_TTS_EN_PREFIXES) or
+        any(voice.startswith(prefix) for prefix in VALID_EDGE_TTS_ZH_PREFIXES)):
+        return voice
+    
+    # 无效的语音名称，使用默认值并记录警告
+    logger.warning(f"Edge-TTS 语音名称无效: '{voice}'，使用默认值: '{default_voice}'")
+    return default_voice
 
 
 # 任务取消事件管理
@@ -111,12 +144,48 @@ async def get_effective_translation_api_config(db: AsyncSession, user_id: int) -
     return api, None
 
 
+class TranslationGenerateResult:
+    """翻译生成结果类"""
+    def __init__(self, success: bool, message: str):
+        self.success = success
+        self.message = message
+
+
 class BookService:
     """书籍相关业务逻辑服务层"""
+
+    # LRU缓存配置（类级别共享）
+    _parser_cache: OrderedDict[str, List[str]] = OrderedDict()
+    _max_cache_size = 50
 
     def __init__(self):
         self.repository = book_repository
         self.parser = MarkdownParser()
+
+    def _get_parsed_pages(self, book_id: str, file_path: str) -> List[str]:
+        """获取解析后的页面，使用LRU缓存"""
+        # 检查缓存
+        if book_id in self._parser_cache:
+            # 移动到末尾（最近使用）
+            self._parser_cache.move_to_end(book_id)
+            return self._parser_cache[book_id]
+        
+        # 解析文件
+        pages = self.parser.parse_file(file_path)
+        
+        # 添加到缓存
+        self._parser_cache[book_id] = pages
+        
+        # 如果缓存满了，淘汰最久未使用的
+        if len(self._parser_cache) > self._max_cache_size:
+            self._parser_cache.popitem(last=False)
+        
+        return pages
+
+    def _invalidate_cache(self, book_id: str):
+        """删除指定书籍的缓存"""
+        if book_id in self._parser_cache:
+            del self._parser_cache[book_id]
 
     async def list_books(self, db: AsyncSession) -> List[BookInfo]:
         """获取所有书籍列表"""
@@ -137,6 +206,9 @@ class BookService:
         if not book:
             return False
 
+        # 删除缓存
+        self._invalidate_cache(book_id)
+
         # 删除书籍文件目录（转换为绝对路径）
         abs_file_path = Path(book.file_path)
         book_folder = abs_file_path.parent
@@ -147,7 +219,7 @@ class BookService:
             try:
                 shutil.rmtree(book_folder)
             except Exception as e:
-                print(f"删除书籍文件夹失败: {e}")
+                logger.error(f"删除书籍文件夹失败: {e}")
 
         # 先删除关联数据
         from sqlalchemy import delete
@@ -162,7 +234,7 @@ class BookService:
             await db.delete(book)
             await db.commit()
         except Exception as e:
-            print(f"删除书籍记录失败: {e}")
+            logger.error(f"删除书籍记录失败: {e}")
             await db.rollback()
             raise e
 
@@ -203,9 +275,9 @@ class BookService:
         if not book:
             return None
 
-        # 转换为绝对路径后解析文件
+        # 转换为绝对路径后使用缓存解析文件
         abs_file_path = Path(book.file_path)
-        pages = self.parser.parse_file(str(abs_file_path))
+        pages = self._get_parsed_pages(book.id, str(abs_file_path))
 
         # 计算书籍相对于Books目录的路径
         book_folder = self._get_book_folder_name(book.file_path)
@@ -230,9 +302,9 @@ class BookService:
         if not book:
             return None
     
-        # 转换为绝对路径后解析文件
+        # 转换为绝对路径后使用缓存解析文件
         abs_file_path = Path(book.file_path)
-        all_pages = self.parser.parse_file(str(abs_file_path))
+        all_pages = self._get_parsed_pages(book.id, str(abs_file_path))
         total_pages = len(all_pages)
     
         # 计算实际范围
@@ -284,6 +356,9 @@ class BookService:
                 message="书籍未找到"
             )
 
+        # 清除缓存（重命名后路径会变，缓存失效）
+        self._invalidate_cache(book_id)
+
         # 安全化新标题
         safe_new_name = new_title.replace(" ", "_")
 
@@ -314,7 +389,7 @@ class BookService:
         # 首先尝试数据库记录的路径
         if db_folder.exists():
             actual_folder = db_folder
-            print(f"使用数据库记录的路径: {db_folder}")
+            logger.debug(f"使用数据库记录的路径: {db_folder}")
         else:
             # 数据库路径不存在，尝试在 Books 目录下查找匹配的文件夹
             settings = get_settings()
@@ -323,7 +398,7 @@ class BookService:
             candidate = books_dir / db_folder_name
             if candidate.exists():
                 actual_folder = candidate
-                print(f"数据库路径不存在，找到同名文件夹: {candidate}")
+                logger.debug(f"数据库路径不存在，找到同名文件夹: {candidate}")
             else:
                 # 策略2：查找包含相同MD文件的文件夹
                 for folder in books_dir.iterdir():
@@ -331,7 +406,7 @@ class BookService:
                         md_file = folder / old_md_filename
                         if md_file.exists():
                             actual_folder = folder
-                            print(f"通过MD文件找到实际文件夹: {folder}")
+                            logger.debug(f"通过MD文件找到实际文件夹: {folder}")
                             break
         
         if not actual_folder:
@@ -367,7 +442,7 @@ class BookService:
                     )
                 # 重命名文件夹
                 shutil.move(str(actual_folder), str(new_folder))
-                print(f"文件夹已重命名: {actual_folder} -> {new_folder}")
+                logger.info(f"文件夹已重命名: {actual_folder} -> {new_folder}")
 
             # 2. 重命名MD文件（如果文件名与旧文件夹名一致）
             # 找到新的MD文件路径
@@ -378,7 +453,7 @@ class BookService:
                 if md_base_name == actual_folder_name or md_base_name == db_folder_name:
                     actual_new_file_path.rename(new_file_path)
                     actual_new_file_path = new_file_path
-                    print(f"MD文件已重命名: {old_md_filename} -> {safe_new_name}.md")
+                    logger.info(f"MD文件已重命名: {old_md_filename} -> {safe_new_name}.md")
 
             # 3. 计算新的书籍ID（基于新文件路径的MD5）
             new_book_id = hashlib.md5(str(actual_new_file_path).encode()).hexdigest()
@@ -411,9 +486,9 @@ class BookService:
                     else:
                         cover_relative = old_cover_path.name
                     new_cover_path = f"/books/{safe_new_name}/{cover_relative}"
-                    print(f"封面路径已更新: {book.cover_path} -> {new_cover_path}")
+                    logger.info(f"封面路径已更新: {book.cover_path} -> {new_cover_path}")
                 except Exception as e:
-                    print(f"更新封面路径时出错: {e}")
+                    logger.error(f"更新封面路径时出错: {e}")
                     new_cover_path = book.cover_path
 
             # 5. 更新数据库记录
@@ -499,7 +574,7 @@ class BookService:
 
         except Exception as e:
             await db.rollback()
-            print(f"重命名书籍失败: {e}")
+            logger.error(f"重命名书籍失败: {e}")
             import traceback
             traceback.print_exc()
             return BookRenameResponse(
@@ -563,7 +638,7 @@ class BookService:
                     file_path.unlink()
                     deleted_files.append(filename)
                 except Exception as e:
-                    print(f"删除文件失败 {filename}: {e}")
+                    logger.error(f"删除文件失败 {filename}: {e}")
 
         # 4. 清理不再需要的音频文件
         audio_folder = book_folder / "audio"
@@ -600,7 +675,7 @@ class BookService:
                             else:
                                 deleted_audio_files.append(filename)
                         except Exception as e:
-                            print(f"删除音频文件失败 {filename}: {e}")
+                            logger.error(f"删除音频文件失败 {filename}: {e}")
 
             # 更新 sentences.json - 只保留新内容中存在的句子
             mapping_path = audio_folder / 'sentences.json'
@@ -637,7 +712,7 @@ class BookService:
                             json.dump(filtered_sentences, f, ensure_ascii=False, indent=2)
 
                 except Exception as e:
-                    print(f"更新 sentences.json 失败: {e}")
+                    logger.error(f"更新 sentences.json 失败: {e}")
 
         # 5. 更新数据库中的页数
         page_count = len(re.split(r'\n---\n', new_content))
@@ -788,7 +863,7 @@ class BookService:
                             relative_path = f"./assets/{file_path.name}"
                             return url, relative_path
                 except Exception as e:
-                    print(f"下载失败 {url}: {e}")
+                    logger.error(f"下载失败 {url}: {e}")
                 return url, url
 
         # 并发下载所有图片
@@ -976,7 +1051,7 @@ class BookService:
                     shutil.copy2(source_image_path, cover_file)
                     cover_path = f"/books/{book_folder_name}/cover.jpg"
                 except Exception as e:
-                    print(f"复制封面图片失败: {e}")
+                    logger.error(f"复制封面图片失败: {e}")
                     # 如果复制失败，使用原路径
                     cover_path = f"/books/{book_folder_name}/assets/{filename}"
             else:
@@ -1009,10 +1084,16 @@ class BookService:
             # 进度跟踪计数器
             generated_count = [0]
             total_count = len(sentences_mapping)
+            cancelled = [False]  # 使用列表以便在闭包中修改
 
             async def generate_sentence_audio(sent_info: dict) -> dict:
                 """为单个句子生成音频"""
                 async with semaphore:
+                    # 检查是否已取消
+                    if cancelled[0] or is_cancelled(book_id):
+                        cancelled[0] = True
+                        return None
+
                     text = sent_info['text']
                     # 使用hash作为文件名
                     text_hash = hashlib.md5(text.encode()).hexdigest()
@@ -1021,14 +1102,28 @@ class BookService:
 
                     # 如果已存在，跳过
                     if audio_path.exists():
+                        # 检查是否已取消
+                        if cancelled[0] or is_cancelled(book_id):
+                            cancelled[0] = True
+                            return None
+                        # 获取已有音频的时长
+                        try:
+                            audio = MP3(str(audio_path))
+                            existing_duration = audio.info.length
+                        except:
+                            existing_duration = 0.0
                         # 已存在的文件也计入进度
                         generated_count[0] += 1
                         current = generated_count[0]
                         progress = 30 + int(current / total_count * 65)
                         await progress_callback(progress, f"正在生成语音 ({current}/{total_count})...")
-                        return {**sent_info, 'audio_file': audio_filename}
+                        return {**sent_info, 'audio_file': audio_filename, 'duration': existing_duration}
 
                     try:
+                        # 检查是否已取消
+                        if cancelled[0] or is_cancelled(book_id):
+                            cancelled[0] = True
+                            return None
                         # 调用TTS API
                         import httpx
                         settings = get_settings()
@@ -1044,8 +1139,27 @@ class BookService:
                             if response.status_code == 200:
                                 with open(audio_path, 'wb') as f:
                                     f.write(response.content)
+                                # 获取音频时长
+                                try:
+                                    audio = MP3(str(audio_path))
+                                    audio_duration = audio.info.length
+                                except:
+                                    audio_duration = 0.0
                     except Exception as e:
-                        print(f"生成语音失败: {e}")
+                        logger.error(f"生成语音失败: {e}")
+
+                    # 检查是否已取消
+                    if cancelled[0] or is_cancelled(book_id):
+                        cancelled[0] = True
+                        return None
+
+                    # 获取音频时长（如果前面已生成则已有，否则读取文件）
+                    if 'audio_duration' not in dir() or audio_duration == 0.0:
+                        try:
+                            audio = MP3(str(audio_path))
+                            audio_duration = audio.info.length
+                        except:
+                            audio_duration = 0.0
 
                     # 更新进度
                     generated_count[0] += 1
@@ -1053,11 +1167,23 @@ class BookService:
                     progress = 30 + int(current / total_count * 65)
                     await progress_callback(progress, f"正在生成语音 ({current}/{total_count})...")
 
-                    return {**sent_info, 'audio_file': audio_filename}
+                    return {**sent_info, 'audio_file': audio_filename, 'duration': audio_duration}
 
             # 并发生成所有语音
             tasks = [generate_sentence_audio(sent) for sent in sentences_mapping]
             results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 检查是否被取消
+            if cancelled[0] or is_cancelled(book_id):
+                await progress_callback(100, f"生成已取消 (已生成 {generated_count[0]}/{total_count})")
+                # 清理取消事件
+                clear_cancel_event(book_id)
+                return BookImportResponse(
+                    success=False,
+                    message=f"生成已取消 (已生成 {generated_count[0]}/{total_count})",
+                    book_id=book_id,
+                    title=safe_name
+                )
 
             # 过滤成功的生成结果
             successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
@@ -1065,7 +1191,7 @@ class BookService:
             # 保存映射文件
             mapping_path = audio_folder / 'sentences.json'
             with open(mapping_path, 'w', encoding='utf-8') as f:
-                json.dump(successful_results, f, ensure_ascii=False, indent=2)
+                json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
 
             await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
         else:
@@ -1075,16 +1201,16 @@ class BookService:
             # 保存映射文件（不含audio_file）
             mapping_path = audio_folder / 'sentences.json'
             with open(mapping_path, 'w', encoding='utf-8') as f:
-                json.dump(sentences_mapping, f, ensure_ascii=False, indent=2)
+                json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
 
             await progress_callback(50, "句子映射已保存")
 
         # 6. 保存到数据库
         # 如果是覆盖导入且提供了existing_book_id，使用它作为book_id
-        print(f"DEBUG: overwrite={overwrite}, existing_book_id={existing_book_id}")
+        logger.debug(f"overwrite={overwrite}, existing_book_id={existing_book_id}")
         if overwrite and existing_book_id:
             book_id = existing_book_id
-            print(f"DEBUG: Using existing_book_id: {book_id}")
+            logger.debug(f"Using existing_book_id: {book_id}")
         else:
             book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
 
@@ -1114,7 +1240,7 @@ class BookService:
                 try:
                     shutil.rmtree(old_audio_folder)
                 except Exception as e:
-                    print(f"删除旧音频文件夹失败: {e}")
+                    logger.error(f"删除旧音频文件夹失败: {e}")
         else:
             book_data = {
                 "id": book_id,
@@ -1128,7 +1254,7 @@ class BookService:
         await db.commit()
 
         await progress_callback(100, "导入完成")
-        print(f"DEBUG: Returning book_id: {book_id}")
+        logger.debug(f"Returning book_id: {book_id}")
         return BookImportResponse(
             success=True,
             message=f"书籍导入成功: {safe_name}",
@@ -1246,7 +1372,7 @@ class BookService:
                                 if not found:
                                     result["missing_images"].append(img_path)
                 except Exception as e:
-                    print(f"检查MD内容失败: {e}")
+                    logger.error(f"检查MD内容失败: {e}")
 
                 # 判断完整性
                 if result["missing_images"]:
@@ -1524,7 +1650,7 @@ class BookService:
                                 shutil.copy2(source_image_path, cover_file)
                                 cover_path = f"/books/{book_folder_name}/cover.jpg"
                             except Exception as e:
-                                print(f"复制封面图片失败: {e}")
+                                logger.error(f"复制封面图片失败: {e}")
                                 # 如果复制失败，使用原路径
                                 cover_path = f"/books/{book_folder_name}/assets/{filename}"
                         else:
@@ -1560,10 +1686,16 @@ class BookService:
                     # 进度跟踪计数器
                     generated_count = [0]
                     total_count = len(sentences_mapping)
+                    cancelled = [False]
 
                     async def generate_sentence_audio(sent_info: dict) -> dict:
                         """为单个句子生成音频"""
                         async with semaphore:
+                            # 检查是否已取消
+                            if cancelled[0] or is_cancelled(book_id):
+                                cancelled[0] = True
+                                return None
+
                             text = sent_info['text']
                             # 使用hash作为文件名
                             text_hash = hashlib.md5(text.encode()).hexdigest()
@@ -1572,14 +1704,28 @@ class BookService:
 
                             # 如果已存在，跳过
                             if audio_path.exists():
+                                # 检查是否已取消
+                                if cancelled[0] or is_cancelled(book_id):
+                                    cancelled[0] = True
+                                    return None
+                                # 获取已有音频的时长
+                                try:
+                                    audio = MP3(str(audio_path))
+                                    existing_duration = audio.info.length
+                                except:
+                                    existing_duration = 0.0
                                 # 已存在的文件也计入进度
                                 generated_count[0] += 1
                                 current = generated_count[0]
                                 progress = 60 + int(current / total_count * 35)
                                 await progress_callback(progress, f"正在生成语音 ({current}/{total_count})...")
-                                return {**sent_info, 'audio_file': audio_filename}
+                                return {**sent_info, 'audio_file': audio_filename, 'duration': existing_duration}
 
                             try:
+                                # 检查是否已取消
+                                if cancelled[0] or is_cancelled(book_id):
+                                    cancelled[0] = True
+                                    return None
                                 # 调用TTS API
                                 import httpx
                                 settings = get_settings()
@@ -1595,8 +1741,27 @@ class BookService:
                                     if response.status_code == 200:
                                         with open(audio_path, 'wb') as f:
                                             f.write(response.content)
+                                        # 获取音频时长
+                                        try:
+                                            audio = MP3(str(audio_path))
+                                            audio_duration = audio.info.length
+                                        except:
+                                            audio_duration = 0.0
                             except Exception as e:
-                                print(f"生成语音失败: {e}")
+                                logger.error(f"生成语音失败: {e}")
+
+                            # 检查是否已取消
+                            if cancelled[0] or is_cancelled(book_id):
+                                cancelled[0] = True
+                                return None
+
+                            # 获取音频时长（如果前面已生成则已有，否则读取文件）
+                            if 'audio_duration' not in dir() or audio_duration == 0.0:
+                                try:
+                                    audio = MP3(str(audio_path))
+                                    audio_duration = audio.info.length
+                                except:
+                                    audio_duration = 0.0
 
                             # 更新进度
                             generated_count[0] += 1
@@ -1604,11 +1769,22 @@ class BookService:
                             progress = 60 + int(current / total_count * 35)
                             await progress_callback(progress, f"正在生成语音 ({current}/{total_count})...")
 
-                            return {**sent_info, 'audio_file': audio_filename}
+                            return {**sent_info, 'audio_file': audio_filename, 'duration': audio_duration}
 
                     # 并发生成所有语音
                     tasks = [generate_sentence_audio(sent) for sent in sentences_mapping]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # 检查是否被取消
+                    if cancelled[0] or is_cancelled(book_id):
+                        await progress_callback(100, f"生成已取消 (已生成 {generated_count[0]}/{total_count})")
+                        clear_cancel_event(book_id)
+                        return BookImportResponse(
+                            success=False,
+                            message=f"生成已取消 (已生成 {generated_count[0]}/{total_count})",
+                            book_id=book_id,
+                            title=safe_name
+                        )
 
                     # 过滤成功的生成结果
                     successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
@@ -1616,7 +1792,7 @@ class BookService:
                     # 保存映射文件
                     mapping_path = audio_folder / 'sentences.json'
                     with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump(successful_results, f, ensure_ascii=False, indent=2)
+                        json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
 
                     await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
                 else:
@@ -1626,7 +1802,7 @@ class BookService:
                     # 保存映射文件（不含audio_file）
                     mapping_path = audio_folder / 'sentences.json'
                     with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump(sentences_mapping, f, ensure_ascii=False, indent=2)
+                        json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
 
                     await progress_callback(80, "句子映射已保存")
 
@@ -1679,9 +1855,9 @@ class BookService:
                         import shutil
                         try:
                             shutil.rmtree(old_book_folder)
-                            print(f"已删除旧书籍文件夹: {old_book_folder}")
+                            logger.info(f"已删除旧书籍文件夹: {old_book_folder}")
                         except Exception as e:
-                            print(f"删除旧书籍文件夹失败: {e}")
+                            logger.error(f"删除旧书籍文件夹失败: {e}")
 
                     # 重新创建书籍目录
                     book_folder_path.mkdir(parents=True, exist_ok=True)
@@ -1759,7 +1935,7 @@ class BookService:
                 title=""
             )
         except Exception as e:
-            print(f"导入ZIP失败: {e}")
+            logger.error(f"导入ZIP失败: {e}")
             return BookImportResponse(
                 success=False,
                 message=f"导入失败: {str(e)}",
@@ -1891,19 +2067,39 @@ class BookService:
                     semaphore = asyncio.Semaphore(3)
                     generated_count = [0]
                     total_count = len(sentences_mapping)
+                    cancelled = [False]
                     
                     async def generate_sentence_audio(sent_info: dict) -> dict:
                         async with semaphore:
+                            # 检查是否已取消
+                            if cancelled[0] or is_cancelled(book_id):
+                                cancelled[0] = True
+                                return None
+
                             text = sent_info['text']
                             text_hash = hashlib.md5(text.encode()).hexdigest()
                             audio_filename = f"{text_hash}.mp3"
                             audio_path = audio_folder / audio_filename
                             
                             if audio_path.exists():
+                                # 检查是否已取消
+                                if cancelled[0] or is_cancelled(book_id):
+                                    cancelled[0] = True
+                                    return None
+                                # 获取已有音频的时长
+                                try:
+                                    audio = MP3(str(audio_path))
+                                    existing_duration = audio.info.length
+                                except:
+                                    existing_duration = 0.0
                                 generated_count[0] += 1
-                                return {**sent_info, 'audio_file': audio_filename}
+                                return {**sent_info, 'audio_file': audio_filename, 'duration': existing_duration}
                             
                             try:
+                                # 检查是否已取消
+                                if cancelled[0] or is_cancelled(book_id):
+                                    cancelled[0] = True
+                                    return None
                                 import httpx
                                 settings = get_settings()
                                 async with httpx.AsyncClient(timeout=settings.TTS_TIMEOUT) as client:
@@ -1918,23 +2114,54 @@ class BookService:
                                     if response.status_code == 200:
                                         with open(audio_path, 'wb') as f:
                                             f.write(response.content)
+                                        # 获取音频时长
+                                        try:
+                                            audio = MP3(str(audio_path))
+                                            audio_duration = audio.info.length
+                                        except:
+                                            audio_duration = 0.0
                             except Exception as e:
-                                print(f"生成语音失败: {e}")
+                                logger.error(f"生成语音失败: {e}")
+                            
+                            # 检查是否已取消
+                            if cancelled[0] or is_cancelled(book_id):
+                                cancelled[0] = True
+                                return None
+                            
+                            # 获取音频时长（如果前面已生成则已有，否则读取文件）
+                            if 'audio_duration' not in dir() or audio_duration == 0.0:
+                                try:
+                                    audio = MP3(str(audio_path))
+                                    audio_duration = audio.info.length
+                                except:
+                                    audio_duration = 0.0
                             
                             generated_count[0] += 1
-                            return {**sent_info, 'audio_file': audio_filename}
+                            return {**sent_info, 'audio_file': audio_filename, 'duration': audio_duration}
                     
                     tasks = [generate_sentence_audio(sent) for sent in sentences_mapping]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # 检查是否被取消
+                    if cancelled[0] or is_cancelled(book_id):
+                        await progress_callback(100, f"生成已取消 (已生成 {generated_count[0]}/{total_count})")
+                        clear_cancel_event(book_id)
+                        return BookImportResponse(
+                            success=False,
+                            message=f"生成已取消 (已生成 {generated_count[0]}/{total_count})",
+                            book_id=book_id,
+                            title=safe_name
+                        )
+
                     successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
                     
                     mapping_path = audio_folder / 'sentences.json'
                     with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump(successful_results, f, ensure_ascii=False, indent=2)
+                        json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
                 else:
                     mapping_path = audio_folder / 'sentences.json'
                     with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump(sentences_mapping, f, ensure_ascii=False, indent=2)
+                        json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
                 
                 # 计算book_id
                 book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
@@ -1990,7 +2217,7 @@ class BookService:
                 success_book_ids.append(book_id)  # 记录成功导入的书籍ID
                 
             except Exception as e:
-                print(f"导入书籍 {safe_name} 失败: {e}")
+                logger.error(f"导入书籍 {safe_name} 失败: {e}")
                 failed_books.append((safe_name, str(e)))
                 await db.rollback()
         
@@ -2033,53 +2260,98 @@ class BookService:
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
+    def get_sentence_preview(self, content: str) -> List[dict]:
+        """
+        获取书籍断句预览
+        返回包含page、index、text字段的句子列表
+        """
+        # 按页分割
+        pages = re.split(r'\n---\n', content)
+        sentences = []
+
+        for page_idx, page in enumerate(pages):
+            page_sentences = self._extract_text_for_tts(page)
+            for sent_idx, text in enumerate(page_sentences):
+                if text.strip():
+                    sentences.append({
+                        'page': page_idx,
+                        'index': sent_idx,
+                        'text': text
+                    })
+
+        return sentences
+
     def _extract_text_for_tts(self, content: str) -> List[str]:
-        """从页面内容中提取用于TTS的句子列表"""
+        """从页面内容中提取用于TTS的句子列表
+            
+        注意：此方法必须与 parser.py 的 _wrap_text_content 方法保持一致的断句逻辑，
+        以确保 data-tts 属性和 sentences.json 中的文本哈希一致。
+        """
+        from app.utils.sentence_splitter import split_sentences
+            
         # 移除忽略标记
         ignore_pattern = r'<!--\s*ignore\s*-->.*?<!--\s*/ignore\s*-->'
         content = re.sub(ignore_pattern, '', content, flags=re.DOTALL | re.IGNORECASE)
-
+    
         # 移除图片
         content = re.sub(r'!\[([^\]]*)\]\([^)]+\)', '', content)
-
+    
         # 移除HTML标签
         content = re.sub(r'<[^>]+>', '', content)
-
+    
         # 移除markdown链接
         content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-
+    
         # 移除MD格式字符
         # 移除标题标记 (# ## ### 等)
         content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
         # 移除加粗、斜体等标记
         content = re.sub(r'[*_]+', '', content)
-
+    
         # 只替换空格和制表符，保留换行符
         content = re.sub(r'[ \t]+', ' ', content).strip()
-
-        # 分句逻辑：先按换行分割（每行是一个独立句子），再按句号分割
-        lines = content.split('\n')
+    
+        # 分句逻辑：与 parser.py 的 _wrap_text_content 保持一致
+        # 先按空行分割段落
+        raw_paragraphs = re.split(r'\n\s*\n', content)
+            
+        # 进一步分割段落，将标题（# 开头）单独分割出来
+        paragraphs = []
+        for raw_para in raw_paragraphs:
+            # 按标题行分割（# 开头的内容）
+            title_parts = re.split(r'(?=^#\s)', raw_para, flags=re.MULTILINE)
+            for part in title_parts:
+                part = part.strip()
+                if part:
+                    paragraphs.append(part)
+    
         sentences = []
-        for line in lines:
-            line = line.strip()
-            if not line:
+        for para_idx, paragraph in enumerate(paragraphs):
+            # 清理段落内容
+            paragraph = paragraph.strip()
+            if not paragraph:
                 continue
-            # 跳过太短的行
-            if len(line) < 3:
+    
+            # 如果段落是纯小写字母的单词短语（如 "cotton shirts"），作为完整句子处理
+            if re.match(r'^[a-z]+(?:\s+[a-z]+)*$', paragraph):
+                if paragraph.strip():
+                    sentences.append(paragraph.strip())
                 continue
-            # 按句号分割
-            parts = re.split(r'(?<=[.])\s*', line)
+    
+            # 移除段落中的换行，替换为空格（与 parser.py 一致）
+            paragraph = re.sub(r'\n+', ' ', paragraph)
+    
+            # 去除句首的序号（如 "1.", "2.", "①" 等）
+            paragraph = re.sub(r'^\d+[\.)]\s*', '', paragraph)
+            paragraph = re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩]+\s*', '', paragraph)
+    
+            # 使用智能断句（与 parser.py 一致）
+            parts = split_sentences(paragraph)
             for part in parts:
                 part = part.strip()
-                if not part:
-                    continue
-                # 清理文本（移除引号和特殊字符）
-                cleaned = self._clean_text_for_tts(part)
-                # 再次检查长度
-                if len(cleaned) < 2:
-                    continue
-                sentences.append(cleaned)
-
+                if part and len(part) >= 1:
+                    sentences.append(part)
+    
         return sentences
 
     async def _check_tts_service(self, service_name: str = "kokoro-tts") -> tuple[bool, str]:
@@ -2087,6 +2359,18 @@ class BookService:
         # 豆包TTS是在线服务，不需要本地检查
         if service_name == "doubao-tts":
             return True, "豆包TTS服务可用"
+
+        # MiniMax TTS 是在线服务，不需要本地检查
+        if service_name == "minimax-tts":
+            return True, "MiniMax TTS服务可用"
+
+        # Siliconflow TTS 是在线服务，不需要本地检查
+        if service_name == "siliconflow-tts":
+            return True, "Siliconflow TTS服务可用"
+
+        # Edge-TTS 是在线服务，不需要本地检查
+        if service_name == "edge-tts":
+            return True, "Edge TTS服务可用"
 
         # 检查Kokoro本地TTS服务
         try:
@@ -2106,7 +2390,8 @@ class BookService:
         db: AsyncSession,
         book_id: str,
         user_id: int,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        force: bool = False
     ) -> BookImportResponse:
         """
         重新生成书籍音频
@@ -2114,6 +2399,8 @@ class BookService:
         2. 删除现有音频文件夹内容
         3. 重新提取句子并生成音频
         """
+        logger.info(f"[DEBUG] regenerate_audio 开始: book_id={book_id}, user_id={user_id}, force={force}")
+        
         async def update_progress(percentage: int, message: str):
             if progress_callback:
                 await progress_callback(percentage, message)
@@ -2125,6 +2412,14 @@ class BookService:
         user_settings = result.scalars().first()
         settings = get_settings()
 
+        # 调试日志
+        logger.debug(f"user_settings = {user_settings}")
+        if user_settings:
+            logger.debug(f"tts_service_name = {user_settings.tts_service_name}")
+            logger.debug(f"minimax_api_key = {'已设置' if user_settings.minimax_api_key else '未设置'}")
+            logger.debug(f"minimax_model = {user_settings.minimax_model}")
+            logger.debug(f"minimax_voice = {user_settings.minimax_voice}")
+
         # 确定使用哪个TTS服务
         service_name = user_settings.tts_service_name if user_settings else "kokoro-tts"
         voice = None
@@ -2132,10 +2427,28 @@ class BookService:
         doubao_app_id = None
         doubao_access_key = None
         doubao_resource_id = None
+        minimax_api_key = None
+        minimax_model = None
+        siliconflow_api_key = None
+        siliconflow_model = None
 
         if service_name == "kokoro-tts":
             voice = user_settings.kokoro_voice if user_settings else settings.KOKORO_DEFAULT_VOICE
             speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else 1.0
+        elif service_name == "minimax-tts":
+            voice = user_settings.minimax_voice if user_settings else settings.MINIMAX_DEFAULT_VOICE
+            speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else 1.0
+            minimax_api_key = user_settings.minimax_api_key if user_settings else None
+            minimax_model = user_settings.minimax_model if user_settings else settings.MINIMAX_DEFAULT_MODEL
+        elif service_name == "edge-tts":
+            # 验证英文语音名称是否有效
+            raw_voice = user_settings.edge_tts_voice if user_settings and user_settings.edge_tts_voice else settings.EDGE_TTS_DEFAULT_VOICE
+            voice = validate_edge_tts_voice(raw_voice, settings.EDGE_TTS_DEFAULT_VOICE)
+            speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
+        elif service_name == "siliconflow-tts":
+            voice = user_settings.siliconflow_voice if user_settings else settings.SILICONFLOW_DEFAULT_VOICE
+            siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
+            siliconflow_model = user_settings.siliconflow_model if user_settings else settings.SILICONFLOW_DEFAULT_MODEL
         else:
             # 豆包TTS
             voice = user_settings.doubao_voice if user_settings else settings.DOUBAO_DEFAULT_VOICE
@@ -2144,7 +2457,7 @@ class BookService:
             doubao_access_key = user_settings.doubao_access_key if user_settings else None
             doubao_resource_id = user_settings.doubao_resource_id if user_settings else settings.DOUBAO_DEFAULT_RESOURCE_ID
 
-        print(f"书籍音频生成使用TTS服务: {service_name}, voice={voice}, speed={speed}")
+        logger.info(f"书籍音频生成使用TTS服务: {service_name}, voice={voice}, speed={speed}")
 
         await update_progress(5, "正在检查TTS服务...")
 
@@ -2182,11 +2495,27 @@ class BookService:
         with open(book_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 3. 删除现有音频文件夹内容
+        # 3. 删除现有音频文件夹内容（仅 force=True 时才删除英文音频，保留中文语音文件）
+        deleted_count = 0
         if audio_folder.exists():
-            for file in audio_folder.iterdir():
-                if file.is_file():
-                    file.unlink()
+            if force:
+                # force=True: 删除英文音频文件（保留中文音频和 sentences.json）
+                for file in audio_folder.iterdir():
+                    if file.is_file():
+                        # 跳过中文语音文件
+                        if file.suffix == '.mp3' and file.stem.endswith('_zh'):
+                            continue
+                        # 跳过 sentences.json（稍后会更新）
+                        if file.name == 'sentences.json':
+                            continue
+                        file.unlink()
+                        deleted_count += 1
+            else:
+                # force=False: 统计已有音频，不删除
+                for file in audio_folder.iterdir():
+                    if file.is_file() and file.suffix == '.mp3' and not file.stem.endswith('_zh'):
+                        if file.name != 'sentences.json':
+                            deleted_count += 1
         else:
             audio_folder.mkdir(parents=True, exist_ok=True)
 
@@ -2215,12 +2544,43 @@ class BookService:
             semaphore = asyncio.Semaphore(3)
             generated_count = [0]
             total_count = len(sentences_mapping)
+            cancelled = [False]
 
             async def generate_sentence_audio(sent_info: dict) -> dict:
                 async with semaphore:
+                    # 检查是否已取消
+                    if cancelled[0] or is_cancelled(book_id):
+                        cancelled[0] = True
+                        return None
+
                     text = sent_info['text']
+                    text_hash = hashlib.md5(text.encode()).hexdigest()
+                    target_filename = f"{text_hash}.mp3"
+                    target_path = audio_folder / target_filename
+
+                    # 如果 force=False 且音频文件已存在，跳过
+                    if not force and target_path.exists():
+                        # 获取已有音频的时长
+                        try:
+                            audio = MP3(str(target_path))
+                            existing_duration = audio.info.length
+                        except:
+                            existing_duration = 0.0
+                        generated_count[0] += 1
+                        current = generated_count[0]
+                        progress = 30 + int(current / total_count * 65)
+                        await update_progress(progress, f"跳过已有音频 ({current}/{total_count})...")
+                        return {**sent_info, 'audio_file': target_filename, 'duration': existing_duration}
+
+                    logger.debug(f"generate_sentence_audio: service_name={service_name}, voice={voice}, minimax_api_key={'已设置' if minimax_api_key else '未设置'}, siliconflow_api_key={'已设置' if siliconflow_api_key else '未设置'}")
                     # 使用tts_service生成语音
                     try:
+                        # 检查是否已取消
+                        if cancelled[0] or is_cancelled(book_id):
+                            cancelled[0] = True
+                            return None
+
+                            logger.debug(f"调用 tts_service.generate_speech")
                         tts_result = await tts_service.generate_speech(
                             text=text,
                             voice=voice,
@@ -2228,28 +2588,39 @@ class BookService:
                             doubao_app_id=doubao_app_id,
                             doubao_access_key=doubao_access_key,
                             doubao_resource_id=doubao_resource_id,
+                            minimax_api_key=minimax_api_key,
+                            minimax_model=minimax_model,
+                            siliconflow_api_key=siliconflow_api_key,
+                            siliconflow_model=siliconflow_model,
                             speed=speed
                         )
 
-                        # 获取生成的音频数据并保存到书籍音频文件夹
-                        text_hash = hashlib.md5(text.encode()).hexdigest()
-                        target_filename = f"{text_hash}.mp3"
-                        target_path = audio_folder / target_filename
+                        # 检查是否已取消
+                        if cancelled[0] or is_cancelled(book_id):
+                            cancelled[0] = True
+                            return None
 
+                        # 获取生成的音频数据并保存到书籍音频文件夹
                         if tts_result.audio_data:
                             # 解码base64音频数据并保存
                             import base64
                             audio_bytes = base64.b64decode(tts_result.audio_data)
                             with open(target_path, "wb") as f:
                                 f.write(audio_bytes)
+                            # 获取音频时长
+                            try:
+                                audio = MP3(str(target_path))
+                                audio_duration = audio.info.length
+                            except:
+                                audio_duration = 0.0
                             generated_count[0] += 1
                             current = generated_count[0]
                             progress = 30 + int(current / total_count * 65)
                             await update_progress(progress, f"正在生成语音 ({current}/{total_count})...")
-                            return {**sent_info, 'audio_file': target_filename}
+                            return {**sent_info, 'audio_file': target_filename, 'duration': audio_duration}
                         else:
                             error_msg = "音频数据为空"
-                            print(f"生成语音失败: {error_msg}")
+                            logger.error(f"生成语音失败: {error_msg}")
                             generated_count[0] += 1
                             current = generated_count[0]
                             progress = 30 + int(current / total_count * 65)
@@ -2257,7 +2628,7 @@ class BookService:
                             return {**sent_info, 'audio_file': None, 'error': error_msg}
                     except Exception as e:
                         error_msg = str(e)
-                        print(f"生成语音失败: {e}")
+                        logger.error(f"生成语音失败: {e}")
                         generated_count[0] += 1
                         current = generated_count[0]
                         progress = 30 + int(current / total_count * 65)
@@ -2267,22 +2638,153 @@ class BookService:
             tasks = [generate_sentence_audio(sent) for sent in sentences_mapping]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
+            # 检查是否被取消
+            if cancelled[0] or is_cancelled(book_id):
+                await update_progress(100, f"生成已取消 (已生成 {generated_count[0]}/{total_count})")
+                clear_cancel_event(book_id)
+                return BookImportResponse(
+                    success=False,
+                    message=f"生成已取消 (已生成 {generated_count[0]}/{total_count})",
+                    book_id=book_id,
+                    title=""
+                )
+
             successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
 
-            # 保存映射文件
+            # 读取已有的 sentences.json，保留翻译和中文语音字段
+            existing_sentences = {}
             mapping_path = audio_folder / 'sentences.json'
+            if mapping_path.exists():
+                try:
+                    with open(mapping_path, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                        if isinstance(existing_data, dict) and 'sentences' in existing_data:
+                            # 新格式：{"sentences": [...]}
+                            for item in existing_data.get('sentences', []):
+                                if item.get('text'):
+                                    existing_sentences[item['text']] = item
+                        elif isinstance(existing_data, list):
+                            # 旧格式：[...]
+                            for item in existing_data:
+                                if item.get('text'):
+                                    existing_sentences[item['text']] = item
+                except (json.JSONDecodeError, IOError) as e:
+                                logger.warning(f"读取已有的 sentences.json 失败: {e}")
+
+            # 合并：保留已有的 translation、audio_file_zh、duration_zh，同时包含新的 duration
+            merged_results = []
+            for result in successful_results:
+                text = result.get('text', '')
+                merged_item = {
+                    'page': result.get('page'),
+                    'index': result.get('index'),
+                    'text': text,
+                    'audio_file': result.get('audio_file'),
+                    'duration': result.get('duration', 0.0)
+                }
+                # 保留已有的中文语音和翻译字段
+                if text in existing_sentences:
+                    existing = existing_sentences[text]
+                    if existing.get('translation'):
+                        merged_item['translation'] = existing['translation']
+                    if existing.get('audio_file_zh'):
+                        merged_item['audio_file_zh'] = existing['audio_file_zh']
+                    if existing.get('duration_zh'):
+                        merged_item['duration_zh'] = existing['duration_zh']
+                merged_results.append(merged_item)
+
+            # 保存映射文件（使用新格式：{"sentences": [...]}）
             with open(mapping_path, 'w', encoding='utf-8') as f:
-                json.dump(successful_results, f, ensure_ascii=False, indent=2)
+                json.dump({'sentences': merged_results}, f, ensure_ascii=False, indent=2)
 
             await update_progress(95, f"已生成 {len(successful_results)} 个语音文件")
 
         await update_progress(100, "音频生成完成")
+        logger.info(f"[DEBUG] regenerate_audio 成功完成: book_id={book_id}, title={book.title}")
         return BookImportResponse(
             success=True,
             message=f"音频重新生成成功",
             book_id=book_id,
             title=book.title
         )
+
+    async def regenerate_audio_bilingual(
+        self,
+        db: AsyncSession,
+        book_id: str,
+        user_id: int,
+        progress_callback: Optional[callable] = None,
+        force: bool = False
+    ) -> TranslationGenerateResult:
+        """
+        重新生成书籍中英文音频
+        顺序调用:
+        1. regenerate_audio - 生成英文语音 (进度 0-50%)
+        2. generate_chinese_audio - 生成中文语音 (进度 50-100%)
+        """
+        logger.info(f"[DEBUG] regenerate_audio_bilingual 开始: book_id={book_id}, user_id={user_id}, force={force}")
+        
+        # 包装进度回调，分段处理英文和中文
+        async def english_progress(percentage: int, message: str):
+            if progress_callback:
+                # 英文进度映射到 0-50%
+                await progress_callback(percentage * 0.5, f"[英文] {message}")
+
+        async def chinese_progress(percentage: int, message: str):
+            if progress_callback:
+                # 中文进度映射到 50-100%
+                await progress_callback(50 + percentage * 0.5, f"[中文] {message}")
+
+        try:
+            # 1. 先生成英文语音
+            logger.info(f"[DEBUG] 开始生成英文语音")
+            if progress_callback:
+                await progress_callback(0, "正在生成英文语音...")
+            en_result = await self.regenerate_audio(
+                db=db,
+                book_id=book_id,
+                user_id=user_id,
+                progress_callback=english_progress,
+                force=force
+            )
+            logger.info(f"[DEBUG] 英文语音生成完成: success={en_result.success}, message={en_result.message}")
+
+            # 如果英文失败，返回失败
+            if not en_result.success:
+                logger.warning(f"[DEBUG] 英文语音生成失败: {en_result.message}")
+                return TranslationGenerateResult(success=False, message=f"英文语音生成失败: {en_result.message}")
+
+            # 2. 再生成中文语音
+            logger.info(f"[DEBUG] 开始生成中文语音")
+            if progress_callback:
+                await progress_callback(50, "正在生成中文语音...")
+            zh_result = await self.generate_chinese_audio(
+                db=db,
+                book_id=book_id,
+                user_id=user_id,
+                progress_callback=chinese_progress,
+                force=force
+            )
+            logger.info(f"[DEBUG] 中文语音生成完成: success={zh_result.success}, message={zh_result.message}")
+
+            # 返回最终结果
+            if zh_result.success:
+                # 3. 修复音频时长字段
+                if progress_callback:
+                    await progress_callback(100, "正在修复音频时长...")
+                try:
+                    await self.check_and_fix_book_audio(db, book_id)
+                except Exception as e:
+                    logger.error(f"修复音频时长失败: {e}")
+                return TranslationGenerateResult(success=True, message="中英文语音生成完成")
+            else:
+                return TranslationGenerateResult(success=False, message=f"中文语音生成失败: {zh_result.message}")
+                
+        except Exception as e:
+            logger.error(f"[DEBUG] regenerate_audio_bilingual 异常: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"[DEBUG] regenerate_audio_bilingual 堆栈: {traceback.format_exc()}")
+            return TranslationGenerateResult(success=False, message=f"发生错误: {type(e).__name__}: {str(e)}")
 
     async def sync_books_from_directory(self, db: AsyncSession) -> dict:
         """
@@ -2293,6 +2795,7 @@ class BookService:
         2. 扫描 Books 目录下的所有书籍文件夹
         3. 修复路径不匹配的记录
         4. 添加新发现的书籍到数据库
+        5. 检查并修复所有书籍的音频配置
         
         返回:
             dict: 包含修复统计信息
@@ -2300,11 +2803,15 @@ class BookService:
         from app.models.database_models import Book, BookCategoryRel, ReadingProgress
         import shutil
         
+        settings = get_settings()
+        
         result = {
             "fixed": [],
             "added": [],
             "removed": [],
-            "errors": []
+            "errors": [],
+            "audio_fixed": [],
+            "audio_errors": []
         }
         
         # 1. 获取数据库中所有书籍
@@ -2313,9 +2820,9 @@ class BookService:
         db_books = query_result.scalars().all()
         
         # 2. 扫描 Books 目录
-        books_dir = Path("Books")
+        books_dir = Path(settings.BOOKS_DIR)
         if not books_dir.exists():
-            return {"error": "Books 目录不存在"}
+            return {"error": f"Books 目录不存在: {books_dir}"}
         
         # 获取实际存在的书籍文件夹
         actual_folders = {}
@@ -2461,7 +2968,7 @@ class BookService:
                     
                     # 重命名文件夹
                     folder_path.rename(new_folder_path)
-                    print(f"文件夹已重命名: {folder_name} -> {md_stem}")
+                    logger.info(f"文件夹已重命名: {folder_name} -> {md_stem}")
                     
                     # 更新路径引用
                     folder_path = new_folder_path
@@ -2504,6 +3011,29 @@ class BookService:
                 })
         
         await db.commit()
+        
+        # 5. 检查并修复所有书籍的音频配置
+        # 重新获取所有书籍（因为可能有新增或修改）
+        stmt = select(Book)
+        query_result = await db.execute(stmt)
+        all_books = query_result.scalars().all()
+        
+        for book in all_books:
+            try:
+                audio_result = await self._check_and_fix_book_audio_internal(db, book)
+                # 合并结果
+                if audio_result.get("audio_fixed"):
+                    result["audio_fixed"].extend(audio_result["audio_fixed"])
+                if audio_result.get("audio_errors"):
+                    result["audio_errors"].extend(audio_result["audio_errors"])
+            except Exception as e:
+                logger.error(f"检查书籍音频失败 {book.title}: {e}")
+                result["audio_errors"].append({
+                    "book_id": book.id,
+                    "title": book.title,
+                    "issues": [f"音频检查失败: {str(e)}"]
+                })
+        
         return result
 
     async def supplement_all_books(
@@ -2596,6 +3126,10 @@ class BookService:
         doubao_app_id = None
         doubao_access_key = None
         doubao_resource_id = None
+        minimax_api_key = None
+        minimax_model = None
+        siliconflow_api_key = None
+        siliconflow_model = None
 
         if service_name == "kokoro-tts":
             voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else settings.KOKORO_DEFAULT_VOICE_ZH
@@ -2609,6 +3143,16 @@ class BookService:
         elif service_name == "edge-tts":
             voice_zh = settings.EDGE_TTS_DEFAULT_VOICE_ZH
             speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
+        elif service_name == "minimax-tts":
+            # MiniMax 中英文共用一个音色
+            voice_zh = user_settings.minimax_voice if user_settings else settings.MINIMAX_DEFAULT_VOICE
+            speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else 1.0
+            minimax_api_key = user_settings.minimax_api_key if user_settings else None
+            minimax_model = user_settings.minimax_model if user_settings else settings.MINIMAX_DEFAULT_MODEL
+        elif service_name == "siliconflow-tts":
+            voice_zh = user_settings.siliconflow_voice if user_settings and user_settings.siliconflow_voice else settings.SILICONFLOW_DEFAULT_VOICE
+            siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
+            siliconflow_model = user_settings.siliconflow_model if user_settings else settings.SILICONFLOW_DEFAULT_MODEL
         else:
             voice_zh = user_settings.siliconflow_voice if user_settings and user_settings.siliconflow_voice else settings.SILICONFLOW_DEFAULT_VOICE
 
@@ -2652,6 +3196,10 @@ class BookService:
                     doubao_app_id=doubao_app_id,
                     doubao_access_key=doubao_access_key,
                     doubao_resource_id=doubao_resource_id,
+                    minimax_api_key=minimax_api_key,
+                    minimax_model=minimax_model,
+                    siliconflow_api_key=siliconflow_api_key,
+                    siliconflow_model=siliconflow_model,
                     progress_callback=book_progress_callback,
                     force=force
                 )
@@ -2663,7 +3211,7 @@ class BookService:
                     "status": "success" if book_result["success"] else "failed",
                     "message": book_result["message"]
                 })
-                print(f"处理完成 [{book_index}/{total_books}]: {book_title} - {book_result['message']}")
+                logger.info(f"处理完成 [{book_index}/{total_books}]: {book_title} - {book_result['message']}")
 
             except Exception as e:
                 error_msg = str(e)
@@ -2674,7 +3222,7 @@ class BookService:
                     "status": "failed",
                     "message": error_msg
                 })
-                print(f"处理异常 [{book_index}/{total_books}]: {book_title} - {error_msg}")
+                logger.warning(f"处理异常 [{book_index}/{total_books}]: {book_title} - {error_msg}")
 
         # 最终进度
         await update_progress(100, f"处理完成！成功 {result['processed_books']} 本，失败 {result['failed_books']} 本")
@@ -2698,6 +3246,10 @@ class BookService:
         doubao_app_id: str,
         doubao_access_key: str,
         doubao_resource_id: str,
+        minimax_api_key: str = None,
+        minimax_model: str = None,
+        siliconflow_api_key: str = None,
+        siliconflow_model: str = None,
         progress_callback: Optional[callable] = None,
         force: bool = False
     ) -> dict:
@@ -2755,9 +3307,17 @@ class BookService:
         await update_progress_local(10, f"共 {len(sentences_mapping)} 个句子，开始补充...")
 
         # 处理每个句子
-        semaphore = asyncio.Semaphore(3)
+        # edge-tts 需要串行（QPS<=1限制），其他TTS可以并发
+        max_concurrent = 1 if service_name == "edge-tts" else 3
+        semaphore = asyncio.Semaphore(max_concurrent)
         updated_count = [0]
         total_count = len(sentences_mapping)
+        # 统计需要处理的句子数量（用于进度显示）
+        need_process_count = sum(
+            1 for s in sentences_mapping
+            if force or not existing_map.get(s['text'], {}).get('audio_file_zh')
+        )
+        generated_count = [0]  # 记录成功生成的数量
 
         async def process_sentence(sent_info: dict) -> dict:
             async with semaphore:
@@ -2785,6 +3345,12 @@ class BookService:
                     await update_progress_local(progress, f"跳过已有 ({current}/{total_count})")
                     return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file}
 
+                # 更新处理进度
+                updated_count[0] += 1
+                current = updated_count[0]
+                progress = 10 + int((current / need_process_count) * 85) if need_process_count > 0 else 95
+                await update_progress_local(progress, f"处理中 ({current}/{need_process_count})")
+
                 # 需要翻译
                 if need_translate and not translation:
                     try:
@@ -2796,9 +3362,11 @@ class BookService:
                         if trans_result:
                             translation = trans_result
                     except Exception as e:
-                        print(f"翻译失败: {text[:30]}... - {e}")
+                                    logger.error(f"翻译失败: {text[:30]}... - {e}")
 
                 # 需要生成中文音频
+                audio_generated = False  # 标记是否成功生成音频
+                duration_zh = 0.0
                 if need_chinese_audio and translation:
                     try:
                         tts_result = await tts_service.generate_speech(
@@ -2808,6 +3376,10 @@ class BookService:
                             doubao_app_id=doubao_app_id,
                             doubao_access_key=doubao_access_key,
                             doubao_resource_id=doubao_resource_id,
+                            minimax_api_key=minimax_api_key,
+                            minimax_model=minimax_model,
+                            siliconflow_api_key=siliconflow_api_key,
+                            siliconflow_model=siliconflow_model,
                             speed=speed
                         )
 
@@ -2817,32 +3389,30 @@ class BookService:
                             audio_bytes = base64.b64decode(tts_result.audio_data)
                             with open(audio_path, "wb") as f:
                                 f.write(audio_bytes)
+                            audio_generated = True  # 标记成功生成
+                            generated_count[0] += 1
                             # 获取时长
                             try:
                                 audio = MP3(str(audio_path))
                                 duration_zh = audio.info.length
                             except:
                                 duration_zh = 0.0
-                        else:
-                            duration_zh = 0.0
                     except Exception as e:
-                        print(f"生成中文音频失败: {text[:30]}... - {e}")
-                        duration_zh = 0.0
+                                    logger.error(f"生成中文音频失败: {text[:30]}... - {e}")
 
-                updated_count[0] += 1
-                current = updated_count[0]
-                progress = 10 + int((current / total_count) * 85)
-                await update_progress_local(progress, f"处理中 ({current}/{total_count})")
-
-                return {
+                # 构建返回结果，只有成功生成时才包含 audio_file_zh
+                result = {
                     **sent_info,
                     'text': text,
                     'translation': translation,
                     'audio_file': audio_file,
-                    'audio_file_zh': audio_file_zh,
                     'duration': existing.get('duration', 0.0),
-                    'duration_zh': existing.get('duration_zh', 0.0)
                 }
+                # 只有成功生成中文音频或已有音频文件时才包含 audio_file_zh
+                if audio_generated or (existing.get('audio_file_zh') and (audio_folder / existing['audio_file_zh']).exists()):
+                    result['audio_file_zh'] = audio_file_zh if audio_generated else existing['audio_file_zh']
+                    result['duration_zh'] = duration_zh if audio_generated else existing.get('duration_zh', 0.0)
+                return result
 
         # 并发处理所有句子
         tasks = [process_sentence(sent) for sent in sentences_mapping]
@@ -2850,6 +3420,10 @@ class BookService:
 
         # 过滤成功的结果
         successful_results = [r for r in results if isinstance(r, dict)]
+
+        # 检查有多少句子有中文音频
+        sentences_with_zh_audio = sum(1 for r in successful_results if r.get('audio_file_zh'))
+        sentences_without_zh_audio = len(successful_results) - sentences_with_zh_audio
 
         # 保存更新的 sentences.json
         mapping_data = {
@@ -2859,10 +3433,563 @@ class BookService:
             json.dump(mapping_data, f, ensure_ascii=False, indent=2)
 
         await update_progress_local(100, "完成")
-        return {
-            "success": True,
-            "message": f"补充完成，{len(successful_results)} 个句子"
-        }
+        
+        # 如果所有句子都有中文音频才返回成功
+        if sentences_without_zh_audio == 0:
+            return {
+                "success": True,
+                "message": f"补充完成，{len(successful_results)} 个句子全部生成中文音频"
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"补充完成，{sentences_with_zh_audio}/{len(successful_results)} 个句子有中文音频，{sentences_without_zh_audio} 个失败"
+            }
+
+    async def _check_and_fix_book_audio_internal(self, db: AsyncSession, book) -> dict:
+        """
+        检查并修复单本书籍的音频配置（内部方法，接收 Book 对象）
+
+        检查内容：
+        - sentences.json 文件格式
+        - 缺失的字段自动修复（duration、duration_zh）
+        - 音频文件完整性检查
+
+        返回:
+            dict: 包含检查和修复结果，格式兼容前端 AudioFixDialog
+        """
+        # 转换为绝对路径
+        abs_file_path = Path(book.file_path)
+        book_path = abs_file_path
+        book_folder = book_path.parent
+        audio_folder = book_folder / "audio"
+        mapping_path = audio_folder / "sentences.json"
+
+        # 兼容前端 AudioFixDialog 的返回格式
+        audio_fixed = []
+        audio_errors = []
+
+        # 检查 sentences.json 是否存在
+        if not mapping_path.exists():
+            # sentences.json 不存在不算错误，可能是新书籍还没生成音频
+            return {"audio_fixed": audio_fixed, "audio_errors": audio_errors}
+
+        # 读取并检查 sentences.json
+        try:
+            with open(mapping_path, 'r', encoding='utf-8') as f:
+                sentences_data = json.load(f)
+        except json.JSONDecodeError as e:
+            audio_errors.append({
+                "book_id": book.id,
+                "title": book.title,
+                "issues": [f"sentences.json 格式错误: {e}"]
+            })
+            return {"audio_fixed": audio_fixed, "audio_errors": audio_errors}
+
+        # 兼容旧格式：如果直接是数组
+        if isinstance(sentences_data, list):
+            sentences_data = {'sentences': sentences_data}
+
+        sentences = sentences_data.get('sentences', [])
+        if not isinstance(sentences, list):
+            audio_errors.append({
+                "book_id": book.id,
+                "title": book.title,
+                "issues": [f"sentences.json 格式错误: 期望数组，实际为 {type(sentences).__name__}"]
+            })
+            return {"audio_fixed": audio_fixed, "audio_errors": audio_errors}
+
+        total_sentences = len(sentences)
+
+        # 统计修复信息
+        fixed_fields = []
+        warnings = []
+        issues = []
+
+        # 扫描 audio 目录，获取所有 mp3 文件名集合（用于 MD5 哈希匹配）
+        existing_mp3_files = set()
+        if audio_folder.exists():
+            for f_path in audio_folder.iterdir():
+                if f_path.suffix.lower() == ".mp3":
+                    existing_mp3_files.add(f_path.name)
+        logger.info(f"📖 扫描 audio 目录: {audio_folder}, 找到 {len(existing_mp3_files)} 个mp3文件")
+        
+        # 检查每个句子的音频
+        duration_fixed_count = 0
+        duration_zh_fixed_count = 0
+        audio_file_fixed_count = 0
+        missing_audio_count = 0
+
+        for i, item in enumerate(sentences):
+            # 确保每个item是字典
+            if not isinstance(item, dict):
+                issues.append(f"第 {i+1} 条数据格式错误（非字典）")
+                continue
+
+            sentence = item.get("text", "")
+            audio_file = item.get("audio_file")
+
+            # 检查必要字段
+            if not sentence:
+                issues.append(f"第 {i+1} 条缺少 text 字段")
+                continue
+
+            # 如果缺少 audio_file 字段，尝试通过 MD5 哈希匹配已有音频文件
+            if not audio_file:
+                expected_filename = hashlib.md5(sentence.encode('utf-8')).hexdigest() + ".mp3"
+                # 调试：打印前3个匹配结果
+                if i < 3:
+                    logger.info(f"🔍 句子[{i}] MD5匹配: text[:30]={sentence[:30]}..., expected={expected_filename}, found={expected_filename in existing_mp3_files}")
+                if expected_filename in existing_mp3_files:
+                    item["audio_file"] = expected_filename
+                    audio_file = expected_filename
+                    audio_file_fixed_count += 1
+                else:
+                    missing_audio_count += 1
+                    continue
+
+            # 检查音频文件是否存在
+            audio_path = audio_folder / audio_file
+            if not audio_path.exists():
+                missing_audio_count += 1
+                continue
+
+            # 检查并补充英文音频时长
+            duration_fixed_for_item = False
+            if "duration" not in item or item["duration"] is None or item["duration"] == 0.0:
+                try:
+                    audio = MP3(str(audio_path))
+                    item["duration"] = round(audio.info.length, 3)
+                    duration_fixed_for_item = True
+                    duration_fixed_count += 1
+                except:
+                    item["duration"] = 0.0
+
+            # 检查并补充中文音频时长
+            duration_zh_fixed_for_item = False
+            audio_file_zh = item.get("audio_file_zh")
+            if audio_file_zh:
+                audio_zh_path = audio_folder / audio_file_zh
+                if audio_zh_path.exists():
+                    if "duration_zh" not in item or item["duration_zh"] is None or item["duration_zh"] == 0.0:
+                        try:
+                            audio_zh = MP3(str(audio_zh_path))
+                            item["duration_zh"] = round(audio_zh.info.length, 3)
+                            duration_zh_fixed_for_item = True
+                            duration_zh_fixed_count += 1
+                        except:
+                            item["duration_zh"] = 0.0
+
+            # 补充 page 和 index 字段
+            if "page" not in item:
+                item["page"] = 0
+            if "index" not in item:
+                item["index"] = i
+
+        # 构建修复信息
+        logger.info(f"📊 修复统计: audio_file补全={audio_file_fixed_count}, duration补全={duration_fixed_count}, missing={missing_audio_count}")
+        if audio_file_fixed_count > 0:
+            fixed_fields.append(f"已通过MD5哈希匹配补全 {audio_file_fixed_count} 个英文音频文件(audio_file)")
+        if duration_fixed_count > 0:
+            fixed_fields.append(f"已补全 {duration_fixed_count} 个英文音频时长(duration)")
+        if duration_zh_fixed_count > 0:
+            fixed_fields.append(f"已补全 {duration_zh_fixed_count} 个中文音频时长(duration_zh)")
+
+        if missing_audio_count > 0:
+            warnings.append(f"警告: {missing_audio_count} 个句子缺少英文音频文件")
+
+        # 检查是否有中文音频但没有中文时长
+        sentences_with_zh = sum(1 for s in sentences if s.get("audio_file_zh"))
+        sentences_with_duration_zh = sum(1 for s in sentences if s.get("audio_file_zh") and s.get("duration_zh", 0) > 0)
+        if sentences_with_zh > 0 and sentences_with_duration_zh < sentences_with_zh:
+            warnings.append(f"警告: {sentences_with_zh - sentences_with_duration_zh} 个句子有中文音频但缺少时长")
+
+        # 保存修复后的数据
+        if audio_file_fixed_count > 0 or duration_fixed_count > 0 or duration_zh_fixed_count > 0 or warnings:
+            try:
+                with open(mapping_path, 'w', encoding='utf-8') as f:
+                    json.dump({'sentences': sentences}, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                issues.append(f"保存修复失败: {e}")
+
+        # 构建返回结果
+        if fixed_fields or warnings:
+            audio_fixed.append({
+                "book_id": book.id,
+                "title": book.title,
+                "fixed_fields": fixed_fields,
+                "warnings": warnings
+            })
+
+        if issues:
+            audio_errors.append({
+                "book_id": book.id,
+                "title": book.title,
+                "issues": issues
+            })
+
+        return {"audio_fixed": audio_fixed, "audio_errors": audio_errors}
+
+    async def check_and_fix_book_audio(self, db: AsyncSession, book_id: str) -> dict:
+        """
+        检查并修复单本书籍的音频配置
+
+        检查内容：
+        - sentences.json 文件格式
+        - 缺失的字段自动修复（duration、duration_zh）
+        - 音频文件完整性检查
+
+        返回:
+            dict: 包含检查和修复结果，格式兼容前端 AudioFixDialog
+        """
+        # 获取书籍信息
+        book = await self.repository.get(db, book_id)
+        if not book:
+            raise ValueError("书籍未找到")
+
+        return await self._check_and_fix_book_audio_internal(db, book)
+
+    async def generate_translation(
+        self,
+        db: AsyncSession,
+        book_id: str,
+        user_id: int,
+        progress_callback,
+        force: bool = False
+    ) -> TranslationGenerateResult:
+        """
+        生成书籍句子翻译
+        1. 获取用户翻译API配置
+        2. 读取 sentences.json
+        3. 翻译每个英文句子为中文
+        4. 保存翻译结果到 sentences.json
+        """
+        # 获取书籍信息
+        book = await self.repository.get(db, book_id)
+        if not book:
+            return TranslationGenerateResult(success=False, message="书籍未找到")
+
+        # 获取翻译API配置
+        api, error_msg = await get_effective_translation_api_config(db, user_id)
+        if error_msg:
+            await progress_callback(0, f"获取翻译API失败: {error_msg}")
+            return TranslationGenerateResult(success=False, message=error_msg)
+
+        # 获取书籍音频文件夹路径
+        book_path = Path(book.file_path)
+        book_folder = book_path.parent
+        audio_folder = book_folder / "audio"
+        mapping_path = audio_folder / "sentences.json"
+
+        if not mapping_path.exists():
+            return TranslationGenerateResult(success=False, message="未找到 sentences.json 文件")
+
+        try:
+            with open(mapping_path, 'r', encoding='utf-8') as f:
+                sentences_data = json.load(f)
+        except Exception as e:
+            return TranslationGenerateResult(success=False, message=f"读取 sentences.json 失败: {str(e)}")
+
+        sentences = sentences_data.get("sentences", [])
+        if not sentences:
+            return TranslationGenerateResult(success=True, message="没有需要翻译的句子")
+
+        # 统计需要翻译的句子
+        need_translate_count = 0
+        for sentence in sentences:
+            # 判断是否需要翻译：force=True 时全部翻译，否则只翻译没有翻译的
+            if force or "translation" not in sentence or not sentence["translation"]:
+                need_translate_count += 1
+
+        if need_translate_count == 0:
+            return TranslationGenerateResult(success=True, message="所有句子已有翻译")
+
+        await progress_callback(0, f"开始翻译 {need_translate_count} 个句子...")
+
+        translated_count = 0
+        error_count = 0
+        total = len(sentences)
+
+        # 中间保存计数器（每翻译20个句子保存一次）
+        save_interval = 20
+        last_save_index = 0
+
+        for i, sentence in enumerate(sentences):
+            # 判断是否需要翻译
+            if not force and sentence.get("translation"):
+                continue
+
+            text = sentence.get("text", "")
+            if not text:
+                continue
+
+            # 调用翻译API
+            result = await translation_service.translate_with_result(
+                text=text,
+                from_lang="en",
+                to_lang="zh",
+                app_id=api.app_id,
+                app_key=api.app_key
+            )
+
+            if result.success:
+                sentence["translation"] = result.translation
+                translated_count += 1
+            else:
+                error_count += 1
+                logger.warning(f"翻译失败 [{i}]: {text[:30]}... - {result.error}")
+
+            # 更新进度
+            progress = int((i / total) * 100)
+            if translated_count % 10 == 0 or i == total - 1:
+                await progress_callback(
+                    progress,
+                    f"翻译中... {translated_count}/{need_translate_count}"
+                )
+
+            # 检查是否需要保存中间进度
+            if i - last_save_index >= save_interval:
+                last_save_index = i
+                # 检查是否已取消
+                if is_cancelled(book_id):
+                    await progress_callback(
+                        int((i / total) * 100),
+                        f"翻译已取消 (已翻译 {translated_count}/{need_translate_count})"
+                    )
+                    clear_cancel_event(book_id)
+                    # 保存已翻译的内容
+                    try:
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump(sentences_data, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+                    return TranslationGenerateResult(
+                        success=False,
+                        message=f"翻译已取消 (已翻译 {translated_count}/{need_translate_count})"
+                    )
+
+        # 循环结束后再次检查取消状态
+        if is_cancelled(book_id):
+            await progress_callback(100, f"翻译已取消 (已翻译 {translated_count}/{need_translate_count})")
+            clear_cancel_event(book_id)
+            try:
+                with open(mapping_path, 'w', encoding='utf-8') as f:
+                    json.dump(sentences_data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return TranslationGenerateResult(
+                success=False,
+                message=f"翻译已取消 (已翻译 {translated_count}/{need_translate_count})"
+            )
+
+        # 保存翻译结果
+        try:
+            with open(mapping_path, 'w', encoding='utf-8') as f:
+                json.dump(sentences_data, f, ensure_ascii=False, indent=2)
+
+            message = f"翻译完成！成功 {translated_count} 个"
+            if error_count > 0:
+                message += f"，失败 {error_count} 个"
+
+            await progress_callback(100, message)
+            return TranslationGenerateResult(success=True, message=message)
+
+        except Exception as e:
+            return TranslationGenerateResult(success=False, message=f"保存翻译结果失败: {str(e)}")
+
+    async def generate_chinese_audio(
+        self,
+        db: AsyncSession,
+        book_id: str,
+        user_id: int,
+        progress_callback,
+        force: bool = False
+    ) -> TranslationGenerateResult:
+        """
+        生成中文音频
+        1. 获取用户设置（翻译API、TTS配置）
+        2. 检查 sentences.json 是否有翻译
+        3. 若无翻译，先翻译所有句子
+        4. 生成中文音频
+        5. 更新 sentences.json
+        """
+        async def update_progress_local(percentage: int, message: str):
+            if progress_callback:
+                await progress_callback(percentage, message)
+
+        # 获取用户设置
+        result = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
+        user_settings = result.scalars().first()
+        app_settings = get_settings()
+
+        # 获取翻译API配置
+        translation_api, error_msg = await get_effective_translation_api_config(db, user_id)
+        if error_msg:
+            await update_progress_local(0, f"获取翻译API失败: {error_msg}")
+            return TranslationGenerateResult(success=False, message=error_msg)
+
+        # 获取书籍信息
+        book = await self.repository.get(db, book_id)
+        if not book:
+            return TranslationGenerateResult(success=False, message="书籍未找到")
+
+        # 确定TTS服务配置
+        service_name = user_settings.tts_service_name if user_settings else "kokoro-tts"
+        voice_zh = None
+        speed = 1.0
+        doubao_app_id = None
+        doubao_access_key = None
+        doubao_resource_id = app_settings.DOUBAO_DEFAULT_RESOURCE_ID
+        minimax_api_key = None
+        minimax_model = None
+        siliconflow_api_key = None
+        siliconflow_model = None
+
+        if service_name == "kokoro-tts":
+            voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else app_settings.KOKORO_DEFAULT_VOICE_ZH
+            speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else 1.0
+        elif service_name == "minimax-tts":
+            voice_zh = user_settings.minimax_voice_zh if user_settings and user_settings.minimax_voice_zh else app_settings.MINIMAX_DEFAULT_VOICE_ZH
+            speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else 1.0
+            minimax_api_key = user_settings.minimax_api_key if user_settings else None
+            minimax_model = user_settings.minimax_model if user_settings else app_settings.MINIMAX_DEFAULT_MODEL
+        elif service_name == "edge-tts":
+            # 验证中文语音名称是否有效
+            raw_voice_zh = user_settings.edge_tts_voice_zh if user_settings and user_settings.edge_tts_voice_zh else app_settings.EDGE_TTS_DEFAULT_VOICE_ZH
+            voice_zh = validate_edge_tts_voice(raw_voice_zh, app_settings.EDGE_TTS_DEFAULT_VOICE_ZH)
+            speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
+        elif service_name == "siliconflow-tts":
+            voice_zh = user_settings.siliconflow_voice_zh if user_settings and user_settings.siliconflow_voice_zh else app_settings.SILICONFLOW_DEFAULT_VOICE_ZH
+            siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
+            siliconflow_model = user_settings.siliconflow_model if user_settings else app_settings.SILICONFLOW_DEFAULT_MODEL
+        else:
+            # 豆包TTS
+            voice_zh = user_settings.doubao_voice_zh if user_settings and user_settings.doubao_voice_zh else app_settings.DOUBAO_DEFAULT_VOICE_ZH
+            speed = user_settings.doubao_speed if user_settings and user_settings.doubao_speed is not None else 1.0
+            doubao_app_id = user_settings.doubao_app_id if user_settings else None
+            doubao_access_key = user_settings.doubao_access_key if user_settings else None
+            doubao_resource_id = user_settings.doubao_resource_id if user_settings else app_settings.DOUBAO_DEFAULT_RESOURCE_ID
+
+        # 调用内部方法补充中文音频
+        result = await self._supplement_single_book(
+            db=db,
+            book=book,
+            translation_api=translation_api,
+            service_name=service_name,
+            voice_zh=voice_zh,
+            speed=speed,
+            doubao_app_id=doubao_app_id,
+            doubao_access_key=doubao_access_key,
+            doubao_resource_id=doubao_resource_id,
+            minimax_api_key=minimax_api_key,
+            minimax_model=minimax_model,
+            siliconflow_api_key=siliconflow_api_key,
+            siliconflow_model=siliconflow_model,
+            progress_callback=progress_callback,
+            force=force
+        )
+
+        return TranslationGenerateResult(success=result["success"], message=result["message"])
+
+
+async def compress_all_images(db: AsyncSession) -> dict:
+    """
+    压缩所有书籍的图片，转换为WebP格式（管理员功能）
+    
+    扫描所有书籍的assets目录，将jpg/jpeg/png/bmp格式图片转换为WebP
+    并自动更新MD文件中的图片引用链接
+    
+    返回:
+        dict: 包含转换、跳过、错误数量及详细信息
+    """
+    from app.utils.image_utils import compress_to_webp
+    
+    settings = get_settings()
+    books_dir = Path(settings.BOOKS_DIR)
+    
+    # 支持转换的图片格式
+    convertible_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+    
+    total_converted = 0
+    total_skipped = 0
+    total_errors = 0
+    error_details = []
+    
+    # 遍历所有书籍目录
+    for book_dir in books_dir.iterdir():
+        if not book_dir.is_dir():
+            continue
+            
+        assets_dir = book_dir / "assets"
+        if not assets_dir.exists():
+            continue
+        
+        # 查找可转换的图片
+        for img_file in assets_dir.iterdir():
+            if not img_file.is_file():
+                continue
+                
+            if img_file.suffix.lower() not in convertible_extensions:
+                continue
+            
+            # 检查是否已有对应的WebP文件
+            webp_file = img_file.with_suffix('.webp')
+            if webp_file.exists():
+                total_skipped += 1
+                logger.info(f"跳过 {img_file.name}，WebP版本已存在")
+                continue
+            
+            try:
+                # 转换为WebP
+                success, file_size, saved_path = compress_to_webp(
+                    source=img_file,
+                    target_path=webp_file,
+                    quality=80
+                )
+                
+                if success:
+                    # 删除原图
+                    img_file.unlink()
+                    total_converted += 1
+                    logger.info(f"转换成功: {img_file.name} -> {saved_path.name}")
+                    
+                    # 更新MD文件中的引用
+                    md_file = book_dir / f"{book_dir.name}.md"
+                    if md_file.exists():
+                        md_content = md_file.read_text(encoding='utf-8')
+                        # 更新图片引用（支持 ./assets/xxx.jpg 和 assets/xxx.jpg 两种格式）
+                        old_ref_patterns = [
+                            f"./assets/{img_file.name}",
+                            f"assets/{img_file.name}"
+                        ]
+                        for old_ref in old_ref_patterns:
+                            if old_ref in md_content:
+                                new_ref = old_ref.replace(img_file.name, webp_file.name)
+                                md_content = md_content.replace(old_ref, new_ref)
+                        md_file.write_text(md_content, encoding='utf-8')
+                else:
+                    total_errors += 1
+                    error_msg = f"{book_dir.name}/{img_file.name}: 转换失败"
+                    error_details.append(error_msg)
+                    logger.error(error_msg)
+                    
+            except Exception as e:
+                total_errors += 1
+                error_msg = f"{book_dir.name}/{img_file.name}: {str(e)}"
+                error_details.append(error_msg)
+                logger.error(f"转换图片失败: {error_msg}")
+    
+    result = {
+        "success": True,
+        "message": f"图片压缩完成: 转换{total_converted}个, 跳过{total_skipped}个, 错误{total_errors}个",
+        "converted": total_converted,
+        "skipped": total_skipped,
+        "errors": total_errors,
+        "error_details": error_details[:10]  # 只返回前10个错误详情
+    }
+    
+    logger.info(result["message"])
+    return result
 
 
 book_service = BookService()

@@ -22,10 +22,13 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "bf_v0isabella"
     speed: float = 1.0
-    service_name: Optional[str] = None  # 可选，指定服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts' 或 'edge-tts'
+    service_name: Optional[str] = None  # 可选，指定服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts', 'edge-tts', 'minimax-tts'
     # 硅基流动额外参数
     siliconflow_api_key: Optional[str] = None
     siliconflow_model: Optional[str] = None
+    # MiniMax额外参数
+    minimax_api_key: Optional[str] = None
+    minimax_model: Optional[str] = None
 
 
 @router.get("/", response_model=TTSResponse)
@@ -125,6 +128,8 @@ async def text_to_speech_post(
         doubao_resource_id = None
         siliconflow_api_key = None
         siliconflow_model = None
+        minimax_api_key = None
+        minimax_model = None
 
         if service_name == "kokoro-tts":
             # 使用 Kokoro 独立设置
@@ -140,6 +145,12 @@ async def text_to_speech_post(
             # 使用 Edge-TTS 独立设置
             voice = user_settings.edge_tts_voice if user_settings else None
             speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
+        elif service_name == "minimax-tts":
+            # 使用 MiniMax 独立设置
+            voice = user_settings.minimax_voice if user_settings else None
+            speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
+            minimax_api_key = user_settings.minimax_api_key if user_settings else None
+            minimax_model = user_settings.minimax_model if user_settings else None
         else:
             # 使用豆包独立设置
             voice = user_settings.doubao_voice if user_settings else None
@@ -159,6 +170,11 @@ async def text_to_speech_post(
             siliconflow_api_key = request.siliconflow_api_key
         if request.siliconflow_model:
             siliconflow_model = request.siliconflow_model
+        # 如果请求中指定了MiniMax参数，使用请求中的
+        if request.minimax_api_key:
+            minimax_api_key = request.minimax_api_key
+        if request.minimax_model:
+            minimax_model = request.minimax_model
 
         print(f"TTS POST请求: service={service_name}, text={request.text[:50]}..., voice={voice}, speed={speed}")
 
@@ -171,6 +187,8 @@ async def text_to_speech_post(
             doubao_resource_id=doubao_resource_id,
             siliconflow_api_key=siliconflow_api_key,
             siliconflow_model=siliconflow_model,
+            minimax_api_key=minimax_api_key,
+            minimax_model=minimax_model,
             speed=speed if service_name != "siliconflow-tts" else None
         )
         print(f"TTS生成成功: {result}")

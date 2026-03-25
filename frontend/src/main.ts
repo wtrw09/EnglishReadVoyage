@@ -11,6 +11,8 @@ import 'vant/es/icon/style/index'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 // 导入自定义样式（覆盖Vant默认样式）
 import './style.css'
+// 导入Vant触摸模拟器（支持PC端鼠标事件）
+import '@vant/touch-emulator'
 
 const app = createApp(App)
 

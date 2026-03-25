@@ -54,7 +54,8 @@
       "Bash(pip search minimax-coding-plan-mcp 2>&1 || pip index versions minimax-coding-plan-mcp 2>&1)",
       "Bash(export MINIMAX_API_KEY=\"sk-cp-dnnCMmPGHQwqbzqbPA8lVbDJClbU7GMxRqjd9kS6oXE1DiTjaNXGg01RwKr3ijuQgJFPvuutxieoGn9rIxIxFD5Njxe_knxNrA2x800tWwoPLNOjW-X-EPU\" && python -m minimax_mcp --help 2>&1)",
       "Bash(uvx:*)",
-      "Bash(echo uvx exited:*)"
+      "Bash(echo uvx exited:*)",
+      "mcp__MiniMax__understand_image"
     ]
   }
 }

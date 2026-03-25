@@ -48,7 +48,12 @@ def get_default_tts_config():
             "siliconflow_voice": settings.SILICONFLOW_DEFAULT_VOICE,
             # Edge-TTS 默认配置
             "edge_tts_voice": settings.EDGE_TTS_DEFAULT_VOICE,
-            "edge_tts_speed": settings.EDGE_TTS_DEFAULT_SPEED
+            "edge_tts_speed": settings.EDGE_TTS_DEFAULT_SPEED,
+            # MiniMax TTS 默认配置
+            "minimax_api_key": None,
+            "minimax_model": settings.MINIMAX_DEFAULT_MODEL,
+            "minimax_voice": settings.MINIMAX_DEFAULT_VOICE,
+            "minimax_speed": settings.MINIMAX_DEFAULT_SPEED
         }
     return _default_tts_config
 
@@ -114,7 +119,12 @@ async def get_user_settings(
             siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
             # Edge-TTS设置
             edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
-            edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
+            edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0),
+            # MiniMax TTS设置
+            minimax_api_key=settings.minimax_api_key or default_config.get("minimax_api_key"),
+            minimax_model=settings.minimax_model or default_config.get("minimax_model"),
+            minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
+            minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
         ),
         phonetic=UserPhoneticSettings(
             accent=settings.phonetic_accent or "uk"
@@ -276,6 +286,21 @@ async def update_tts_settings(
             )
         settings.edge_tts_speed = request.edge_tts_speed
 
+    # 更新 MiniMax TTS 设置
+    if request.minimax_api_key is not None:
+        settings.minimax_api_key = request.minimax_api_key.strip() if request.minimax_api_key.strip() else None
+    if request.minimax_model is not None:
+        settings.minimax_model = request.minimax_model.strip() if request.minimax_model.strip() else None
+    if request.minimax_voice is not None:
+        settings.minimax_voice = request.minimax_voice.strip() if request.minimax_voice.strip() else None
+    if request.minimax_speed is not None:
+        if not (0.25 <= request.minimax_speed <= 4.0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MiniMax 朗读速度必须在 0.25 到 4.0 之间"
+            )
+        settings.minimax_speed = request.minimax_speed
+
     await db.commit()
     await db.refresh(settings)
 
@@ -299,7 +324,12 @@ async def update_tts_settings(
         siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
         # Edge-TTS设置
         edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
-        edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0)
+        edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0),
+        # MiniMax TTS设置
+        minimax_api_key=settings.minimax_api_key or default_config.get("minimax_api_key"),
+        minimax_model=settings.minimax_model or default_config.get("minimax_model"),
+        minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
+        minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
     )
 
 
@@ -582,3 +612,128 @@ async def get_edge_tts_voices(
     except Exception as e:
         print(f"获取Edge-TTS语音列表失败: {e}")
         return {"voices": []}
+
+
+@router.get("/tts/minimax/voices")
+async def get_minimax_voices(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取 MiniMax 可用的语音列表。
+
+    从 MiniMax API 获取 system_voice 列表。
+
+    Returns:
+        语音列表
+    """
+    import os
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+    
+    # 优先从用户数据库设置获取 API Key，其次使用全局环境变量
+    api_key = settings.minimax_api_key if settings.minimax_api_key else os.getenv("MINIMAX_API_KEY")
+
+    if not api_key:
+        return {"voices": [], "error": "未配置 MiniMax API Key"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://api.minimaxi.com/v1/get_voice",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={"voice_type": "all"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                voices = []
+
+                # 提取系统音色（仅英文 - 以 English_ 开头）
+                system_voices = data.get("system_voice", [])
+                for voice in system_voices:
+                    voice_id = voice.get("voice_id", "")
+                    voice_name = voice.get("voice_name", "")
+                    description = voice.get("description", [])
+                    desc_text = description[0] if description else ""
+
+                    # 只保留 English_ 开头的明确英文音色
+                    if not voice_id.startswith("English_"):
+                        continue
+
+                    # 判断口音类型（美式/英式）
+                    accent = "美式英语"
+                    if any(keyword in desc_text for keyword in ["英式", "英口", "British"]):
+                        accent = "英式英语"
+                    elif any(keyword in desc_text for keyword in ["澳大利亚", "澳式", "Aussie", "australia"]):
+                        accent = "澳大利亚英语"
+                    elif any(keyword in desc_text for keyword in ["印度", "India"]):
+                        accent = "印度英语"
+                    elif any(keyword in desc_text for keyword in ["苏格兰", "Scotland"]):
+                        accent = "苏格兰英语"
+
+                    # 构建显示名称：口音 + 姓名
+                    display_name = f"{accent} {voice_name}"
+
+                    voices.append({
+                        "id": voice_id,
+                        "name": display_name,
+                        "description": desc_text[:50] if desc_text else ""
+                    })
+
+                return {"voices": voices}
+            else:
+                return {"voices": [], "error": f"获取音色失败: {response.status_code}"}
+
+    except Exception as e:
+        return {"voices": [], "error": str(e)}
+
+
+@router.get("/tts/minimax/usage")
+async def get_minimax_usage(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    查询 MiniMax Token Plan 剩余配额。
+
+    返回 TTS HD 每日配额使用情况。
+
+    Returns:
+        配额信息
+    """
+    import os
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+    
+    # 优先从用户数据库设置获取 API Key，其次使用全局环境变量
+    api_key = settings.minimax_api_key if settings.minimax_api_key else os.getenv("MINIMAX_API_KEY")
+
+    if not api_key:
+        return {"error": "未配置 MiniMax API Key"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # MiniMax 用量查询 API（使用 www.minimaxi.com）
+            response = await client.get(
+                "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            print(f"MiniMax用量查询响应: {response.status_code}, {response.text[:500]}")
+            if response.status_code == 200:
+                data = response.json()
+                # 返回 model_remains 数组
+                return {"model_remains": data.get("model_remains", [])}
+            else:
+                return {"error": f"查询失败: {response.status_code}, {response.text[:200]}"}
+    except Exception as e:
+        print(f"MiniMax用量查询异常: {e}")
+        return {"error": str(e)}

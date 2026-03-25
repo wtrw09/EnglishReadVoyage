@@ -2,9 +2,12 @@
 import asyncio
 import hashlib
 import urllib.parse
+import logging
 from typing import Optional, Tuple
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class TranslationResult:
@@ -94,17 +97,17 @@ class TranslationService:
                 result = response.json()
 
                 trans_result = result.get("trans_result")
-                if trans_result and len(trans_result) > 0:
+                if trans_result and len(trans_result) > 0 and trans_result[0].get("dst"):
                     return trans_result[0]["dst"]
                 elif "error_code" in result:
-                    print(f"百度翻译API错误: {result.get('error_msg', '未知错误')}")
+                    logger.warning(f"百度翻译API错误: {result.get('error_msg', '未知错误')}")
                     return None
                 else:
-                    print(f"百度翻译API返回异常: {result}")
+                    logger.warning(f"百度翻译API返回异常: {result}")
                     return None
 
             except Exception as e:
-                print(f"百度翻译请求失败: {e}")
+                logger.error(f"百度翻译请求失败: {e}")
                 return None
 
         return None
@@ -164,18 +167,18 @@ class TranslationService:
                 result = response.json()
 
                 trans_result = result.get("trans_result")
-                if trans_result and len(trans_result) > 0:
+                if trans_result and len(trans_result) > 0 and trans_result[0].get("dst"):
                     return TranslationResult(translation=trans_result[0]["dst"])
                 elif "error_code" in result:
                     error_msg = result.get('error_msg', '未知错误')
-                    print(f"百度翻译API错误: {error_msg}")
+                    logger.warning(f"百度翻译API错误: {error_msg}")
                     return TranslationResult(error=f"API错误: {error_msg}")
                 else:
-                    print(f"百度翻译API返回异常: {result}")
+                    logger.warning(f"百度翻译API返回异常: {result}")
                     return TranslationResult(error=f"API返回异常: {result}")
 
             except Exception as e:
-                print(f"百度翻译请求失败: {e}")
+                logger.error(f"百度翻译请求失败: {e}")
                 return TranslationResult(error=f"请求失败: {str(e)}")
 
         return TranslationResult(error="未知错误")

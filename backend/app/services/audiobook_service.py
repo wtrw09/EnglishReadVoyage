@@ -342,6 +342,10 @@ class AudiobookService:
             else:
                 has_chinese = bool(has_chinese)
 
+        # 如果 total_duration 为 0，计算所有句子的 duration 总和
+        if total_duration == 0.0 and sentences:
+            total_duration = sum(s.get('duration', 0.0) for s in sentences if isinstance(s, dict))
+
         # 获取音频文件夹中所有mp3文件
         existing_audio_files = set()
         if audio_folder.exists():

@@ -95,6 +95,31 @@ async def init_db():
                 await conn.execute(text("ALTER TABLE user_settings ADD COLUMN doubao_voice_zh VARCHAR"))
                 print("Added column: doubao_voice_zh")
 
+            # 添加 MiniMax TTS 字段
+            if 'minimax_api_key' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN minimax_api_key VARCHAR"))
+                print("Added column: minimax_api_key")
+            if 'minimax_model' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN minimax_model VARCHAR"))
+                print("Added column: minimax_model")
+            if 'minimax_voice' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN minimax_voice VARCHAR"))
+                print("Added column: minimax_voice")
+            if 'minimax_speed' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN minimax_speed FLOAT DEFAULT 1.0"))
+                print("Added column: minimax_speed")
+
+            # 添加中文语音音色字段
+            if 'minimax_voice_zh' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN minimax_voice_zh VARCHAR"))
+                print("Added column: minimax_voice_zh")
+            if 'edge_tts_voice_zh' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN edge_tts_voice_zh VARCHAR"))
+                print("Added column: edge_tts_voice_zh")
+            if 'siliconflow_voice_zh' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN siliconflow_voice_zh VARCHAR"))
+                print("Added column: siliconflow_voice_zh")
+
             # 迁移：允许 book_category_rel 的 category_id 为 NULL（用于"未分组"功能）
             result = await conn.execute(text("PRAGMA table_info(book_category_rel)"))
             rel_columns = {row[1]: row for row in result.fetchall()}
