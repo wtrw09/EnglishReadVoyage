@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateRequest, BookUpdateResponse, BookPagesResponse, BookRenameRequest, BookRenameResponse, TranslationStatusResponse, RetryTranslateResponse, UpdateSentenceTranslationRequest, UpdateSentenceTranslationResponse, SentencePreviewResponse, SentenceUpdateRequest, SentenceUpdateResponse, BookSentencesResponse
 from app.services.book_service import book_service, get_effective_translation_api_config, get_cancel_event, clear_cancel_event
+from app.services.precompile_service import precompile_service
 from app.core.database import get_db
 from app.utils.sse_utils import format_sse_message
 from app.api.dependencies import get_current_user, get_current_admin
@@ -36,8 +37,15 @@ def create_progress_callback(queue: asyncio.Queue):
     返回:
         进度回调函数
     """
-    async def progress_callback(percentage: int, message: str):
-        await queue.put({"percentage": percentage, "message": message})
+    async def progress_callback(percentage: int, message: str, book_title: str = None, book_index: int = 0, total_books: int = 0):
+        data = {"percentage": percentage, "message": message}
+        if book_title:
+            data["book_title"] = book_title
+        if book_index:
+            data["book_index"] = book_index
+        if total_books:
+            data["total_books"] = total_books
+        await queue.put(data)
     return progress_callback
 
 
@@ -2104,6 +2112,9 @@ async def update_sentence(
         )
 
 
+# 全局取消标志（用于补充翻译+中文语音批量任务）
+supplement_all_cancelled = [False]
+
 @router.post("/admin/books/supplement-all")
 async def supplement_all_books(
     force: bool = Query(False, description="是否强制重新生成（覆盖已有内容）"),
@@ -2115,6 +2126,9 @@ async def supplement_all_books(
     遍历所有书籍，对缺少翻译或中文音频的句子进行补充
     使用SSE流式返回进度信息
     """
+    # 重置取消标志
+    supplement_all_cancelled[0] = False
+
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
@@ -2126,7 +2140,8 @@ async def supplement_all_books(
                 db=db,
                 user_id=current_user.id,
                 progress_callback=progress_callback,
-                force=force
+                force=force,
+                cancelled=supplement_all_cancelled
             )
         )
 
@@ -2157,7 +2172,9 @@ async def supplement_all_books(
         if supplement_task.done():
             try:
                 result = supplement_task.result()
-                if result and result.get("success"):
+                if result and result.get("cancelled"):
+                    yield format_sse_message(100, result.get("message", "已取消"), False)
+                elif result and result.get("success"):
                     yield format_sse_message(100, result.get("message", "处理完成"), True)
                 elif result:
                     yield format_sse_message(0, result.get("message", "处理失败"), False)
@@ -2173,3 +2190,158 @@ async def supplement_all_books(
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/admin/books/supplement-all/cancel")
+async def cancel_supplement_all_books(
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    取消批量补充翻译和中文语音任务（仅管理员可用）
+    """
+    global supplement_all_cancelled
+    supplement_all_cancelled[0] = True
+    return {"success": True, "message": "已发送取消信号"}
+
+
+# ========== 预编译缓存 API ==========
+
+
+@router.get("/precompile/status")
+async def get_precompile_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    获取预编译缓存状态（仅管理员可用）
+    
+    返回：
+        - total_books: 总书籍数
+        - cached_books: 已缓存书籍数
+        - uncached_books: 未缓存书籍数
+        - cache_size_mb: 缓存总大小(MB)
+    """
+    # 获取所有书籍
+    from app.repositories.book_repository import book_repository
+    books = await book_repository.get_multi(db)
+    book_ids = [b.id for b in books]
+    
+    # 获取缓存状态
+    cache_status = precompile_service.get_cache_status(book_ids)
+    
+    return {
+        "total_books": cache_status.total_books,
+        "cached_books": cache_status.cached_books,
+        "uncached_books": cache_status.uncached_books,
+        "cache_size_mb": cache_status.cache_size_mb,
+        "cache_percentage": round(cache_status.cached_books / cache_status.total_books * 100, 1) if cache_status.total_books > 0 else 0
+    }
+
+
+@router.post("/precompile")
+async def precompile_all_books(
+    force: bool = Query(False, description="是否强制重新编译（忽略现有缓存）"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    批量预编译所有书籍（仅管理员可用）
+    使用SSE流式返回进度信息
+    """
+    async def event_generator():
+        from app.repositories.book_repository import book_repository
+        books = await book_repository.get_multi(db)
+        total = len(books)
+        
+        if total == 0:
+            yield format_sse_message(100, "没有书籍需要预编译", True)
+            return
+        
+        success_count = 0
+        skip_count = 0
+        fail_count = 0
+        
+        for idx, book in enumerate(books):
+            progress = int((idx + 1) / total * 100)
+            
+            result = precompile_service.precompile_book(
+                book_id=book.id,
+                md_file_path=book.file_path,
+                force=force
+            )
+            
+            if result.success:
+                if "已存在" in result.message:
+                    skip_count += 1
+                    message = f"[{idx+1}/{total}] {book.title}: 跳过（已缓存）"
+                else:
+                    success_count += 1
+                    message = f"[{idx+1}/{total}] {book.title}: 编译成功 ({result.page_count}页)"
+            else:
+                fail_count += 1
+                message = f"[{idx+1}/{total}] {book.title}: 失败 - {result.message}"
+            
+            yield format_sse_message(progress, message)
+        
+        # 发送最终统计
+        final_message = f"预编译完成: 成功 {success_count}, 跳过 {skip_count}, 失败 {fail_count}"
+        yield format_sse_message(100, final_message, fail_count == 0)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/{book_id}/precompile")
+async def precompile_single_book(
+    book_id: str = FastAPIPath(..., description="书籍ID"),
+    force: bool = Query(False, description="是否强制重新编译"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    预编译单本书籍（仅管理员可用）
+    """
+    from app.repositories.book_repository import book_repository
+    book = await book_repository.get(db, book_id)
+    
+    if not book:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="书籍不存在"
+        )
+    
+    result = precompile_service.precompile_book(
+        book_id=book.id,
+        md_file_path=book.file_path,
+        force=force
+    )
+    
+    return {
+        "success": result.success,
+        "message": result.message,
+        "book_id": result.book_id,
+        "page_count": result.page_count
+    }
+
+
+@router.delete("/precompile/cache")
+async def clear_precompile_cache(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin)
+):
+    """
+    清除所有预编译缓存（仅管理员可用）
+    """
+    count = precompile_service.clear_all_cache()
+    return {
+        "success": True,
+        "message": f"已清除 {count} 个书籍的预编译缓存",
+        "cleared_count": count
+    }

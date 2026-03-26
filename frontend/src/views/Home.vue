@@ -904,9 +904,11 @@
       v-model:show="showSupplementProgress"
       title="补充翻译+中文语音"
       :close-on-click-overlay="false"
-      :show-cancel-button="false"
+      :show-cancel-button="supplementLoading"
       :show-confirm-button="!supplementLoading"
       confirm-button-text="关闭"
+      cancel-button-text="取消"
+      @cancel="handleCancelSupplement"
     >
       <div class="supplement-progress-content">
         <van-progress
@@ -916,6 +918,27 @@
         />
         <div class="progress-message">
           {{ supplementMessage }}
+        </div>
+      </div>
+    </van-dialog>
+
+    <!-- 预编译缓存进度弹窗 -->
+    <van-dialog
+      v-model:show="showPrecompileProgress"
+      title="预编译缓存"
+      :close-on-click-overlay="false"
+      :show-cancel-button="false"
+      :show-confirm-button="!precompileLoading"
+      confirm-button-text="关闭"
+    >
+      <div class="supplement-progress-content">
+        <van-progress
+          :percentage="precompileProgress"
+          :stroke-width="8"
+          :show-pivot="true"
+        />
+        <div class="progress-message">
+          {{ precompileMessage }}
         </div>
       </div>
     </van-dialog>
@@ -1846,6 +1869,8 @@ const settingsActions = computed<PopoverAction[]>(() => {
     actions.push({ text: '修复书籍数据', icon: 'replay', key: 'syncBooks' })
     // 压缩书籍图片（仅管理员可见）
     actions.push({ text: '压缩书籍图片', icon: 'photo-o', key: 'compressImages' })
+    // 预编译缓存（仅管理员可见）
+    actions.push({ text: '预编译缓存', icon: 'fire-o', key: 'precompile' })
     // 补充翻译+中文语音（仅管理员可见）
     actions.push({ text: '补充翻译+中文语音', icon: 'plus', key: 'supplementAll' })
   }
@@ -1921,6 +1946,8 @@ const onSettingsSelect = (action: PopoverAction) => {
     handleSyncBooks()
   } else if (action.key === 'compressImages') {
     handleCompressImages()
+  } else if (action.key === 'precompile') {
+    handlePrecompile()
   } else if (action.key === 'supplementAll') {
     handleSupplementAll()
   } else if (action.key === 'logout') {
@@ -2144,6 +2171,101 @@ const handleCompressImages = async () => {
   })
 }
 
+// 预编译缓存
+const showPrecompileProgress = ref(false)
+const precompileProgress = ref(0)
+const precompileMessage = ref('')
+const precompileLoading = ref(false)
+const precompileCacheStatus = ref({ total: 0, cached: 0, percentage: 0 })
+
+const handlePrecompile = async () => {
+  // 先获取缓存状态
+  try {
+    const statusRes = await api.get('/books/precompile/status')
+    const status = statusRes.data
+    precompileCacheStatus.value = {
+      total: status.total_books,
+      cached: status.cached_books,
+      percentage: status.cache_percentage
+    }
+  } catch (error) {
+    console.error('获取缓存状态失败:', error)
+  }
+
+  const statusText = `当前缓存: ${precompileCacheStatus.value.cached}/${precompileCacheStatus.value.total} 本 (${precompileCacheStatus.value.percentage}%)`
+
+  showConfirmDialog({
+    title: '预编译缓存',
+    message: `${statusText}\n\n预编译可加快书籍首次加载速度（约3500倍提升），是否开始编译未缓存的书籍？`
+  }).then(async () => {
+    // 显示进度对话框
+    showPrecompileProgress.value = true
+    precompileProgress.value = 0
+    precompileMessage.value = '正在准备...'
+    precompileLoading.value = true
+
+    try {
+      const response = await fetch('/api/v1/books/precompile', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authStore.token}`
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status} ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (!reader) {
+        throw new Error('无法读取响应流')
+      }
+
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              precompileProgress.value = data.percentage || 0
+              precompileMessage.value = data.message || ''
+            } catch (e) {
+              console.error('解析SSE数据失败:', e)
+            }
+          }
+        }
+      }
+
+      // 处理完成
+      precompileLoading.value = false
+      precompileMessage.value = '编译完成！'
+      precompileProgress.value = 100
+
+      setTimeout(() => {
+        showPrecompileProgress.value = false
+        showNotify({ type: 'success', message: '预编译完成' })
+      }, 1500)
+
+    } catch (error: any) {
+      console.error('预编译失败:', error)
+      showPrecompileProgress.value = false
+      precompileLoading.value = false
+      showNotify({ type: 'danger', message: error.message || '预编译失败' })
+    }
+  }).catch(() => {
+    // 取消操作
+  })
+}
+
 // 补充翻译+中文语音
 const showSupplementProgress = ref(false)
 const supplementProgress = ref(0)
@@ -2221,6 +2343,17 @@ const handleSupplementAll = async () => {
   }).catch(() => {
     // 取消操作
   })
+}
+
+// 取消补充翻译+中文语音
+const handleCancelSupplement = async () => {
+  try {
+    await api.post('/books/admin/books/supplement-all/cancel')
+    supplementMessage.value = '正在取消...'
+  } catch (error: any) {
+    console.error('取消失败:', error)
+    showNotify({ type: 'warning', message: '取消请求发送失败' })
+  }
 }
 
 // 书籍管理菜单选择

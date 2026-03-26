@@ -17,6 +17,7 @@ from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdat
 from app.utils.parser import MarkdownParser
 from app.services.tts_service import tts_service
 from app.services.translation_service import translation_service
+from app.services.precompile_service import precompile_service
 from app.core.config import get_settings
 from app.models.database_models import UserSettings, TranslationAPI, User
 from mutagen.mp3 import MP3
@@ -163,29 +164,48 @@ class BookService:
         self.parser = MarkdownParser()
 
     def _get_parsed_pages(self, book_id: str, file_path: str) -> List[str]:
-        """获取解析后的页面，使用LRU缓存"""
-        # 检查缓存
+        """
+        获取解析后的页面，使用三级缓存策略：
+        1. 内存LRU缓存（最快）
+        2. 磁盘预编译缓存（快）
+        3. 实时解析（兜底）
+        """
+        # 第一级：检查内存缓存
         if book_id in self._parser_cache:
             # 移动到末尾（最近使用）
             self._parser_cache.move_to_end(book_id)
             return self._parser_cache[book_id]
         
-        # 解析文件
+        # 第二级：检查磁盘预编译缓存
+        if precompile_service.is_cache_valid(book_id, file_path):
+            pages = precompile_service.load_from_cache(book_id)
+            if pages:
+                # 加载到内存缓存
+                self._parser_cache[book_id] = pages
+                if len(self._parser_cache) > self._max_cache_size:
+                    self._parser_cache.popitem(last=False)
+                return pages
+        
+        # 第三级：实时解析
         pages = self.parser.parse_file(file_path)
         
-        # 添加到缓存
+        # 保存到内存缓存
         self._parser_cache[book_id] = pages
-        
-        # 如果缓存满了，淘汰最久未使用的
         if len(self._parser_cache) > self._max_cache_size:
             self._parser_cache.popitem(last=False)
+        
+        # 异步保存到磁盘缓存（不阻塞返回）
+        precompile_service.save_to_cache(book_id, file_path, pages)
         
         return pages
 
     def _invalidate_cache(self, book_id: str):
-        """删除指定书籍的缓存"""
+        """删除指定书籍的缓存（内存缓存+磁盘缓存）"""
+        # 清除内存缓存
         if book_id in self._parser_cache:
             del self._parser_cache[book_id]
+        # 清除磁盘预编译缓存
+        precompile_service.invalidate_cache(book_id)
 
     async def list_books(self, db: AsyncSession) -> List[BookInfo]:
         """获取所有书籍列表"""
@@ -719,6 +739,9 @@ class BookService:
         await self.repository.update(db, book, {"page_count": page_count})
         await db.commit()
 
+        # 6. 清除预编译缓存（内容已更新，需要重新编译）
+        self._invalidate_cache(book_id)
+
         # 构建删除文件统计信息
         deleted_count = len(deleted_files)
         deleted_audio_count = len(deleted_audio_files) + len(deleted_translation_files)
@@ -818,6 +841,9 @@ class BookService:
         }
         await self.repository.create(db, book_data)
         await db.commit()
+
+        # 触发预编译缓存（同步执行，保证首次访问即可快速加载）
+        precompile_service.precompile_book(book_id, str(md_file_path))
 
         return BookImportResponse(
             success=True,
@@ -1252,6 +1278,9 @@ class BookService:
             await self.repository.create(db, book_data)
 
         await db.commit()
+
+        # 触发预编译缓存（同步执行，保证首次访问即可快速加载）
+        precompile_service.precompile_book(book_id, str(md_file_path))
 
         await progress_callback(100, "导入完成")
         logger.debug(f"Returning book_id: {book_id}")
@@ -3087,13 +3116,15 @@ class BookService:
         db: AsyncSession,
         user_id: int,
         progress_callback: Optional[callable] = None,
-        force: bool = False
+        force: bool = False,
+        cancelled: Optional[list] = None
     ) -> dict:
         """
         补充所有书籍的翻译和中文语音
         遍历所有书籍，对缺少翻译或中文音频的句子进行补充
         force=True: 强制重新生成所有内容
         force=False: 只补充缺失部分
+        cancelled: 取消标志列表，用于中断处理
         """
         async def update_progress(percentage: int, message: str, book_title: str = None, book_index: int = 0, total_books: int = 0):
             if progress_callback:
@@ -3120,89 +3151,20 @@ class BookService:
             "total_books": total_books,
             "processed_books": 0,
             "failed_books": 0,
+            "cancelled": False,
             "details": []
         }
 
         await update_progress(5, f"共找到 {total_books} 本书籍，开始处理...")
 
-        # 获取用户设置
-        settings = get_settings()
-        user_settings = None
-        result_settings = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
-        user_settings = result_settings.scalars().first()
-
-        # 获取翻译API配置
-        translation_api = None
-        result_api = await db.execute(
-            select(TranslationAPI).where(
-                TranslationAPI.user_id == user_id,
-                TranslationAPI.is_active == True
-            ).order_by(TranslationAPI.id.desc())
-        )
-        translation_api = result_api.scalars().first()
-
-        if not translation_api:
-            # 尝试使用admin的配置
-            admin_result = await db.execute(select(User).where(User.username == "admin"))
-            admin_user = admin_result.scalars().first()
-            if admin_user:
-                result_api = await db.execute(
-                    select(TranslationAPI).where(
-                        TranslationAPI.user_id == admin_user.id,
-                        TranslationAPI.is_active == True
-                    ).order_by(TranslationAPI.id.desc())
-                )
-                translation_api = result_api.scalars().first()
-
-        if not translation_api:
-            await update_progress(100, "错误: 未配置翻译API，请先在设置中配置百度翻译API")
-            return {
-                "success": False,
-                "message": "未配置翻译API，请先在设置中配置百度翻译API",
-                "total_books": total_books,
-                "processed_books": 0,
-                "failed_books": total_books,
-                "details": []
-            }
-
-        # 获取TTS配置
-        service_name = user_settings.tts_service_name if user_settings and user_settings.tts_service_name else "kokoro-tts"
-        voice_zh = None
-        speed = 1.0
-        doubao_app_id = None
-        doubao_access_key = None
-        doubao_resource_id = None
-        minimax_api_key = None
-        minimax_model = None
-        siliconflow_api_key = None
-        siliconflow_model = None
-
-        if service_name == "kokoro-tts":
-            voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else settings.KOKORO_DEFAULT_VOICE_ZH
-            speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else 1.0
-        elif service_name == "doubao-tts":
-            voice_zh = user_settings.doubao_voice_zh if user_settings and user_settings.doubao_voice_zh else settings.DOUBAO_DEFAULT_VOICE_ZH
-            speed = user_settings.doubao_speed if user_settings and user_settings.doubao_speed is not None else 1.0
-            doubao_app_id = user_settings.doubao_app_id if user_settings else None
-            doubao_access_key = user_settings.doubao_access_key if user_settings else None
-            doubao_resource_id = user_settings.doubao_resource_id if user_settings else settings.DOUBAO_DEFAULT_RESOURCE_ID
-        elif service_name == "edge-tts":
-            voice_zh = settings.EDGE_TTS_DEFAULT_VOICE_ZH
-            speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
-        elif service_name == "minimax-tts":
-            # MiniMax 中英文共用一个音色
-            voice_zh = user_settings.minimax_voice if user_settings else settings.MINIMAX_DEFAULT_VOICE
-            speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else 1.0
-            minimax_api_key = user_settings.minimax_api_key if user_settings else None
-            minimax_model = user_settings.minimax_model if user_settings else settings.MINIMAX_DEFAULT_MODEL
-        elif service_name == "siliconflow-tts":
-            voice_zh = user_settings.siliconflow_voice if user_settings and user_settings.siliconflow_voice else settings.SILICONFLOW_DEFAULT_VOICE
-            siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
-            siliconflow_model = user_settings.siliconflow_model if user_settings else settings.SILICONFLOW_DEFAULT_MODEL
-        else:
-            voice_zh = user_settings.siliconflow_voice if user_settings and user_settings.siliconflow_voice else settings.SILICONFLOW_DEFAULT_VOICE
-
         for idx, book in enumerate(all_books):
+            # 检查是否已取消
+            if cancelled and cancelled[0]:
+                result["cancelled"] = True
+                result["success"] = False
+                result["message"] = f"用户取消，已处理 {result['processed_books']} 本"
+                await update_progress(100, f"已取消，成功 {result['processed_books']} 本")
+                return result
             book_index = idx + 1
             book_title = book.title
 
@@ -3223,41 +3185,35 @@ class BookService:
                 # 定义单个书籍的进度回调
                 async def book_progress_callback(percentage: int, message: str):
                     book_progress = base_percentage + (book_index - 1) * per_book_progress + (percentage / 100) * per_book_progress
-                    await update_progress(
-                        int(book_progress),
-                        f"[{book_index}/{total_books}] {book_title}: {message}",
-                        book_title,
-                        book_index,
-                        total_books
-                    )
+                    # 直接调用progress_callback，避免update_progress的参数不匹配问题
+                    if progress_callback:
+                        await progress_callback(
+                            int(book_progress),
+                            f"[{book_index}/{total_books}] {book_title}: {message}",
+                            book_title,
+                            book_index,
+                            total_books
+                        )
 
-                # 处理单本书籍
-                book_result = await self._supplement_single_book(
+                # 调用与编辑页面相同的 generate_chinese_audio 方法
+                # 该方法会自动处理：1.检查翻译 2.补充缺失翻译 3.生成中文语音
+                book_generate_result = await self.generate_chinese_audio(
                     db=db,
-                    book=book,
-                    translation_api=translation_api,
-                    service_name=service_name,
-                    voice_zh=voice_zh,
-                    speed=speed,
-                    doubao_app_id=doubao_app_id,
-                    doubao_access_key=doubao_access_key,
-                    doubao_resource_id=doubao_resource_id,
-                    minimax_api_key=minimax_api_key,
-                    minimax_model=minimax_model,
-                    siliconflow_api_key=siliconflow_api_key,
-                    siliconflow_model=siliconflow_model,
+                    book_id=book.id,
+                    user_id=user_id,
                     progress_callback=book_progress_callback,
-                    force=force
+                    force=force,
+                    cancelled=cancelled
                 )
 
                 result["processed_books"] += 1
                 result["details"].append({
                     "book_id": book.id,
                     "title": book_title,
-                    "status": "success" if book_result["success"] else "failed",
-                    "message": book_result["message"]
+                    "status": "success" if book_generate_result.success else "failed",
+                    "message": book_generate_result.message
                 })
-                logger.info(f"处理完成 [{book_index}/{total_books}]: {book_title} - {book_result['message']}")
+                logger.info(f"处理完成 [{book_index}/{total_books}]: {book_title} - {book_generate_result.message}")
 
             except Exception as e:
                 error_msg = str(e)
@@ -3305,7 +3261,8 @@ class BookService:
         siliconflow_api_key: str = None,
         siliconflow_model: str = None,
         progress_callback: Optional[callable] = None,
-        force: bool = False
+        force: bool = False,
+        cancelled: Optional[list] = None
     ) -> dict:
         """补充单本书籍的翻译和中文音频"""
         async def update_progress_local(percentage: int, message: str):
@@ -3376,6 +3333,10 @@ class BookService:
 
         async def process_sentence(sent_info: dict) -> dict:
             async with semaphore:
+                # 检查是否已取消（支持两种取消机制）
+                if (cancelled and cancelled[0]) or is_cancelled(book.id):
+                    return {**sent_info, 'translation': existing_map.get(sent_info['text'], {}).get('translation', ''), 'audio_file_zh': existing_map.get(sent_info['text'], {}).get('audio_file_zh', ''), 'cancelled': True}
+
                 text = sent_info['text']
                 text_hash = hashlib.md5(text.encode()).hexdigest()
 
@@ -3478,12 +3439,27 @@ class BookService:
         tasks = [process_sentence(sent) for sent in sentences_mapping]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 过滤成功的结果
-        successful_results = [r for r in results if isinstance(r, dict)]
+        # 分离成功和失败的结果
+        successful_results = []
+        failed_sentences = []
+        for idx, r in enumerate(results):
+            if isinstance(r, dict):
+                successful_results.append(r)
+            else:
+                # 记录异常
+                failed_text = sentences_mapping[idx].get('text', 'unknown')[:50]
+                failed_sentences.append(f"句子 {idx} ({failed_text}...): {str(r)}")
+                logger.error(f"处理句子失败: {r}")
+
+        # 如果有失败的句子，记录日志
+        if failed_sentences:
+            logger.warning(f"书籍 {book.title} 有 {len(failed_sentences)} 个句子处理失败:")
+            for fail_msg in failed_sentences:
+                logger.warning(f"  - {fail_msg}")
 
         # 检查有多少句子有中文音频
         sentences_with_zh_audio = sum(1 for r in successful_results if r.get('audio_file_zh'))
-        sentences_without_zh_audio = len(successful_results) - sentences_with_zh_audio
+        sentences_without_zh_audio = len(sentences_mapping) - sentences_with_zh_audio
 
         # 保存更新的 sentences.json
         mapping_data = {
@@ -3493,17 +3469,18 @@ class BookService:
             json.dump(mapping_data, f, ensure_ascii=False, indent=2)
 
         await update_progress_local(100, "完成")
-        
-        # 如果所有句子都有中文音频才返回成功
-        if sentences_without_zh_audio == 0:
+
+        # 如果有处理失败的句子或缺少中文音频的句子，返回失败
+        if failed_sentences or sentences_without_zh_audio > 0:
+            total_failed = len(failed_sentences) + sentences_without_zh_audio
             return {
-                "success": True,
-                "message": f"补充完成，{len(successful_results)} 个句子全部生成中文音频"
+                "success": False,
+                "message": f"补充完成，{sentences_with_zh_audio}/{len(sentences_mapping)} 个句子有中文音频，{total_failed} 个失败（异常: {len(failed_sentences)}, 缺音频: {sentences_without_zh_audio}）"
             }
         else:
             return {
-                "success": False,
-                "message": f"补充完成，{sentences_with_zh_audio}/{len(successful_results)} 个句子有中文音频，{sentences_without_zh_audio} 个失败"
+                "success": True,
+                "message": f"补充完成，{len(successful_results)} 个句子全部生成中文音频"
             }
 
     async def _check_and_fix_book_audio_internal(self, db: AsyncSession, book) -> dict:
@@ -3905,7 +3882,8 @@ class BookService:
         book_id: str,
         user_id: int,
         progress_callback,
-        force: bool = False
+        force: bool = False,
+        cancelled: Optional[list] = None
     ) -> TranslationGenerateResult:
         """
         生成中文音频
@@ -3918,6 +3896,14 @@ class BookService:
         async def update_progress_local(percentage: int, message: str):
             if progress_callback:
                 await progress_callback(percentage, message)
+
+        # 检查取消状态（支持两种取消机制：cancelled列表参数 或 get_cancel_event）
+        def is_task_cancelled() -> bool:
+            if cancelled and cancelled[0]:
+                return True
+            if is_cancelled(book_id):
+                return True
+            return False
 
         # 获取用户设置
         result = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
@@ -3988,7 +3974,8 @@ class BookService:
             siliconflow_api_key=siliconflow_api_key,
             siliconflow_model=siliconflow_model,
             progress_callback=progress_callback,
-            force=force
+            force=force,
+            cancelled=cancelled
         )
 
         return TranslationGenerateResult(success=result["success"], message=result["message"])
