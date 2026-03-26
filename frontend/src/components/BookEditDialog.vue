@@ -327,9 +327,11 @@ const saveButtonText = computed(() => {
 
 // 辅助函数：仅在内容已修改时保存，然后执行后续操作
 const saveIfModified = async (onSaved?: () => void): Promise<boolean> => {
-  if (!isModified.value) {
+  // 直接比较 content 和 originalContent，避免 isModified 不准确导致的误保存
+  if (content.value === originalContent.value) {
     // 内容未修改，跳过保存
     console.log('[保存] 内容未修改，跳过保存')
+    isModified.value = false // 同步修正 isModified 状态
     return true
   }
 
@@ -751,7 +753,8 @@ const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
           hasValidData = true
 
           if (data.percentage !== undefined) {
-            audioProgress.value = data.percentage
+            // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
+            audioProgress.value = Math.min(100, data.percentage)
             audioProgressMsg.value = data.message || ''
           }
 
@@ -1061,7 +1064,8 @@ const continueGenerateAll = async (forceGenerate: boolean) => {
           hasValidData = true
 
           if (data.percentage !== undefined) {
-            audioProgress.value = data.percentage
+            // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
+            audioProgress.value = Math.min(100, data.percentage)
             audioProgressMsg.value = data.message || ''
           }
 
@@ -1314,7 +1318,8 @@ const continueGenerateTranslation = async (forceGenerate: boolean) => {
           hasValidData = true
 
           if (data.percentage !== undefined) {
-            audioProgress.value = data.percentage
+            // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
+            audioProgress.value = Math.min(100, data.percentage)
             audioProgressMsg.value = data.message || ''
           }
 
@@ -1718,7 +1723,8 @@ const continueGenerateChineseAudio = async (forceRegenerate: boolean) => {
           hasValidData = true
 
           if (data.percentage !== undefined) {
-            audioProgress.value = data.percentage
+            // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
+            audioProgress.value = Math.min(100, data.percentage)
             audioProgressMsg.value = data.message || ''
           }
 
@@ -1825,6 +1831,14 @@ const handleCancelAudioTask = async () => {
     audioAbortController = null
   }
 }
+
+// 暴露方法给父组件调用
+defineExpose({
+  // 关闭图片预览（代理 BookEditor 的方法）
+  closeImagePreview: () => {
+    bookEditorRef.value?.closeImagePreview()
+  }
+})
 </script>
 
 <style scoped>

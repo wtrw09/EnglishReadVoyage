@@ -410,9 +410,9 @@ class TTSService:
                 await asyncio.sleep(wait_time)
             self._edge_last_request_time = asyncio.get_event_loop().time()
 
-        # 重试配置
+        # 重试配置 - 使用指数退避策略
         max_retries = 5
-        retry_delay = 10  # 秒
+        base_retry_delay = 2  # 基础重试延迟（秒）
         last_error = None
 
         for attempt in range(max_retries):
@@ -563,6 +563,8 @@ class TTSService:
                         # 检查是否是 503 服务不可用错误
                         if "503" in error_msg or "WSServerHandshakeError" in error_msg:
                             last_error = Exception(f"Edge-TTS服务暂时不可用 (503): {error_msg[:100]}")
+                            # 使用指数退避策略计算等待时间
+                            retry_delay = min(base_retry_delay * (2 ** attempt), 10)
                             logger.warning(f"Edge-TTS 503错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
                             # 等待后重试
                             await asyncio.sleep(retry_delay)
