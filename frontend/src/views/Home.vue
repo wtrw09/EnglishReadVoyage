@@ -426,6 +426,7 @@
 
     <!-- 独立编辑对话框 -->
     <BookEditDialog
+      ref="bookEditDialogRef"
       v-model="showEditDialog"
       :book-id="currentBookId"
       :title="currentBookTitle"
@@ -4048,6 +4049,47 @@ const onImportDialogClosed = () => {
   }
 }
 
+// BookEditDialog 组件引用
+const bookEditDialogRef = ref<{
+  closeImagePreview: () => void
+} | null>(null)
+
+// 处理浏览器前进/后退按钮
+const handleBrowserNavigation = () => {
+  if (showEditDialog.value) {
+    // 如果编辑弹窗打开，先关闭图片预览
+    bookEditDialogRef.value?.closeImagePreview()
+    // 关闭编辑弹窗
+    showEditDialog.value = false
+    // 触发关闭后的事件
+    onEditClosedHandler()
+  } else {
+    // 如果编辑弹窗关闭，说明是前进操作（从关闭状态到打开状态），需要打开弹窗
+    // 检查是否有待恢复的状态
+    const state = window.history.state
+    if (state && state.openEditDialog) {
+      // 前进到编辑状态，恢复弹窗
+      showEditDialog.value = true
+    }
+  }
+}
+
+// 监听浏览器前进/后退按钮
+window.addEventListener('popstate', handleBrowserNavigation)
+
+// 当编辑弹窗打开/关闭时，管理浏览器历史记录
+watch(showEditDialog, (newVal) => {
+  if (newVal) {
+    // 弹窗打开时，向历史记录栈中添加一条记录
+    // 这样点击后退时会回到关闭状态，而不是离开页面
+    window.history.pushState({ openEditDialog: true, bookId: currentBookId.value }, '')
+  } else {
+    // 弹窗关闭时，回退到之前的历史记录
+    // 使用 replaceState 而不是 pushState，避免在历史栈中添加额外记录
+    window.history.replaceState(null, '', window.location.pathname)
+  }
+})
+
 // 生命周期
 onMounted(async () => {
   // 初始化横屏检测
@@ -4097,6 +4139,7 @@ const handleCloseNavMenus = (e: MouseEvent) => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('click', handleCloseNavMenus)
+  window.removeEventListener('popstate', handleBrowserNavigation)
 })
 </script>
 

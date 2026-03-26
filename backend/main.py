@@ -16,6 +16,14 @@ from app.api.v1.router import api_router
 # 获取配置设置
 settings = get_settings()
 
+# 预加载 spaCy 模型（同步方式，在应用启动前加载）
+try:
+    from app.utils.sentence_splitter import get_nlp_model
+    get_nlp_model()
+    print("spaCy 模型预加载完成")
+except Exception as e:
+    print(f"spaCy 模型预加载失败: {e}")
+
 
 def setup_logging():
     """配置应用程序日志"""

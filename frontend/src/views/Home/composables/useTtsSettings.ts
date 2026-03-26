@@ -96,18 +96,31 @@ export function useTtsSettings() {
 
   // 计算属性：当前可用的语音列表
   const availableVoices = computed((): TtsVoice[] => {
+    let voices: TtsVoice[] = []
+    
     switch (ttsServiceName.value) {
       case 'doubao-tts':
-        return doubaoVoices
+        voices = doubaoVoices
+        break
       case 'siliconflow-tts':
-        return siliconflowVoices
+        voices = siliconflowVoices
+        break
       case 'edge-tts':
-        return edgeTtsVoices.value
+        voices = edgeTtsVoices.value
+        break
       case 'minimax-tts':
-        return minimaxVoices.value
+        voices = minimaxVoices.value
+        break
       default:
-        return ttsVoices.value
+        voices = ttsVoices.value
     }
+    
+    // 如果当前语音不在列表中，添加它（确保当前值始终可见）
+    if (ttsVoice.value && !voices.some(v => v.id === ttsVoice.value)) {
+      voices = [{ id: ttsVoice.value, name: `${ttsVoice.value} (当前)` }, ...voices]
+    }
+    
+    return voices
   })
 
   // 计算属性：是否支持语速调节
@@ -154,7 +167,6 @@ export function useTtsSettings() {
       }
 
       // 设置当前值
-      ttsVoice.value = defaultTtsConfig.value.voice
       ttsSpeed.value = defaultTtsConfig.value.speed
       ttsApiUrl.value = defaultTtsConfig.value.api_url
       ttsAppId.value = defaultTtsConfig.value.app_id
@@ -167,6 +179,21 @@ export function useTtsSettings() {
       ttsMinimaxModel.value = defaultTtsConfig.value.minimax_model
       ttsMinimaxVoice.value = defaultTtsConfig.value.minimax_voice
       ttsMinimaxSpeed.value = defaultTtsConfig.value.minimax_speed
+      
+      // 根据服务名称设置 ttsVoice（显示在下拉列表中）
+      switch (serviceName) {
+        case 'siliconflow-tts':
+          ttsVoice.value = defaultTtsConfig.value.siliconflow_voice
+          break
+        case 'edge-tts':
+          ttsVoice.value = defaultTtsConfig.value.edge_tts_voice
+          break
+        case 'minimax-tts':
+          ttsVoice.value = defaultTtsConfig.value.minimax_voice
+          break
+        default:
+          ttsVoice.value = defaultTtsConfig.value.voice
+      }
 
     } catch (error) {
       console.error('加载用户设置失败:', error)
@@ -452,11 +479,14 @@ export function useTtsSettings() {
   }
 
   // 打开设置对话框
-  const openTtsSettings = async () => {
-    await loadTtsVoices()
-    await loadEdgeTtsVoices()
-    await loadMinimaxVoices()
+  const openTtsSettings = () => {
+    // 先显示对话框，用户可以立即看到当前值（从数据库读取）
     showTtsSettingsDialog.value = true
+    
+    // 异步加载语音列表（不阻塞对话框显示）
+    loadTtsVoices()
+    loadEdgeTtsVoices()
+    loadMinimaxVoices()
   }
 
   // 关闭设置对话框
@@ -465,18 +495,28 @@ export function useTtsSettings() {
     stopTtsTest()
   }
 
-  // 监听服务切换，加载对应的语音列表
+  // 监听服务切换，加载对应的语音列表并更新语音值
   watch(ttsServiceName, async (newService, oldService) => {
     if (newService !== oldService && oldService !== undefined) {
+      // 根据新服务设置对应的语音值
       switch (newService) {
         case 'kokoro-tts':
+          ttsVoice.value = defaultTtsConfig.value.voice
           await loadTtsVoices()
           break
         case 'edge-tts':
+          ttsVoice.value = defaultTtsConfig.value.edge_tts_voice
           await loadEdgeTtsVoices()
           break
         case 'minimax-tts':
+          ttsVoice.value = defaultTtsConfig.value.minimax_voice
           await loadMinimaxVoices()
+          break
+        case 'siliconflow-tts':
+          ttsVoice.value = defaultTtsConfig.value.siliconflow_voice
+          break
+        case 'doubao-tts':
+          ttsVoice.value = defaultTtsConfig.value.voice
           break
       }
     }

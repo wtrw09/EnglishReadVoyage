@@ -1791,8 +1791,54 @@ class BookService:
 
                     # 保存映射文件
                     mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
+                    
+                    # 检查 ZIP 中是否已有 sentences.json，如果有则保留并合并
+                    existing_mapping = None
+                    for zf_file in zf.namelist():
+                        if zf_file.endswith('sentences.json'):
+                            try:
+                                with zf.open(zf_file) as existing_file:
+                                    existing_mapping = json.load(existing_file)
+                            except:
+                                pass
+                            break
+                    
+                    if existing_mapping and existing_mapping.get('sentences'):
+                        # 保留原有的 sentences.json（包含翻译和中文音频信息）
+                        # 合并新生成的音频信息
+                        new_sentences = successful_results
+                        existing_sentences = existing_mapping.get('sentences', [])
+                        
+                        # 构建 text -> existing_sentence 的映射
+                        existing_map = {s.get('text'): s for s in existing_sentences}
+                        
+                        # 合并：使用新生成的音频信息，但保留原有的翻译和中文音频记录
+                        merged_sentences = []
+                        for new_s in new_sentences:
+                            text = new_s.get('text', '')
+                            existing_s = existing_map.get(text, {})
+                            merged = {
+                                'page': new_s.get('page'),
+                                'index': new_s.get('index'),
+                                'text': text,
+                                'audio_file': new_s.get('audio_file'),
+                                'duration': new_s.get('duration'),
+                            }
+                            # 保留原有的翻译和中文音频信息
+                            if existing_s.get('translation'):
+                                merged['translation'] = existing_s['translation']
+                            if existing_s.get('audio_file_zh'):
+                                merged['audio_file_zh'] = existing_s['audio_file_zh']
+                            if existing_s.get('duration_zh'):
+                                merged['duration_zh'] = existing_s['duration_zh']
+                            merged_sentences.append(merged)
+                        
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': merged_sentences}, f, ensure_ascii=False, indent=2)
+                    else:
+                        # 没有原有的 sentences.json，保存新生成的
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
 
                     await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
                 else:
@@ -3235,6 +3281,14 @@ class BookService:
 
         return result
 
+    def _has_valid_zh_audio(self, existing: dict, audio_folder: Path) -> bool:
+        """检查中文音频是否有效（既在 sentences.json 中有记录，文件也实际存在）"""
+        audio_file_zh = existing.get('audio_file_zh', '')
+        if not audio_file_zh:
+            return False
+        # 同时检查字段存在和文件实际存在
+        return (audio_folder / audio_file_zh).exists()
+
     async def _supplement_single_book(
         self,
         db: AsyncSession,
@@ -3313,9 +3367,10 @@ class BookService:
         updated_count = [0]
         total_count = len(sentences_mapping)
         # 统计需要处理的句子数量（用于进度显示）
+        # 修复：同时检查 audio_file_zh 字段存在且文件实际存在
         need_process_count = sum(
             1 for s in sentences_mapping
-            if force or not existing_map.get(s['text'], {}).get('audio_file_zh')
+            if force or not self._has_valid_zh_audio(existing_map.get(s['text'], {}), audio_folder)
         )
         generated_count = [0]  # 记录成功生成的数量
 
@@ -3334,8 +3389,8 @@ class BookService:
 
                 # 检查是否需要翻译
                 need_translate = force or not translation
-                # 检查是否需要生成中文音频
-                need_chinese_audio = force or not existing.get('audio_file_zh')
+                # 检查是否需要生成中文音频（同时检查字段和文件是否存在）
+                need_chinese_audio = force or not self._has_valid_zh_audio(existing, audio_folder)
 
                 # 如果都不需要，跳过
                 if not need_translate and not need_chinese_audio:
@@ -3345,11 +3400,11 @@ class BookService:
                     await update_progress_local(progress, f"跳过已有 ({current}/{total_count})")
                     return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file}
 
-                # 更新处理进度
+                # 更新处理进度（统一使用 total_count 作为分母，避免进度超过100%）
                 updated_count[0] += 1
                 current = updated_count[0]
-                progress = 10 + int((current / need_process_count) * 85) if need_process_count > 0 else 95
-                await update_progress_local(progress, f"处理中 ({current}/{need_process_count})")
+                progress = 10 + int((current / total_count) * 85)
+                await update_progress_local(progress, f"处理中 ({current}/{total_count})")
 
                 # 需要翻译
                 if need_translate and not translation:
@@ -3391,6 +3446,11 @@ class BookService:
                                 f.write(audio_bytes)
                             audio_generated = True  # 标记成功生成
                             generated_count[0] += 1
+                            # TTS调用成功后立即发送进度更新，让前端看到进度数字变化
+                            # 修复：使用 total_count 作为分母，避免进度超过100%（与第3403行注释一致）
+                            current = updated_count[0]
+                            progress = 10 + int((current / total_count) * 85)
+                            await update_progress_local(progress, f"生成中 ({current}/{total_count})")
                             # 获取时长
                             try:
                                 audio = MP3(str(audio_path))
@@ -3508,17 +3568,24 @@ class BookService:
 
         # 扫描 audio 目录，获取所有 mp3 文件名集合（用于 MD5 哈希匹配）
         existing_mp3_files = set()
+        # 同时扫描中文音频文件（以 _zh.mp3 结尾）
+        existing_zh_mp3_files = set()
         if audio_folder.exists():
             for f_path in audio_folder.iterdir():
                 if f_path.suffix.lower() == ".mp3":
                     existing_mp3_files.add(f_path.name)
-        logger.info(f"📖 扫描 audio 目录: {audio_folder}, 找到 {len(existing_mp3_files)} 个mp3文件")
+                    if f_path.stem.endswith('_zh'):
+                        existing_zh_mp3_files.add(f_path.name)
+        logger.info(f"📖 扫描 audio 目录: {audio_folder}, 找到 {len(existing_mp3_files)} 个mp3文件, {len(existing_zh_mp3_files)} 个中文音频文件")
         
         # 检查每个句子的音频
         duration_fixed_count = 0
         duration_zh_fixed_count = 0
         audio_file_fixed_count = 0
+        audio_zh_fixed_count = 0
         missing_audio_count = 0
+        missing_zh_audio_count = 0
+        missing_translation_count = 0
 
         for i, item in enumerate(sentences):
             # 确保每个item是字典
@@ -3565,11 +3632,30 @@ class BookService:
                 except:
                     item["duration"] = 0.0
 
+            # 检查中文音频文件：如果缺少 audio_file_zh 但文件存在，则补充
+            audio_file_zh = item.get("audio_file_zh")
+            text_hash = hashlib.md5(sentence.encode('utf-8')).hexdigest()
+            expected_zh_filename = f"{text_hash}_zh.mp3"
+            if not audio_file_zh and expected_zh_filename in existing_zh_mp3_files:
+                # 文件存在但没有记录，补充记录
+                item["audio_file_zh"] = expected_zh_filename
+                audio_file_zh = expected_zh_filename
+                audio_zh_fixed_count += 1
+                logger.info(f"✅ 补充中文音频记录: {sentence[:30]}... -> {expected_zh_filename}")
+
             # 检查并补充中文音频时长
             duration_zh_fixed_for_item = False
-            audio_file_zh = item.get("audio_file_zh")
             if audio_file_zh:
                 audio_zh_path = audio_folder / audio_file_zh
+                if not audio_zh_path.exists():
+                    # 文件不存在，尝试重新匹配
+                    if expected_zh_filename in existing_zh_mp3_files:
+                        item["audio_file_zh"] = expected_zh_filename
+                        audio_file_zh = expected_zh_filename
+                        audio_zh_path = audio_folder / audio_file_zh
+                        audio_zh_fixed_count += 1
+                        logger.info(f"✅ 修正中文音频路径: {sentence[:30]}... -> {expected_zh_filename}")
+
                 if audio_zh_path.exists():
                     if "duration_zh" not in item or item["duration_zh"] is None or item["duration_zh"] == 0.0:
                         try:
@@ -3577,8 +3663,16 @@ class BookService:
                             item["duration_zh"] = round(audio_zh.info.length, 3)
                             duration_zh_fixed_for_item = True
                             duration_zh_fixed_count += 1
-                        except:
+                        except Exception as e:
                             item["duration_zh"] = 0.0
+                            logger.warning(f"⚠️ 读取中文音频时长失败: {audio_zh_path} - {e}")
+                else:
+                    # 记录了但文件不存在
+                    missing_zh_audio_count += 1
+
+            # 检查翻译是否缺失
+            if not item.get("translation"):
+                missing_translation_count += 1
 
             # 补充 page 和 index 字段
             if "page" not in item:
@@ -3587,25 +3681,33 @@ class BookService:
                 item["index"] = i
 
         # 构建修复信息
-        logger.info(f"📊 修复统计: audio_file补全={audio_file_fixed_count}, duration补全={duration_fixed_count}, missing={missing_audio_count}")
+        logger.info(f"📊 修复统计: audio_file补全={audio_file_fixed_count}, audio_zh补全={audio_zh_fixed_count}, duration补全={duration_fixed_count}, duration_zh补全={duration_zh_fixed_count}, missing英文={missing_audio_count}, missing中文={missing_zh_audio_count}, missing翻译={missing_translation_count}")
         if audio_file_fixed_count > 0:
             fixed_fields.append(f"已通过MD5哈希匹配补全 {audio_file_fixed_count} 个英文音频文件(audio_file)")
+        if audio_zh_fixed_count > 0:
+            fixed_fields.append(f"已补全 {audio_zh_fixed_count} 个中文音频记录(audio_file_zh)")
         if duration_fixed_count > 0:
             fixed_fields.append(f"已补全 {duration_fixed_count} 个英文音频时长(duration)")
         if duration_zh_fixed_count > 0:
             fixed_fields.append(f"已补全 {duration_zh_fixed_count} 个中文音频时长(duration_zh)")
 
         if missing_audio_count > 0:
-            warnings.append(f"警告: {missing_audio_count} 个句子缺少英文音频文件")
+            warnings.append(f"⚠️ 警告: {missing_audio_count} 个句子缺少英文音频文件")
+        if missing_zh_audio_count > 0:
+            warnings.append(f"⚠️ 警告: {missing_zh_audio_count} 个句子有中文音频记录但文件不存在")
+        if missing_translation_count > 0:
+            warnings.append(f"⚠️ 提示: {missing_translation_count} 个句子缺少翻译(可使用「补充翻译」功能)")
 
-        # 检查是否有中文音频但没有中文时长
-        sentences_with_zh = sum(1 for s in sentences if s.get("audio_file_zh"))
-        sentences_with_duration_zh = sum(1 for s in sentences if s.get("audio_file_zh") and s.get("duration_zh", 0) > 0)
-        if sentences_with_zh > 0 and sentences_with_duration_zh < sentences_with_zh:
-            warnings.append(f"警告: {sentences_with_zh - sentences_with_duration_zh} 个句子有中文音频但缺少时长")
+        # 计算中文语音覆盖率
+        total_with_zh = sum(1 for s in sentences if s.get("audio_file_zh") and (audio_folder / s["audio_file_zh"]).exists())
+        zh_coverage = f"{total_with_zh}/{total_sentences}" if total_sentences > 0 else "0/0"
+        if total_with_zh == 0 and total_sentences > 0:
+            warnings.append(f"⚠️ 提示: 该书籍暂无中文语音，可使用「补充翻译+中文语音」功能生成")
+        elif total_with_zh < total_sentences:
+            warnings.append(f"📊 中文语音覆盖率: {zh_coverage} ({total_with_zh * 100 // total_sentences}%)")
 
         # 保存修复后的数据
-        if audio_file_fixed_count > 0 or duration_fixed_count > 0 or duration_zh_fixed_count > 0 or warnings:
+        if audio_file_fixed_count > 0 or audio_zh_fixed_count > 0 or duration_fixed_count > 0 or duration_zh_fixed_count > 0 or warnings:
             try:
                 with open(mapping_path, 'w', encoding='utf-8') as f:
                     json.dump({'sentences': sentences}, f, ensure_ascii=False, indent=2)
@@ -3849,7 +3951,7 @@ class BookService:
             voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else app_settings.KOKORO_DEFAULT_VOICE_ZH
             speed = user_settings.kokoro_speed if user_settings and user_settings.kokoro_speed is not None else 1.0
         elif service_name == "minimax-tts":
-            voice_zh = user_settings.minimax_voice_zh if user_settings and user_settings.minimax_voice_zh else app_settings.MINIMAX_DEFAULT_VOICE_ZH
+            voice_zh = user_settings.minimax_voice_zh if user_settings and user_settings.minimax_voice_zh else app_settings.MINIMAX_DEFAULT_VOICE
             speed = user_settings.minimax_speed if user_settings and user_settings.minimax_speed is not None else 1.0
             minimax_api_key = user_settings.minimax_api_key if user_settings else None
             minimax_model = user_settings.minimax_model if user_settings else app_settings.MINIMAX_DEFAULT_MODEL
@@ -3859,7 +3961,7 @@ class BookService:
             voice_zh = validate_edge_tts_voice(raw_voice_zh, app_settings.EDGE_TTS_DEFAULT_VOICE_ZH)
             speed = user_settings.edge_tts_speed if user_settings and user_settings.edge_tts_speed is not None else 1.0
         elif service_name == "siliconflow-tts":
-            voice_zh = user_settings.siliconflow_voice_zh if user_settings and user_settings.siliconflow_voice_zh else app_settings.SILICONFLOW_DEFAULT_VOICE_ZH
+            voice_zh = user_settings.siliconflow_voice_zh if user_settings and user_settings.siliconflow_voice_zh else app_settings.SILICONFLOW_DEFAULT_VOICE
             siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
             siliconflow_model = user_settings.siliconflow_model if user_settings else app_settings.SILICONFLOW_DEFAULT_MODEL
         else:
