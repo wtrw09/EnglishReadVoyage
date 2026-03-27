@@ -6,21 +6,21 @@
       left-arrow
       fixed
       placeholder
-      @click-left="goBack"
+            @click-left="!loading && goBack()"
     >
       <template #right>
         <!-- 播放按钮：始终显示 -->
-        <div class="nav-icon-btn" :class="{ 'playing': isPlayingAll }" @click="togglePlayAll">
+                <div class="nav-icon-btn" :class="{ 'playing': isPlayingAll, 'disabled': loading }" @click="!loading && togglePlayAll()">
           <van-icon :name="isPlayingAll ? 'pause-circle-o' : 'play-circle-o'" />
         </div>
         <!-- 横屏直接显示的按钮 -->
-        <div class="nav-icon-btn nav-more-actions" @click="openDictionaryDialog">
+                <div class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && openDictionaryDialog()">
           <van-icon name="search" />
         </div>
-        <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" @click="openEditDialog">
+                <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && openEditDialog()">
           <van-icon name="description" />
         </div>
-        <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" @click="checkBookAudio">
+                <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && checkBookAudio()">
           <van-icon name="warning-o" />
         </div>
         <!-- 竖屏更多菜单 -->
@@ -29,9 +29,10 @@
           placement="bottom-end"
           :actions="moreActions"
           @select="onMoreActionSelect"
+          :disabled="loading"
         >
           <template #reference>
-            <div class="nav-icon-btn nav-more-trigger">
+            <div class="nav-icon-btn nav-more-trigger" :class="{ 'disabled': loading }">
               <van-icon name="ellipsis" />
             </div>
           </template>
@@ -1869,6 +1870,17 @@ onUnmounted(() => {
       background: #1677d9;
     }
   }
+
+  /* 禁用状态：加载中不可点击 */
+  &.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+
+    .van-icon {
+      color: #969799;
+    }
+  }
 }
 
 /* 竖屏：隐藏展开按钮，显示更多菜单 */
@@ -1928,10 +1940,6 @@ onUnmounted(() => {
   font-size: 18px;
   line-height: 1.6;
   color: #333;
-
-  /* 隐藏滚动条 */
-  scrollbar-width: none;
-  &::-webkit-scrollbar { display: none; }
 
   /* 保持markdown原始格式 */
   h1, h2, h3, h4, h5, h6 {

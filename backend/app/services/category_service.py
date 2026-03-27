@@ -4,17 +4,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, and_
 
 from app.models.database_models import Category, BookCategoryRel, Book, ReadingProgress
-from app.schemas.category import CategoryResponse, BookWithCategory, BookGroup
+from app.schemas.category import CategoryResponse, BookWithCategory, BookGroup, CategoryReorderRequest
 
 
 class CategoryService:
     """分类相关业务逻辑服务层"""
 
     async def list_categories(self, db: AsyncSession, user_id: int) -> List[CategoryResponse]:
-        """获取当前用户的所有分类（排除重复的"未分组"，将"未分组"放在最后）"""
+        """获取当前用户的所有分类（排除重复的"未分组"，按sort_order排序，将"未分组"放在最后）"""
         stmt = select(Category).where(
             (Category.user_id == user_id) | (Category.type == 'system')
-        ).order_by(Category.id)
+        ).order_by(Category.sort_order.asc(), Category.id.asc())
         result = await db.execute(stmt)
         categories = result.scalars().all()
 
@@ -22,7 +22,7 @@ class CategoryService:
         seen_uncategorized = False
         filtered = []
         uncategorized_category = None
-        
+
         for c in categories:
             if c.name == "未分组":
                 if seen_uncategorized:
@@ -31,7 +31,7 @@ class CategoryService:
                 uncategorized_category = c  # 保存"未分组"分类
             else:
                 filtered.append(c)
-        
+
         # 将"未分组"分类添加到列表最后
         if uncategorized_category:
             filtered.append(uncategorized_category)
@@ -41,7 +41,8 @@ class CategoryService:
                 id=c.id,
                 name=c.name,
                 type=c.type,
-                user_id=c.user_id
+                user_id=c.user_id,
+                sort_order=c.sort_order
             ) for c in filtered
         ]
 
@@ -57,11 +58,20 @@ class CategoryService:
         if existing:
             raise ValueError(f"分类 '{name}' 已存在")
 
+        # 获取当前最大排序值
+        stmt_max = select(Category).where(
+            Category.user_id == user_id
+        ).order_by(Category.sort_order.desc())
+        result_max = await db.execute(stmt_max)
+        max_category = result_max.scalar_one_or_none()
+        next_sort_order = (max_category.sort_order + 1) if max_category else 1
+
         # 创建新分类
         category = Category(
             name=name,
             type='user',
-            user_id=user_id
+            user_id=user_id,
+            sort_order=next_sort_order
         )
         db.add(category)
         await db.commit()
@@ -71,7 +81,8 @@ class CategoryService:
             id=category.id,
             name=category.name,
             type=category.type,
-            user_id=category.user_id
+            user_id=category.user_id,
+            sort_order=category.sort_order
         )
 
     async def update_category(
@@ -99,7 +110,8 @@ class CategoryService:
             id=category.id,
             name=category.name,
             type=category.type,
-            user_id=category.user_id
+            user_id=category.user_id,
+            sort_order=category.sort_order
         )
 
     async def delete_category(
@@ -225,10 +237,10 @@ class CategoryService:
         self, db: AsyncSession, user_id: int
     ) -> List[BookGroup]:
         """获取按分类分组的书籍列表"""
-        # 获取当前用户的所有分类
+        # 获取当前用户的所有分类（按sort_order排序）
         stmt = select(Category).where(
             (Category.user_id == user_id) | (Category.type == 'system')
-        ).order_by(Category.id)
+        ).order_by(Category.sort_order.asc(), Category.id.asc())
         result = await db.execute(stmt)
         categories = result.scalars().all()
 
@@ -324,6 +336,7 @@ class CategoryService:
                 id=cat.id,
                 name=cat.name,
                 type=cat.type,
+                sort_order=cat.sort_order,
                 books=groups[cat.id]
             ))
 
@@ -344,6 +357,7 @@ class CategoryService:
                 id=db_uncategorized.id,
                 name=db_uncategorized.name,
                 type=db_uncategorized.type,
+                sort_order=db_uncategorized.sort_order,
                 books=merged
             ))
 
@@ -532,43 +546,93 @@ class CategoryService:
         # 构建返回结果
         result_groups: list[BookGroup] = []
 
-        # 查找"未分组"分类
-        uncategorized_category = None
-        other_categories = []
+        # 查找数据库中的"未分组"分类
+        db_uncategorized = None
         for cat in categories:
             if cat.name == "未分组":
-                uncategorized_category = cat
-            else:
-                other_categories.append(cat)
+                db_uncategorized = cat
+                break
 
         # 先添加其他分类（排除"未分组"）
-        for cat in other_categories:
+        for cat in categories:
+            if cat.name == "未分组":
+                continue
             result_groups.append(BookGroup(
                 id=cat.id,
                 name=cat.name,
                 type=cat.type,
+                sort_order=cat.sort_order,
                 books=groups[cat.id]
             ))
 
-        # 再添加"未分组"分类（如果有）
-        if uncategorized_category:
+        # 最后添加数据库中的"未分组"分类（放在最后面）
+        if db_uncategorized:
+            # 合并数据库"未分组"的书籍和未分类的书籍
+            db_uncat_books = groups.get(db_uncategorized.id, [])
+            merged_books = db_uncat_books + uncategorized_books
+            # 去重
+            seen = set()
+            merged = []
+            for b in merged_books:
+                if b.id not in seen:
+                    seen.add(b.id)
+                    merged.append(b)
+            merged.sort(key=lambda x: x.title.lower())
             result_groups.append(BookGroup(
-                id=uncategorized_category.id,
-                name=uncategorized_category.name,
-                type=uncategorized_category.type,
-                books=groups[uncategorized_category.id]
-            ))
-
-        # 最后添加"未分类"分组（如果有未分类的书籍）
-        if uncategorized_books:
-            result_groups.append(BookGroup(
-                id=-1,
-                name="未分类",
-                type="uncategorized",
-                books=uncategorized_books
+                id=db_uncategorized.id,
+                name=db_uncategorized.name,
+                type=db_uncategorized.type,
+                sort_order=db_uncategorized.sort_order,
+                books=merged
             ))
 
         return result_groups
+
+    async def reorder_categories(
+        self, db: AsyncSession, user_id: int, category_ids: List[int]
+    ) -> bool:
+        """重新排序分类
+
+        Args:
+            db: 数据库会话
+            user_id: 用户ID
+            category_ids: 分类ID列表，按期望顺序排列
+
+        Returns:
+            bool: 是否成功
+        """
+        from sqlalchemy import update
+
+        # 验证所有分类都属于该用户
+        stmt = select(Category).where(
+            and_(
+                Category.id.in_(category_ids),
+                Category.user_id == user_id,
+                Category.type == 'user'
+            )
+        )
+        result = await db.execute(stmt)
+        user_categories = result.scalars().all()
+        valid_ids = {c.id for c in user_categories}
+
+        # 过滤掉无效的ID和"未分组"
+        filtered_ids = []
+        for cid in category_ids:
+            if cid in valid_ids:
+                # 检查是否是"未分组"
+                cat = next((c for c in user_categories if c.id == cid), None)
+                if cat and cat.name != '未分组':
+                    filtered_ids.append(cid)
+
+        # 更新排序
+        for index, category_id in enumerate(filtered_ids, start=1):
+            stmt = update(Category).where(
+                Category.id == category_id
+            ).values(sort_order=index)
+            await db.execute(stmt)
+
+        await db.commit()
+        return True
 
 
 category_service = CategoryService()

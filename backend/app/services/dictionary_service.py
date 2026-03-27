@@ -490,5 +490,7 @@ class DictionaryService:
             )
 
 
-# 全局词典服务实例
+# 全局词典服务实例 - 预热：启动时建立连接，加快首次查询
 dictionary_service = DictionaryService()
+if dictionary_service.ecdict_available:
+    dictionary_service._get_ecdict_connection()

@@ -33,6 +33,7 @@ def get_default_tts_config():
             "service_name": "edge-tts",
             # Kokoro TTS 默认配置
             "kokoro_voice": settings.KOKORO_DEFAULT_VOICE,
+            "kokoro_voice_zh": settings.KOKORO_DEFAULT_VOICE_ZH,
             "kokoro_speed": settings.KOKORO_DEFAULT_SPEED,
             "kokoro_api_url": settings.KOKORO_API_URL,
             # 豆包 TTS 默认配置
@@ -46,13 +47,16 @@ def get_default_tts_config():
             "siliconflow_api_key": None,
             "siliconflow_model": settings.SILICONFLOW_DEFAULT_MODEL,
             "siliconflow_voice": settings.SILICONFLOW_DEFAULT_VOICE,
+            "siliconflow_voice_zh": settings.SILICONFLOW_DEFAULT_VOICE,  # 硅基流动音色不区分中英文
             # Edge-TTS 默认配置
             "edge_tts_voice": settings.EDGE_TTS_DEFAULT_VOICE,
+            "edge_tts_voice_zh": settings.EDGE_TTS_DEFAULT_VOICE_ZH,
             "edge_tts_speed": settings.EDGE_TTS_DEFAULT_SPEED,
             # MiniMax TTS 默认配置
             "minimax_api_key": None,
             "minimax_model": settings.MINIMAX_DEFAULT_MODEL,
             "minimax_voice": settings.MINIMAX_DEFAULT_VOICE,
+            "minimax_voice_zh": settings.MINIMAX_DEFAULT_VOICE_ZH,
             "minimax_speed": settings.MINIMAX_DEFAULT_SPEED
         }
     return _default_tts_config
@@ -104,6 +108,7 @@ async def get_user_settings(
             service_name=settings.tts_service_name or default_config["service_name"],
             # Kokoro TTS 设置
             kokoro_voice=settings.kokoro_voice or default_config.get("kokoro_voice"),
+            kokoro_voice_zh=settings.kokoro_voice_zh or default_config.get("kokoro_voice_zh"),
             kokoro_speed=settings.kokoro_speed if settings.kokoro_speed is not None else default_config.get("kokoro_speed", 1.0),
             kokoro_api_url=settings.kokoro_api_url or default_config.get("kokoro_api_url"),
             # 豆包TTS设置
@@ -117,13 +122,16 @@ async def get_user_settings(
             siliconflow_api_key=settings.siliconflow_api_key or default_config.get("siliconflow_api_key"),
             siliconflow_model=settings.siliconflow_model or default_config.get("siliconflow_model"),
             siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
+            siliconflow_voice_zh=settings.siliconflow_voice_zh or default_config.get("siliconflow_voice_zh"),
             # Edge-TTS设置
             edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
+            edge_tts_voice_zh=settings.edge_tts_voice_zh or default_config.get("edge_tts_voice_zh"),
             edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0),
             # MiniMax TTS设置
             minimax_api_key=settings.minimax_api_key or default_config.get("minimax_api_key"),
             minimax_model=settings.minimax_model or default_config.get("minimax_model"),
             minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
+            minimax_voice_zh=settings.minimax_voice_zh or default_config.get("minimax_voice_zh"),
             minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
         ),
         phonetic=UserPhoneticSettings(
@@ -228,6 +236,9 @@ async def update_tts_settings(
     if request.kokoro_voice is not None:
         settings.kokoro_voice = request.kokoro_voice.strip() if request.kokoro_voice.strip() else None
 
+    if request.kokoro_voice_zh is not None:
+        settings.kokoro_voice_zh = request.kokoro_voice_zh.strip() if request.kokoro_voice_zh.strip() else None
+
     if request.kokoro_speed is not None:
         if not (0.5 <= request.kokoro_speed <= 2.0):
             raise HTTPException(
@@ -274,10 +285,14 @@ async def update_tts_settings(
         settings.siliconflow_model = request.siliconflow_model.strip() if request.siliconflow_model.strip() else None
     if request.siliconflow_voice is not None:
         settings.siliconflow_voice = request.siliconflow_voice.strip() if request.siliconflow_voice.strip() else None
+    if request.siliconflow_voice_zh is not None:
+        settings.siliconflow_voice_zh = request.siliconflow_voice_zh.strip() if request.siliconflow_voice_zh.strip() else None
 
     # 更新 Edge-TTS 设置
     if request.edge_tts_voice is not None:
         settings.edge_tts_voice = request.edge_tts_voice.strip() if request.edge_tts_voice.strip() else None
+    if request.edge_tts_voice_zh is not None:
+        settings.edge_tts_voice_zh = request.edge_tts_voice_zh.strip() if request.edge_tts_voice_zh.strip() else None
     if request.edge_tts_speed is not None:
         if not (0.5 <= request.edge_tts_speed <= 2.0):
             raise HTTPException(
@@ -293,6 +308,8 @@ async def update_tts_settings(
         settings.minimax_model = request.minimax_model.strip() if request.minimax_model.strip() else None
     if request.minimax_voice is not None:
         settings.minimax_voice = request.minimax_voice.strip() if request.minimax_voice.strip() else None
+    if request.minimax_voice_zh is not None:
+        settings.minimax_voice_zh = request.minimax_voice_zh.strip() if request.minimax_voice_zh.strip() else None
     if request.minimax_speed is not None:
         if not (0.25 <= request.minimax_speed <= 4.0):
             raise HTTPException(
@@ -309,6 +326,7 @@ async def update_tts_settings(
         service_name=settings.tts_service_name or default_config["service_name"],
         # Kokoro TTS 设置
         kokoro_voice=settings.kokoro_voice or default_config.get("kokoro_voice"),
+        kokoro_voice_zh=settings.kokoro_voice_zh or default_config.get("kokoro_voice_zh"),
         kokoro_speed=settings.kokoro_speed if settings.kokoro_speed is not None else default_config.get("kokoro_speed", 1.0),
         kokoro_api_url=settings.kokoro_api_url or default_config.get("kokoro_api_url"),
         # 豆包TTS设置
@@ -322,13 +340,16 @@ async def update_tts_settings(
         siliconflow_api_key=settings.siliconflow_api_key or default_config.get("siliconflow_api_key"),
         siliconflow_model=settings.siliconflow_model or default_config.get("siliconflow_model"),
         siliconflow_voice=settings.siliconflow_voice or default_config.get("siliconflow_voice"),
+        siliconflow_voice_zh=settings.siliconflow_voice_zh or default_config.get("siliconflow_voice_zh"),
         # Edge-TTS设置
         edge_tts_voice=settings.edge_tts_voice or default_config.get("edge_tts_voice"),
+        edge_tts_voice_zh=settings.edge_tts_voice_zh or default_config.get("edge_tts_voice_zh"),
         edge_tts_speed=settings.edge_tts_speed if settings.edge_tts_speed is not None else default_config.get("edge_tts_speed", 1.0),
         # MiniMax TTS设置
         minimax_api_key=settings.minimax_api_key or default_config.get("minimax_api_key"),
         minimax_model=settings.minimax_model or default_config.get("minimax_model"),
         minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
+        minimax_voice_zh=settings.minimax_voice_zh or default_config.get("minimax_voice_zh"),
         minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
     )
 
@@ -439,6 +460,76 @@ async def get_tts_voices(
         default_voices = [
             {"id": k, "name": v}
             for k, v in voice_name_map.items()
+        ]
+        return {"voices": default_voices}
+
+
+@router.get("/tts/kokoro/voices/zh")
+async def get_kokoro_voices_zh(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Kokoro TTS可用的中文语音列表。
+
+    从Kokoro TTS服务获取支持的语音列表，筛选出中文语音。
+
+    Returns:
+        中文语音列表
+    """
+    settings = get_settings()
+    tts_api_url = settings.KOKORO_API_URL.replace('/v1/audio/speech', '/v1/audio/voices')
+
+    # 中文语音ID到显示名称的映射
+    voice_name_map_zh = {
+        # 中文女声
+        "zf_xiaobei": "中文 女声 - 小贝",
+        "zf_xiaoni": "中文 女声 - 小妮",
+        "zf_xiaoxiao": "中文 女声 - 晓晓",
+        "zf_xiaoyi": "中文 女声 - 小艺",
+        # 中文男声
+        "zm_yunjian": "中文 男声 - 云健",
+        "zm_yunxi": "中文 男声 - 云希",
+        "zm_yunxia": "中文 男声 - 云夏",
+        "zm_yunyang": "中文 男声 - 云扬",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(tts_api_url)
+            if response.status_code == 200:
+                data = response.json()
+                # Kokoro 可能返回字符串数组或对象数组
+                if isinstance(data, list):
+                    all_voices = data
+                elif isinstance(data, dict) and "voices" in data:
+                    all_voices = data["voices"]
+                else:
+                    all_voices = []
+
+                # 筛选中文音色 (zf_, zm_ 开头)
+                voices = []
+                for voice_id, voice_name in voice_name_map_zh.items():
+                    if voice_id in all_voices:
+                        voices.append({"id": voice_id, "name": voice_name})
+
+                # 如果映射中的音色不在返回中，直接筛选 zf_, zm_ 开头的
+                if not voices:
+                    for voice_id in all_voices:
+                        if isinstance(voice_id, str) and (voice_id.startswith('zf_') or voice_id.startswith('zm_')):
+                            # 确定性别
+                            gender = "女声" if voice_id.startswith('zf_') else "男声"
+                            # 提取名称
+                            name = voice_id.split('_')[-1] if '_' in voice_id else voice_id
+                            voices.append({"id": voice_id, "name": f"中文 {gender} - {name}"})
+
+                return {"voices": voices}
+            else:
+                return {"voices": []}
+    except Exception as e:
+        # 如果无法连接到TTS服务，返回默认中文语音列表
+        default_voices = [
+            {"id": k, "name": v}
+            for k, v in voice_name_map_zh.items()
         ]
         return {"voices": default_voices}
 
@@ -614,6 +705,106 @@ async def get_edge_tts_voices(
         return {"voices": []}
 
 
+@router.get("/tts/edge/voices/zh")
+async def get_edge_tts_voices_zh(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取Edge-TTS可用的中文语音列表。
+
+    动态调用 edge-tts --list-voices 命令获取语音列表，
+    过滤出中文语音返回给前端。
+
+    Returns:
+        中文语音列表
+    """
+    import subprocess
+    
+    # 地区名称映射
+    region_names = {
+        "zh-CN": "中国大陆",
+        "zh-HK": "香港粤语",
+        "zh-TW": "台湾国语",
+    }
+    
+    # 性别名称映射
+    gender_names = {
+        "Female": "女声",
+        "Male": "男声",
+    }
+    
+    try:
+        # 调用 edge-tts --list-voices 获取语音列表
+        result = subprocess.run(
+            ["edge-tts", "--list-voices"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            print(f"edge-tts --list-voices 失败: {result.stderr}")
+            return {"voices": []}
+        
+        # 解析输出
+        voices = []
+        lines = result.stdout.strip().split('\n')
+        
+        for line in lines:
+            # 跳过表头行
+            if not line.strip() or 'Name' in line or '---' in line:
+                continue
+            
+            # 提取语音ID（第一列）
+            parts = line.split()
+            if not parts:
+                continue
+            
+            voice_id = parts[0]
+            
+            # 只保留中文语音 (zh-CN, zh-HK, zh-TW)
+            if not (voice_id.startswith('zh-CN') or voice_id.startswith('zh-HK') or voice_id.startswith('zh-TW')):
+                continue
+            
+            # 解析地区和性别
+            region_code = '-'.join(voice_id.split('-')[:2])  # 如 zh-CN
+            
+            # 从行中提取性别
+            gender = "Unknown"
+            if "Female" in line:
+                gender = "Female"
+            elif "Male" in line:
+                gender = "Male"
+            
+            # 提取语音名称（去掉 Neural 后缀）
+            voice_name = voice_id.split('-')[-1].replace('Neural', '').replace('Multilingual', '')
+            
+            # 构建显示名称
+            region_name = region_names.get(region_code, region_code)
+            gender_name = gender_names.get(gender, "")
+            
+            display_name = f"{region_name} - {voice_name} ({gender_name})" if gender_name else f"{region_name} - {voice_name}"
+            
+            voices.append({
+                "id": voice_id,
+                "name": display_name
+            })
+        
+        # 按地区排序（中国大陆在前）
+        voices.sort(key=lambda v: 0 if v["id"].startswith("zh-CN") else 1)
+        
+        return {"voices": voices}
+        
+    except FileNotFoundError:
+        # edge-tts 未安装
+        return {"voices": []}
+    except subprocess.TimeoutExpired:
+        return {"voices": []}
+    except Exception as e:
+        print(f"获取Edge-TTS中文语音列表失败: {e}")
+        return {"voices": []}
+
+
 @router.get("/tts/minimax/voices")
 async def get_minimax_voices(
     current_user: User = Depends(get_current_user),
@@ -678,6 +869,112 @@ async def get_minimax_voices(
 
                     # 构建显示名称：口音 + 姓名
                     display_name = f"{accent} {voice_name}"
+
+                    voices.append({
+                        "id": voice_id,
+                        "name": display_name,
+                        "description": desc_text[:50] if desc_text else ""
+                    })
+
+                return {"voices": voices}
+            else:
+                return {"voices": [], "error": f"获取音色失败: {response.status_code}"}
+
+    except Exception as e:
+        return {"voices": [], "error": str(e)}
+
+
+@router.get("/tts/minimax/voices/zh")
+async def get_minimax_voices_zh(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取 MiniMax 可用的中文语音列表。
+
+    从 MiniMax API 获取 system_voice 列表，筛选出中文语音。
+
+    Returns:
+        中文语音列表
+    """
+    import os
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+    
+    # 优先从用户数据库设置获取 API Key，其次使用全局环境变量
+    api_key = settings.minimax_api_key if settings.minimax_api_key else os.getenv("MINIMAX_API_KEY")
+
+    if not api_key:
+        return {"voices": [], "error": "未配置 MiniMax API Key"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "https://api.minimaxi.com/v1/get_voice",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={"voice_type": "all"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                voices = []
+
+                # 提取系统音色
+                system_voices = data.get("system_voice") or []
+                for voice in system_voices:
+                    if not voice:
+                        continue
+                    voice_id = voice.get("voice_id", "")
+                    voice_name = voice.get("voice_name", "")
+                    description = voice.get("description", [])
+                    desc_text = description[0] if description else ""
+
+                    # 筛选中文音色
+                    # 1. Chinese (Mandarin)_ 前缀 - 标准普通话
+                    # 2. Cantonese_ 前缀 - 粤语
+                    # 3. male-qn-*, female-* 等中文风格名称
+                    # 4. 其他中文风格前缀
+                    is_chinese = (
+                        voice_id.startswith("Chinese (Mandarin)") or
+                        voice_id.startswith("Cantonese_") or
+                        voice_id.startswith("male-qn-") or
+                        voice_id.startswith("female-") or
+                        voice_id.startswith("clever_") or
+                        voice_id.startswith("cute_") or
+                        voice_id.startswith("lovely_") or
+                        voice_id.startswith("cartoon_") or
+                        voice_id.startswith("bingjiao_") or
+                        voice_id.startswith("junlang_") or
+                        voice_id.startswith("chunzhen_") or
+                        voice_id.startswith("lengdan_") or
+                        voice_id.startswith("badao_") or
+                        voice_id.startswith("tianxin_") or
+                        voice_id.startswith("qiaopi_") or
+                        voice_id.startswith("wumei_") or
+                        voice_id.startswith("diadia_") or
+                        voice_id.startswith("danya_")
+                    )
+                    
+                    if not is_chinese:
+                        continue
+
+                    # 判断语音类型
+                    voice_type = "中文音色"
+                    if voice_id.startswith("Chinese (Mandarin)"):
+                        voice_type = "普通话"
+                    elif voice_id.startswith("Cantonese_"):
+                        voice_type = "粤语"
+                    elif voice_id.startswith("male-qn-"):
+                        voice_type = "男声"
+                    elif voice_id.startswith("female-"):
+                        voice_type = "女声"
+
+                    # 构建显示名称
+                    display_name = f"{voice_type} - {voice_name}"
 
                     voices.append({
                         "id": voice_id,
