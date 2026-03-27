@@ -37,12 +37,13 @@ class Book(Base):
 
 class Category(Base):
     __tablename__ = "categories"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     type: Mapped[str] = mapped_column(String)  # 'system' or 'user'
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
-    
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # 分组排序顺序
+
     user: Mapped[Optional["User"]] = relationship(back_populates="categories")
 
 class BookCategoryRel(Base):

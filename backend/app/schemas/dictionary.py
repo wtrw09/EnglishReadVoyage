@@ -38,7 +38,8 @@ class UserTtsSettings(BaseModel):
     """用户朗读设置"""
     service_name: str = Field("kokoro-tts", description="朗读服务名称: kokoro-tts, doubao-tts, siliconflow-tts, edge-tts 或 minimax-tts")
     # Kokoro TTS 设置
-    kokoro_voice: Optional[str] = Field(None, description="Kokoro语音类型")
+    kokoro_voice: Optional[str] = Field(None, description="Kokoro语音类型(英文)")
+    kokoro_voice_zh: Optional[str] = Field(None, description="Kokoro语音类型(中文)")
     kokoro_speed: float = Field(1.0, description="Kokoro朗读速度 (0.5-2.0)")
     kokoro_api_url: Optional[str] = Field(None, description="Kokoro服务地址，为空则使用系统默认")
     # 豆包TTS设置
@@ -51,14 +52,17 @@ class UserTtsSettings(BaseModel):
     # 硅基流动TTS设置
     siliconflow_api_key: Optional[str] = Field(None, description="硅基流动API Key")
     siliconflow_model: Optional[str] = Field(None, description="硅基流动模型名称")
-    siliconflow_voice: Optional[str] = Field(None, description="硅基流动语音类型")
+    siliconflow_voice: Optional[str] = Field(None, description="硅基流动语音类型(英文)")
+    siliconflow_voice_zh: Optional[str] = Field(None, description="硅基流动语音类型(中文)")
     # Edge-TTS设置
-    edge_tts_voice: Optional[str] = Field(None, description="Edge-TTS语音类型")
+    edge_tts_voice: Optional[str] = Field(None, description="Edge-TTS语音类型(英文)")
+    edge_tts_voice_zh: Optional[str] = Field(None, description="Edge-TTS语音类型(中文)")
     edge_tts_speed: float = Field(1.0, description="Edge-TTS朗读速度 (0.5-2.0)")
     # MiniMax TTS设置
     minimax_api_key: Optional[str] = Field(None, description="MiniMax API Key")
     minimax_model: Optional[str] = Field(None, description="MiniMax模型名称")
-    minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型")
+    minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型(英文)")
+    minimax_voice_zh: Optional[str] = Field(None, description="MiniMax语音类型(中文)")
     minimax_speed: float = Field(1.0, description="MiniMax朗读速度 (0.25-4.0)")
 
 
@@ -99,7 +103,8 @@ class UpdateTtsSettingsRequest(BaseModel):
     """更新朗读设置请求"""
     service_name: Optional[str] = Field(None, description="朗读服务名称: kokoro-tts, doubao-tts, siliconflow-tts, edge-tts 或 minimax-tts")
     # Kokoro TTS 设置
-    kokoro_voice: Optional[str] = Field(None, description="Kokoro语音类型")
+    kokoro_voice: Optional[str] = Field(None, description="Kokoro语音类型(英文)")
+    kokoro_voice_zh: Optional[str] = Field(None, description="Kokoro语音类型(中文)")
     kokoro_speed: Optional[float] = Field(None, description="Kokoro朗读速度 (0.5-2.0)")
     kokoro_api_url: Optional[str] = Field(None, description="Kokoro服务地址，为空则使用系统默认")
     # 豆包TTS设置
@@ -112,14 +117,17 @@ class UpdateTtsSettingsRequest(BaseModel):
     # 硅基流动TTS设置
     siliconflow_api_key: Optional[str] = Field(None, description="硅基流动API Key")
     siliconflow_model: Optional[str] = Field(None, description="硅基流动模型名称")
-    siliconflow_voice: Optional[str] = Field(None, description="硅基流动语音类型")
+    siliconflow_voice: Optional[str] = Field(None, description="硅基流动语音类型(英文)")
+    siliconflow_voice_zh: Optional[str] = Field(None, description="硅基流动语音类型(中文)")
     # Edge-TTS设置
-    edge_tts_voice: Optional[str] = Field(None, description="Edge-TTS语音类型")
+    edge_tts_voice: Optional[str] = Field(None, description="Edge-TTS语音类型(英文)")
+    edge_tts_voice_zh: Optional[str] = Field(None, description="Edge-TTS语音类型(中文)")
     edge_tts_speed: Optional[float] = Field(None, description="Edge-TTS朗读速度 (0.5-2.0)")
     # MiniMax TTS设置
     minimax_api_key: Optional[str] = Field(None, description="MiniMax API Key")
     minimax_model: Optional[str] = Field(None, description="MiniMax模型名称")
-    minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型")
+    minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型(英文)")
+    minimax_voice_zh: Optional[str] = Field(None, description="MiniMax语音类型(中文)")
     minimax_speed: Optional[float] = Field(None, description="MiniMax朗读速度 (0.25-4.0)")
 
 

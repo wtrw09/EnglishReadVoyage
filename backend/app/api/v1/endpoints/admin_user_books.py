@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
-from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse, BookWithCategory, BookGroup
+from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse, BookWithCategory, BookGroup, CategoryReorderRequest
 from app.services.category_service import category_service
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
@@ -37,6 +37,37 @@ async def list_user_categories(
 
     # 返回被管理用户的分组
     return await category_service.list_categories(db, user_id)
+
+
+@router.put("/users/{user_id}/categories/reorder")
+async def reorder_user_categories(
+    user_id: int,
+    request: CategoryReorderRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """重新排序指定用户的分组（管理员接口）
+    
+    为被管理用户更新分组排序
+    """
+    # 验证用户是否存在
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+
+    success = await category_service.reorder_categories(db, user_id, request.category_ids)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="排序更新失败"
+        )
+    return {"success": True, "message": "排序更新成功"}
 
 
 @router.post("/users/{user_id}/categories", response_model=CategoryResponse)

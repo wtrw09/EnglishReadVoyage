@@ -19,9 +19,14 @@
       <div class="section">
         <div class="section-header">
           <span class="section-title">分组管理</span>
-          <van-button type="primary" size="small" icon="plus" @click="showCreateCategoryDialog">
-            新建分组
-          </van-button>
+          <div class="section-actions">
+            <van-button type="primary" size="small" icon="exchange" @click="showSortCategories" style="margin-right: 8px;">
+              排序
+            </van-button>
+            <van-button type="primary" size="small" icon="plus" @click="showCreateCategoryDialog">
+              新建分组
+            </van-button>
+          </div>
         </div>
 
         <van-collapse v-model="activeCategoryNames" accordion>
@@ -133,7 +138,7 @@
             :key="group.id"
             :name="group.id"
             class="category-item"
-            v-show="group.name !== '未分类' || group.books.length > 0"
+
           >
             <template #title>
               <div class="category-title">
@@ -261,6 +266,38 @@
       </van-form>
     </van-dialog>
 
+    <!-- 分组排序对话框 -->
+    <van-dialog
+      v-model:show="showSortCategoriesDialog"
+      title="排序分组"
+      show-cancel-button
+      confirm-button-text="保存"
+      cancel-button-text="取消"
+      @confirm="handleSaveCategoryOrder"
+      @cancel="handleCancelSortCategories"
+    >
+      <div class="sort-categories-container">
+        <draggable
+          v-model="sortableCategories"
+          item-key="id"
+          handle=".drag-handle"
+          ghost-class="sort-ghost"
+          drag-class="sort-drag"
+        >
+          <template #item="{ element }">
+            <div
+              class="sort-category-item"
+              :class="{ 'is-uncategorized': element.name === '未分组' }"
+            >
+              <van-icon name="bars" class="drag-handle" />
+              <span class="category-name">{{ element.name }}</span>
+              <span v-if="element.name === '未分组'" class="fixed-label">(固定)</span>
+            </div>
+          </template>
+        </draggable>
+      </div>
+    </van-dialog>
+
     <!-- 书籍右键菜单（用户已有书籍） -->
     <van-popup
       v-model:show="showBookContextMenuPopup"
@@ -367,12 +404,14 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { showNotify, showConfirmDialog } from 'vant'
 import { api } from '@/store/auth'
+import draggable from 'vuedraggable'
 
 interface Category {
   id: number
   name: string
   type: string
   user_id?: number
+  sort_order: number
 }
 
 interface Book {
@@ -389,8 +428,12 @@ interface BookGroup {
   id: number
   name: string
   type: string
+  sort_order: number
   books: Book[]
 }
+
+// 注册draggable组件
+const Draggable = draggable
 
 const router = useRouter()
 const route = useRoute()
@@ -436,6 +479,10 @@ const newCategoryInSelect = ref('')
 const isMultiSelect = ref(false)
 const selectedBooks = ref<string[]>([])
 
+// 分组排序相关
+const showSortCategoriesDialog = ref(false)
+const sortableCategories = ref<Category[]>([])
+
 // 计算属性
 // 用户创建的分类（不包含默认的未分组）
 const userCategories = computed(() => {
@@ -444,10 +491,6 @@ const userCategories = computed(() => {
 
 // 获取未添加书籍分组的书籍
 const getUnaddedGroupBooks = (groupId: number | string): Book[] => {
-  if (groupId === 'uncategorized' || groupId === -1) {
-    const uncategorized = unaddedBookGroups.value.find(g => g.name === '未分类')
-    return uncategorized?.books || []
-  }
   const group = unaddedBookGroups.value.find(g => g.id === groupId)
   return group?.books || []
 }
@@ -590,6 +633,35 @@ const confirmDeleteCategory = (category: Category) => {
       })
     }
   }).catch(() => {})
+}
+
+// 分组排序
+const showSortCategories = () => {
+  // 复制当前分类列表（排除未分组）
+  sortableCategories.value = categories.value.filter(c => c.name !== '未分组')
+  showSortCategoriesDialog.value = true
+}
+
+const handleSaveCategoryOrder = async () => {
+  try {
+    const orderedIds = sortableCategories.value.map(c => c.id)
+    await api.put(`/admin/users/${userId.value}/categories/reorder`, {
+      category_ids: orderedIds
+    })
+    showNotify({ type: 'success', message: '排序已保存' })
+    showSortCategoriesDialog.value = false
+    await loadData()
+  } catch (error: any) {
+    showNotify({
+      type: 'danger',
+      message: error.response?.data?.detail || '保存排序失败'
+    })
+  }
+}
+
+const handleCancelSortCategories = () => {
+  sortableCategories.value = []
+  showSortCategoriesDialog.value = false
 }
 
 // 书籍分配
@@ -1088,5 +1160,58 @@ onMounted(() => {
 /* 选中状态 */
 .book-item.selected {
   background: #e6f7ff;
+}
+
+/* 分组排序样式 */
+.sort-categories-container {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.sort-category-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: move;
+
+  &.is-uncategorized {
+    background: #e8f0fe;
+    cursor: not-allowed;
+  }
+
+  .drag-handle {
+    margin-right: 12px;
+    color: #969799;
+    font-size: 18px;
+  }
+
+  &.is-uncategorized .drag-handle {
+    color: #1989fa;
+  }
+
+  .category-name {
+    flex: 1;
+    font-size: 14px;
+    color: #323233;
+  }
+
+  .fixed-label {
+    font-size: 12px;
+    color: #969799;
+  }
+}
+
+.sort-ghost {
+  opacity: 0.5;
+  background: #c8c9cc;
+}
+
+.sort-drag {
+  opacity: 0.8;
+  background: #e8f0fe;
 }
 </style>

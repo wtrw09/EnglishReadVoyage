@@ -320,6 +320,38 @@
       />
     </van-dialog>
 
+    <!-- 分组排序对话框 -->
+    <van-dialog
+      v-model:show="showSortGroupsDialog"
+      title="排序分组"
+      show-cancel-button
+      confirm-button-text="保存"
+      cancel-button-text="取消"
+      @confirm="onSaveGroupOrder"
+      @cancel="onCancelSortMode"
+    >
+      <div class="sort-groups-container">
+        <draggable
+          v-model="sortableGroups"
+          item-key="id"
+          handle=".drag-handle"
+          ghost-class="sort-ghost"
+          drag-class="sort-drag"
+        >
+          <template #item="{ element }">
+            <div
+              class="sort-group-item"
+              :class="{ 'is-uncategorized': element.name === '未分组' }"
+            >
+              <van-icon name="bars" class="drag-handle" />
+              <span class="group-name">{{ element.name }}</span>
+              <span v-if="element.name === '未分组'" class="fixed-label">(固定)</span>
+            </div>
+          </template>
+        </draggable>
+      </div>
+    </van-dialog>
+
     <!-- 导入完成后选择对话框 -->
     <van-dialog
       v-model:show="showChoiceDialog"
@@ -619,7 +651,7 @@
       confirm-button-text="保存"
       cancel-button-text="取消"
       @confirm="saveTtsSettings"
-      @closed="stopTtsTest"
+      @closed="() => { stopTtsTest(); stopTtsTestZh(); }"
     >
       <div class="settings-dialog-content">
         <!-- 服务名称 -->
@@ -637,12 +669,27 @@
 
         <!-- 语音选择 -->
         <van-field
-          label="语音类型"
+          label="英文音色"
         >
           <template #input>
             <select v-model="ttsVoice" class="tts-voice-select">
-              <option value="" disabled>请选择语音类型</option>
+              <option value="" disabled>请选择英文音色</option>
               <option v-for="voice in availableVoices" :key="voice.id" :value="voice.id">
+                {{ voice.name }}
+              </option>
+            </select>
+          </template>
+        </van-field>
+
+        <!-- 中文音色选择 -->
+        <van-field
+          v-if="availableVoicesZh.length > 0"
+          label="中文音色"
+        >
+          <template #input>
+            <select v-model="ttsVoiceZh" class="tts-voice-select">
+              <option value="" disabled>请选择中文音色</option>
+              <option v-for="voice in availableVoicesZh" :key="voice.id" :value="voice.id">
                 {{ voice.name }}
               </option>
             </select>
@@ -771,6 +818,20 @@
             测试朗读
           </van-button>
           <p class="test-text">{{ ttsTestText }}</p>
+        </div>
+
+        <!-- 中文测试按钮 -->
+        <div v-if="availableVoicesZh.length > 0" class="tts-test-section">
+          <van-button
+            type="primary"
+            size="small"
+            icon="play-circle-o"
+            :loading="ttsTestingZh"
+            @click="testTtsZh"
+          >
+            测试中文
+          </van-button>
+          <p class="test-text">{{ ttsTestTextZh }}</p>
         </div>
       </div>
     </van-dialog>
@@ -952,6 +1013,7 @@ import { showConfirmDialog, showNotify, showToast, showLoadingToast, closeToast 
 import { useAuthStore, api } from '@/store/auth'
 import BookEditDialog from '@/components/BookEditDialog.vue'
 import AudioFixDialog from '@/components/AudioFixDialog.vue'
+import draggable from 'vuedraggable'
 
 // 定义组件名称，用于 keep-alive 匹配
 defineOptions({
@@ -1035,6 +1097,8 @@ const selectedDuplicateBooks = ref<string[]>([]) // 用户选中的重复书籍I
 // 分组相关
 const showAddGroupDialog = ref(false)
 const newGroupName = ref('')
+const showSortGroupsDialog = ref(false)
+const sortableGroups = ref<BookGroup[]>([])
 
 // 编辑相关状态
 const showEditDialog = ref(false)
@@ -1105,6 +1169,7 @@ const ttsEdgeTtsVoice = ref('')
 const defaultTtsConfig = ref({
   service_name: 'edge-tts',
   voice: 'en-US-AriaNeural',
+  voice_zh: '',
   speed: 1.0,
   api_url: 'http://localhost:8880/v1/audio/speech',
   app_id: '',
@@ -1113,12 +1178,17 @@ const defaultTtsConfig = ref({
   siliconflow_api_key: '',
   siliconflow_model: 'fnlp/MOSS-TTSD-v0.5',
   siliconflow_voice: 'anna',
+  siliconflow_voice_zh: '',
   edge_tts_voice: 'en-US-AriaNeural',
+  edge_tts_voice_zh: 'zh-CN-XiaoxiaoNeural',
   edge_tts_speed: 1.0,
   minimax_api_key: '',
   minimax_model: 'speech-2.8-hd',
   minimax_voice: 'male-qn-qingse',
-  minimax_speed: 1.0
+  minimax_voice_zh: 'male-qn-qingse',
+  minimax_speed: 1.0,
+  kokoro_voice_zh: 'zf_001',
+  doubao_voice_zh: 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'
 })
 const ttsVoices = ref<{id: string, name: string}[]>([])
 // 硅基流动固定模型和语音列表
@@ -1148,8 +1218,24 @@ const ttsMinimaxSpeed = ref(1.0)
 const minimaxVoices = ref<{id: string, name: string}[]>([])
 const minimaxUsageChecking = ref(false)
 const ttsTesting = ref(false)
-const ttsTestText = "She meticulously practiced the intricate piano sonata, her fingers dancing across the ivory keys with a grace that belied the immense concentration required."
+const ttsTestingZh = ref(false)
+const ttsTestText = "She practiced the piano sonata with grace and concentration."
+const ttsTestTextZh = "她认真练习钢琴奏鸣曲，展现出优雅与专注。"
 let currentTestAudio: HTMLAudioElement | null = null
+let currentTestAudioZh: HTMLAudioElement | null = null
+
+// 中文音色状态
+const ttsVoiceZh = ref('')
+const edgeTtsVoicesZh = ref<{id: string, name: string}[]>([])
+const minimaxVoicesZh = ref<{id: string, name: string}[]>([])
+const kokoroVoicesZh = ref<{id: string, name: string}[]>([])
+
+// 豆包中文音色列表（硬编码，筛选zh_开头）
+const doubaoVoicesZh = [
+  { id: 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts', name: '爽快思思(多情感)' },
+  { id: 'zh_female_yingyujiaoyu_mars_bigtts', name: 'Tina老师' },
+  { id: 'zh_female_shuangkuaisisi_moon_bigtts', name: '爽快思思/Skye' },
+]
 
 // 词典设置弹窗
 const showDictionarySettingsDialog = ref(false)
@@ -1176,19 +1262,48 @@ const loadUserSettings = async () => {
     // 获取服务名称
     const serviceName = res.data.tts?.service_name || 'edge-tts'
 
-    // 根据服务类型选择对应的语音和语速配置
-    const isKokoro = serviceName === 'kokoro-tts'
-    const voice = isKokoro
-      ? (res.data.tts?.kokoro_voice || 'bf_v0isabella')
-      : (res.data.tts?.doubao_voice || 'en_male_corey_emo_v2_mars_bigtts')
-    const speed = isKokoro
-      ? (res.data.tts?.kokoro_speed ?? 1.0)
-      : (res.data.tts?.doubao_speed ?? 1.0)
+    // 根据服务类型选择对应的语音、中文语音和语速配置
+    let voice = ''
+    let voiceZh = ''
+    let speed = 1.0
+
+    switch (serviceName) {
+      case 'kokoro-tts':
+        voice = res.data.tts?.kokoro_voice || 'bf_v0isabella'
+        voiceZh = res.data.tts?.kokoro_voice_zh || 'zf_001'
+        speed = res.data.tts?.kokoro_speed ?? 1.0
+        break
+      case 'doubao-tts':
+        voice = res.data.tts?.doubao_voice || 'en_male_corey_emo_v2_mars_bigtts'
+        voiceZh = res.data.tts?.doubao_voice_zh || 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'
+        speed = res.data.tts?.doubao_speed ?? 1.0
+        break
+      case 'siliconflow-tts':
+        voice = res.data.tts?.siliconflow_voice || 'anna'
+        voiceZh = res.data.tts?.siliconflow_voice_zh || 'anna'
+        speed = 1.0  // 硅基流动不支持语速调节
+        break
+      case 'edge-tts':
+        voice = res.data.tts?.edge_tts_voice || 'en-US-AriaNeural'
+        voiceZh = res.data.tts?.edge_tts_voice_zh || 'zh-CN-XiaoxiaoNeural'
+        speed = res.data.tts?.edge_tts_speed ?? 1.0
+        break
+      case 'minimax-tts':
+        voice = res.data.tts?.minimax_voice || 'male-qn-qingse'
+        voiceZh = res.data.tts?.minimax_voice_zh || 'male-qn-qingse'
+        speed = res.data.tts?.minimax_speed ?? 1.0
+        break
+      default:
+        voice = 'en-US-AriaNeural'
+        voiceZh = 'zh-CN-XiaoxiaoNeural'
+        speed = 1.0
+    }
 
     // 保存默认配置（后端已处理默认值逻辑，直接使用）
     defaultTtsConfig.value = {
       service_name: serviceName,
       voice: voice,
+      voice_zh: voiceZh,
       speed: speed,
       api_url: res.data.tts?.kokoro_api_url || '',
       app_id: res.data.tts?.doubao_app_id || '',
@@ -1197,17 +1312,23 @@ const loadUserSettings = async () => {
       siliconflow_api_key: res.data.tts?.siliconflow_api_key || '',
       siliconflow_model: res.data.tts?.siliconflow_model || 'fnlp/MOSS-TTSD-v0.5',
       siliconflow_voice: res.data.tts?.siliconflow_voice || 'anna',
+      siliconflow_voice_zh: res.data.tts?.siliconflow_voice_zh || 'anna',
       edge_tts_voice: res.data.tts?.edge_tts_voice || 'en-US-AriaNeural',
+      edge_tts_voice_zh: res.data.tts?.edge_tts_voice_zh || 'zh-CN-XiaoxiaoNeural',
       edge_tts_speed: res.data.tts?.edge_tts_speed ?? 1.0,
       minimax_api_key: res.data.tts?.minimax_api_key || '',
       minimax_model: res.data.tts?.minimax_model || 'speech-2.8-hd',
       minimax_voice: res.data.tts?.minimax_voice || 'male-qn-qingse',
-      minimax_speed: res.data.tts?.minimax_speed ?? 1.0
+      minimax_voice_zh: res.data.tts?.minimax_voice_zh || 'male-qn-qingse',
+      minimax_speed: res.data.tts?.minimax_speed ?? 1.0,
+      kokoro_voice_zh: res.data.tts?.kokoro_voice_zh || 'zf_001',
+      doubao_voice_zh: res.data.tts?.doubao_voice_zh || 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'
     }
     // 使用后端返回的值（已包含.env默认值）
     ttsServiceName.value = defaultTtsConfig.value.service_name
-    ttsVoice.value = defaultTtsConfig.value.voice
-    ttsSpeed.value = defaultTtsConfig.value.speed
+    ttsVoice.value = voice
+    ttsVoiceZh.value = voiceZh
+    ttsSpeed.value = speed
     ttsApiUrl.value = defaultTtsConfig.value.api_url || ''
     // 豆包配置
     ttsAppId.value = defaultTtsConfig.value.app_id || ''
@@ -1265,12 +1386,47 @@ const loadTtsVoices = async () => {
   }
 }
 
+// 将 Edge-TTS 语音 ID 转换为显示名称
+const formatEdgeTtsVoiceName = (voiceId: string): string => {
+  if (!voiceId) return ''
+
+  // 地区名称映射
+  const regionNames: Record<string, string> = {
+    'en-US': '美式英语',
+    'en-GB': '英式英语',
+  }
+
+  // 提取地区代码
+  const parts = voiceId.split('-')
+  if (parts.length < 3) return voiceId
+
+  const regionCode = `${parts[0]}-${parts[1]}`
+  const regionName = regionNames[regionCode] || regionCode
+
+  // 提取语音名称（去掉 Neural 后缀）
+  const voiceName = parts.slice(2).join('-')
+    .replace(/Neural$/, '')
+    .replace(/Multilingual$/, '')
+
+  return `${regionName} - ${voiceName}`
+}
+
 // 加载Edge-TTS语音列表
 const loadEdgeTtsVoices = async () => {
   try {
     const res = await api.get('/settings/tts/edge/voices')
     if (res.data.voices && res.data.voices.length > 0) {
       edgeTtsVoices.value = res.data.voices
+      // 如果当前语音不在列表中，添加临时选项（确保选中项能显示）
+      if (ttsVoice.value && ttsServiceName.value === 'edge-tts') {
+        const voiceExists = edgeTtsVoices.value.some((v: {id: string, name: string}) => v.id === ttsVoice.value)
+        if (!voiceExists) {
+          edgeTtsVoices.value.unshift({
+            id: ttsVoice.value,
+            name: formatEdgeTtsVoiceName(ttsVoice.value) + ' (当前使用)'
+          })
+        }
+      }
     } else {
       edgeTtsVoices.value = []
       showNotify({ type: 'warning', message: '没有可用的Edge-TTS语音模型' })
@@ -1291,12 +1447,100 @@ const loadMinimaxVoices = async () => {
       minimaxVoices.value = []
     } else if (res.data.voices && res.data.voices.length > 0) {
       minimaxVoices.value = res.data.voices
+      // 如果当前语音不在列表中，添加临时选项（确保选中项能显示）
+      if (ttsVoice.value && ttsServiceName.value === 'minimax-tts') {
+        const voiceExists = minimaxVoices.value.some((v: {id: string, name: string}) => v.id === ttsVoice.value)
+        if (!voiceExists) {
+          minimaxVoices.value.unshift({
+            id: ttsVoice.value,
+            name: ttsVoice.value + ' (当前使用)'
+          })
+        }
+      }
     } else {
       minimaxVoices.value = []
     }
   } catch (error) {
     console.error('加载MiniMax语音列表失败:', error)
     minimaxVoices.value = []
+  }
+}
+
+// 加载Edge-TTS中文语音列表
+const loadEdgeTtsVoicesZh = async () => {
+  try {
+    const res = await api.get('/settings/tts/edge/voices/zh')
+    if (res.data.voices && res.data.voices.length > 0) {
+      edgeTtsVoicesZh.value = res.data.voices
+      // 如果当前中文语音不在列表中，添加临时选项（确保选中项能显示）
+      if (ttsVoiceZh.value && ttsServiceName.value === 'edge-tts') {
+        const voiceExists = edgeTtsVoicesZh.value.some((v: {id: string, name: string}) => v.id === ttsVoiceZh.value)
+        if (!voiceExists) {
+          edgeTtsVoicesZh.value.unshift({
+            id: ttsVoiceZh.value,
+            name: ttsVoiceZh.value + ' (当前使用)'
+          })
+        }
+      }
+    } else {
+      edgeTtsVoicesZh.value = []
+    }
+  } catch (error) {
+    console.error('加载Edge-TTS中文语音列表失败:', error)
+    edgeTtsVoicesZh.value = []
+  }
+}
+
+// 加载MiniMax中文语音列表
+const loadMinimaxVoicesZh = async () => {
+  try {
+    const res = await api.get('/settings/tts/minimax/voices/zh')
+    if (res.data.error) {
+      console.warn('获取MiniMax中文语音列表失败:', res.data.error)
+      minimaxVoicesZh.value = []
+    } else if (res.data.voices && res.data.voices.length > 0) {
+      minimaxVoicesZh.value = res.data.voices
+      // 如果当前中文语音不在列表中，添加临时选项（确保选中项能显示）
+      if (ttsVoiceZh.value && ttsServiceName.value === 'minimax-tts') {
+        const voiceExists = minimaxVoicesZh.value.some((v: {id: string, name: string}) => v.id === ttsVoiceZh.value)
+        if (!voiceExists) {
+          minimaxVoicesZh.value.unshift({
+            id: ttsVoiceZh.value,
+            name: ttsVoiceZh.value + ' (当前使用)'
+          })
+        }
+      }
+    } else {
+      minimaxVoicesZh.value = []
+    }
+  } catch (error) {
+    console.error('加载MiniMax中文语音列表失败:', error)
+    minimaxVoicesZh.value = []
+  }
+}
+
+// 加载Kokoro中文语音列表
+const loadKokoroVoicesZh = async () => {
+  try {
+    const res = await api.get('/settings/tts/kokoro/voices/zh')
+    if (res.data.voices && res.data.voices.length > 0) {
+      kokoroVoicesZh.value = res.data.voices
+      // 如果当前中文语音不在列表中，添加临时选项（确保选中项能显示）
+      if (ttsVoiceZh.value && ttsServiceName.value === 'kokoro-tts') {
+        const voiceExists = kokoroVoicesZh.value.some((v: {id: string, name: string}) => v.id === ttsVoiceZh.value)
+        if (!voiceExists) {
+          kokoroVoicesZh.value.unshift({
+            id: ttsVoiceZh.value,
+            name: ttsVoiceZh.value + ' (当前使用)'
+          })
+        }
+      }
+    } else {
+      kokoroVoicesZh.value = []
+    }
+  } catch (error) {
+    console.error('加载Kokoro中文语音列表失败:', error)
+    kokoroVoicesZh.value = []
   }
 }
 
@@ -1351,98 +1595,134 @@ const availableVoices = computed(() => {
   return ttsVoices.value
 })
 
+// 根据服务类型获取对应的中文语音列表
+const availableVoicesZh = computed(() => {
+  if (ttsServiceName.value === 'doubao-tts') {
+    return doubaoVoicesZh
+  }
+  // 硅基流动不区分中英文，复用英文音色
+  if (ttsServiceName.value === 'siliconflow-tts') {
+    return siliconflowVoices
+  }
+  if (ttsServiceName.value === 'edge-tts') {
+    return edgeTtsVoicesZh.value
+  }
+  if (ttsServiceName.value === 'minimax-tts') {
+    return minimaxVoicesZh.value
+  }
+  // Kokoro
+  return kokoroVoicesZh.value
+})
+
 // 监听服务切换，从数据库恢复该服务的设置
 watch(ttsServiceName, async (newService, oldService) => {
   if (newService !== oldService && oldService !== undefined) {
-
     try {
       // 从数据库获取最新设置
       const res = await api.get('/settings/')
       const ttsSettings = res.data.tts
 
+      // 先设置当前值（立即显示）
       if (newService === 'kokoro-tts') {
         // 恢复 Kokoro 设置
-        await loadTtsVoices()
         const savedVoice = ttsSettings?.kokoro_voice
+        const savedVoiceZh = ttsSettings?.kokoro_voice_zh
         const savedSpeed = ttsSettings?.kokoro_speed
-
-        // 优先使用数据库中的语音，如果没有则使用 .env 默认值
-        if (savedVoice) {
-          ttsVoice.value = savedVoice
-        } else if (ttsVoices.value.length > 0) {
-          // 检查默认语音是否在列表中
-          const defaultVoice = defaultTtsConfig.value.voice || 'bf_v0isabella'
-          const voiceExists = ttsVoices.value.some((v: {id: string, name: string}) => v.id === defaultVoice)
-          ttsVoice.value = voiceExists ? defaultVoice : ttsVoices.value[0].id
+        ttsVoice.value = savedVoice || 'bf_v0isabella'
+        ttsVoiceZh.value = savedVoiceZh || 'zf_001'
+        ttsSpeed.value = savedSpeed ?? 1.0
+        // 先添加临时选项确保下拉框能立即显示
+        if (ttsVoice.value && !ttsVoices.value.some(v => v.id === ttsVoice.value)) {
+          ttsVoices.value.unshift({ id: ttsVoice.value, name: ttsVoice.value + ' (当前使用)' })
         }
-
-        // 恢复语速
-        ttsSpeed.value = savedSpeed ?? defaultTtsConfig.value.speed ?? 1.0
+        if (ttsVoiceZh.value && !kokoroVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+          kokoroVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+        }
+        // 异步加载语音列表
+        loadTtsVoices()
+        loadKokoroVoicesZh()
       } else if (newService === 'siliconflow-tts') {
-        // 恢复硅基流动设置（不支持语速调节）
+        // 恢复硅基流动设置
         const savedVoice = ttsSettings?.siliconflow_voice
+        const savedVoiceZh = ttsSettings?.siliconflow_voice_zh
         const savedModel = ttsSettings?.siliconflow_model
-
-        // 恢复语音和模型
         ttsVoice.value = savedVoice || 'anna'
+        ttsVoiceZh.value = savedVoiceZh || savedVoice || 'anna'
         ttsSiliconFlowModel.value = savedModel || 'fnlp/MOSS-TTSD-v0.5'
+        // 硅基流动不需要加载列表（硬编码）
       } else if (newService === 'edge-tts') {
         // 恢复 Edge-TTS 设置
-        await loadEdgeTtsVoices()
         const savedVoice = ttsSettings?.edge_tts_voice
+        const savedVoiceZh = ttsSettings?.edge_tts_voice_zh
         const savedSpeed = ttsSettings?.edge_tts_speed
-
-        // 恢复语音和语速
-        if (savedVoice) {
-          ttsVoice.value = savedVoice
-        } else if (edgeTtsVoices.value.length > 0) {
-          ttsVoice.value = edgeTtsVoices.value[0].id
-        }
+        ttsVoice.value = savedVoice || 'en-US-AriaNeural'
+        ttsVoiceZh.value = savedVoiceZh || 'zh-CN-XiaoxiaoNeural'
         ttsSpeed.value = savedSpeed ?? 1.0
+        // 先添加临时选项确保下拉框能立即显示
+        if (ttsVoice.value && !edgeTtsVoices.value.some(v => v.id === ttsVoice.value)) {
+          edgeTtsVoices.value.unshift({ id: ttsVoice.value, name: formatEdgeTtsVoiceName(ttsVoice.value) + ' (当前使用)' })
+        }
+        if (ttsVoiceZh.value && !edgeTtsVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+          edgeTtsVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+        }
+        // 异步加载语音列表
+        loadEdgeTtsVoices()
+        loadEdgeTtsVoicesZh()
       } else if (newService === 'minimax-tts') {
         // 恢复 MiniMax TTS 设置
-        await loadMinimaxVoices()
         const savedVoice = ttsSettings?.minimax_voice
+        const savedVoiceZh = ttsSettings?.minimax_voice_zh
         const savedSpeed = ttsSettings?.minimax_speed
         const savedModel = ttsSettings?.minimax_model
-
-        // 恢复语音、语速和模型
-        if (savedVoice) {
-          ttsVoice.value = savedVoice
-        } else if (minimaxVoices.value.length > 0) {
-          ttsVoice.value = minimaxVoices.value[0].id
-        }
+        ttsVoice.value = savedVoice || 'male-qn-qingse'
+        ttsVoiceZh.value = savedVoiceZh || 'male-qn-qingse'
         ttsSpeed.value = savedSpeed ?? 1.0
         ttsMinimaxModel.value = savedModel || 'speech-2.8-hd'
+        // 先添加临时选项确保下拉框能立即显示
+        if (ttsVoice.value && !minimaxVoices.value.some(v => v.id === ttsVoice.value)) {
+          minimaxVoices.value.unshift({ id: ttsVoice.value, name: ttsVoice.value + ' (当前使用)' })
+        }
+        if (ttsVoiceZh.value && !minimaxVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+          minimaxVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+        }
+        // 异步加载语音列表
+        loadMinimaxVoices()
+        loadMinimaxVoicesZh()
       } else {
         // 恢复豆包设置
         const savedVoice = ttsSettings?.doubao_voice
+        const savedVoiceZh = ttsSettings?.doubao_voice_zh
         const savedSpeed = ttsSettings?.doubao_speed
         const savedResourceId = ttsSettings?.doubao_resource_id
-
-        // 优先使用数据库中的语音
         ttsVoice.value = savedVoice || 'en_male_corey_emo_v2_mars_bigtts'
+        ttsVoiceZh.value = savedVoiceZh || 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'
         ttsSpeed.value = savedSpeed ?? 1.0
         ttsResourceId.value = savedResourceId || defaultTtsConfig.value.resource_id || 'seed-tts-1.0'
+        // 豆包不需要加载列表（硬编码）
       }
     } catch (error) {
       console.error('恢复设置失败:', error)
       // 使用默认值
       if (newService === 'kokoro-tts') {
         ttsVoice.value = 'bf_v0isabella'
+        ttsVoiceZh.value = 'zf_001'
         ttsSpeed.value = 1.0
       } else if (newService === 'siliconflow-tts') {
         ttsVoice.value = 'anna'
+        ttsVoiceZh.value = 'anna'
         ttsSiliconFlowModel.value = 'fnlp/MOSS-TTSD-v0.5'
       } else if (newService === 'edge-tts') {
-        ttsVoice.value = ''
+        ttsVoice.value = 'en-US-AriaNeural'
+        ttsVoiceZh.value = 'zh-CN-XiaoxiaoNeural'
         ttsSpeed.value = 1.0
       } else if (newService === 'minimax-tts') {
         ttsVoice.value = 'male-qn-qingse'
+        ttsVoiceZh.value = 'male-qn-qingse'
         ttsSpeed.value = 1.0
         ttsMinimaxModel.value = 'speech-2.8-hd'
       } else {
         ttsVoice.value = 'en_male_corey_emo_v2_mars_bigtts'
+        ttsVoiceZh.value = 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'
         ttsSpeed.value = 1.0
         ttsResourceId.value = 'seed-tts-1.0'
       }
@@ -1742,6 +2022,114 @@ const testTts = async () => {
   }
 }
 
+// 停止中文TTS测试播放
+const stopTtsTestZh = () => {
+  if (currentTestAudioZh) {
+    currentTestAudioZh.pause()
+    currentTestAudioZh.currentTime = 0
+    currentTestAudioZh = null
+    ttsTestingZh.value = false
+  }
+}
+
+// 测试中文TTS朗读
+const testTtsZh = async () => {
+  // 如果正在播放，先停止
+  if (currentTestAudioZh) {
+    stopTtsTestZh()
+    showNotify({ type: 'success', message: '已停止播放', duration: 1000 })
+    return
+  }
+
+  ttsTestingZh.value = true
+  try {
+    // 使用中文音色
+    const voice = ttsVoiceZh.value || defaultTtsConfig.value.voice_zh || defaultTtsConfig.value.voice
+    const speed = ttsSpeed.value ?? 1.0
+    
+    // 构建请求体
+    const requestBody: any = {
+      text: ttsTestTextZh,
+      voice: voice,
+      speed: speed,
+      service_name: ttsServiceName.value
+    }
+    
+    // 如果是硅基流动，添加额外参数
+    if (ttsServiceName.value === 'siliconflow-tts') {
+      requestBody.siliconflow_api_key = ttsSiliconFlowApiKey.value || null
+      requestBody.siliconflow_model = ttsSiliconFlowModel.value || null
+    }
+    
+    // 如果是MiniMax，添加额外参数
+    if (ttsServiceName.value === 'minimax-tts') {
+      requestBody.minimax_api_key = ttsMinimaxApiKey.value || null
+      requestBody.minimax_model = ttsMinimaxModel.value || null
+    }
+    
+    const response = await fetch('/api/v1/tts/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authStore.token}`
+      },
+      body: JSON.stringify(requestBody)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'TTS请求失败' }))
+      throw new Error(errorData.detail || 'TTS请求失败')
+    }
+
+    const data = await response.json()
+    
+    // 支持 url 或 audio_data 两种格式
+    if (data.audio_data) {
+      // base64 音频数据
+      const audioSrc = `data:audio/mp3;base64,${data.audio_data}`
+      currentTestAudioZh = new Audio(audioSrc)
+      if (ttsServiceName.value === 'doubao-tts' && speed !== 1.0) {
+        currentTestAudioZh.playbackRate = speed
+      }
+      currentTestAudioZh.play()
+      showNotify({ type: 'success', message: '正在播放中文测试语音', duration: 1500 })
+
+      // 播放结束后清理
+      currentTestAudioZh.onended = () => {
+        currentTestAudioZh = null
+      }
+    } else if (data.url) {
+      // 播放音频
+      currentTestAudioZh = new Audio(data.url)
+      if (ttsServiceName.value === 'doubao-tts' && speed !== 1.0) {
+        currentTestAudioZh.playbackRate = speed
+      }
+      currentTestAudioZh.play()
+      showNotify({ type: 'success', message: '正在播放中文测试语音', duration: 1500 })
+
+      // 播放结束后清理
+      currentTestAudioZh.onended = () => {
+        currentTestAudioZh = null
+      }
+    } else {
+      throw new Error('未获取到音频数据')
+    }
+  } catch (error: any) {
+    console.error('中文TTS测试失败:', error)
+    const errorMsg = error.message || '朗读测试失败'
+    // 针对不同TTS服务的特殊提示
+    if (ttsServiceName.value === 'doubao-tts' && errorMsg.includes('app_id')) {
+      showNotify({ type: 'danger', message: '豆包TTS需要配置APP ID和Access Key，请在设置中填写' })
+    } else if (ttsServiceName.value === 'siliconflow-tts' && errorMsg.includes('api_key')) {
+      showNotify({ type: 'danger', message: '硅基流动TTS需要配置API Key，请在设置中填写' })
+    } else {
+      showNotify({ type: 'danger', message: errorMsg })
+    }
+  } finally {
+    ttsTestingZh.value = false
+  }
+}
+
 // 保存朗读设置
 const saveTtsSettings = async () => {
   // 验证URL格式
@@ -1779,21 +2167,26 @@ const saveTtsSettings = async () => {
       requestBody.kokoro_voice = ttsVoice.value.trim()
       requestBody.kokoro_speed = ttsSpeed.value
       requestBody.kokoro_api_url = ttsApiUrl.value.trim() || null
+      requestBody.kokoro_voice_zh = ttsVoiceZh.value.trim() || null
     } else if (isSiliconFlow) {
       // 硅基流动 TTS 配置（不支持语速调节）
       requestBody.siliconflow_api_key = ttsSiliconFlowApiKey.value.trim() || null
       requestBody.siliconflow_model = ttsSiliconFlowModel.value.trim() || null
       requestBody.siliconflow_voice = ttsVoice.value.trim()
+      // 硅基流动不区分中英文，中文音色复用英文音色
+      requestBody.siliconflow_voice_zh = ttsVoiceZh.value.trim() || null
     } else if (isEdgeTts) {
       // Edge-TTS 配置
       requestBody.edge_tts_voice = ttsVoice.value.trim()
       requestBody.edge_tts_speed = ttsSpeed.value
+      requestBody.edge_tts_voice_zh = ttsVoiceZh.value.trim() || null
     } else if (isMinimax) {
       // MiniMax TTS 配置
       requestBody.minimax_api_key = ttsMinimaxApiKey.value.trim() || null
       requestBody.minimax_voice = ttsVoice.value.trim()
       requestBody.minimax_speed = ttsSpeed.value
       requestBody.minimax_model = ttsMinimaxModel.value.trim() || 'speech-2.8-hd'
+      requestBody.minimax_voice_zh = ttsVoiceZh.value.trim() || null
     } else {
       // 豆包 TTS 配置
       requestBody.doubao_voice = ttsVoice.value.trim()
@@ -1801,6 +2194,7 @@ const saveTtsSettings = async () => {
       requestBody.doubao_app_id = ttsAppId.value.trim() || null
       requestBody.doubao_access_key = ttsAccessKey.value.trim() || null
       requestBody.doubao_resource_id = ttsResourceId.value.trim() || null
+      requestBody.doubao_voice_zh = ttsVoiceZh.value.trim() || null
     }
 
     await api.put('/settings/tts', requestBody)
@@ -1881,6 +2275,7 @@ const settingsActions = computed<PopoverAction[]>(() => {
 // 书籍管理菜单
 const bookActions = [
   { text: '添加分组', icon: 'plus', key: 'addGroup' },
+  { text: '排序分组', icon: 'exchange', key: 'sortGroups' },
   { text: '收起所有分组', icon: 'shrink', key: 'collapseAll' }
 ]
 
@@ -1926,15 +2321,51 @@ const onSettingsSelect = (action: PopoverAction) => {
   } else if (action.key === 'vocabulary') {
     router.push('/vocabulary')
   } else if (action.key === 'ttsSettings') {
-    loadTtsVoices()
-    // 如果使用豆包且resource_id为空，使用默认值
-    if (ttsServiceName.value === 'doubao-tts' && !ttsResourceId.value) {
-      ttsResourceId.value = defaultTtsConfig.value.resource_id || 'seed-tts-1.0'
-    }
-    loadTtsVoices()
-    loadEdgeTtsVoices()
-    loadMinimaxVoices()  // 加载 MiniMax 语音列表
-    showTtsSettingsDialog.value = true
+    // 先从数据库获取最新设置（确保当前值准确）
+    loadUserSettings().then(() => {
+      // 在显示弹窗之前，先添加临时选项确保下拉框能立即显示
+      // 英文音色临时选项
+      if (ttsVoice.value) {
+        if (ttsServiceName.value === 'edge-tts') {
+          if (!edgeTtsVoices.value.some(v => v.id === ttsVoice.value)) {
+            edgeTtsVoices.value.unshift({ id: ttsVoice.value, name: formatEdgeTtsVoiceName(ttsVoice.value) + ' (当前使用)' })
+          }
+        } else if (ttsServiceName.value === 'minimax-tts') {
+          if (!minimaxVoices.value.some(v => v.id === ttsVoice.value)) {
+            minimaxVoices.value.unshift({ id: ttsVoice.value, name: ttsVoice.value + ' (当前使用)' })
+          }
+        } else if (ttsServiceName.value === 'kokoro-tts') {
+          if (!ttsVoices.value.some(v => v.id === ttsVoice.value)) {
+            ttsVoices.value.unshift({ id: ttsVoice.value, name: ttsVoice.value + ' (当前使用)' })
+          }
+        }
+      }
+      // 中文音色临时选项
+      if (ttsVoiceZh.value) {
+        if (ttsServiceName.value === 'edge-tts') {
+          if (!edgeTtsVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+            edgeTtsVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+          }
+        } else if (ttsServiceName.value === 'minimax-tts') {
+          if (!minimaxVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+            minimaxVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+          }
+        } else if (ttsServiceName.value === 'kokoro-tts') {
+          if (!kokoroVoicesZh.value.some(v => v.id === ttsVoiceZh.value)) {
+            kokoroVoicesZh.value.unshift({ id: ttsVoiceZh.value, name: ttsVoiceZh.value + ' (当前使用)' })
+          }
+        }
+      }
+      // 设置加载完成后显示弹窗
+      showTtsSettingsDialog.value = true
+      // 异步加载语音列表
+      loadTtsVoices()
+      loadEdgeTtsVoices()
+      loadMinimaxVoices()
+      loadEdgeTtsVoicesZh()
+      loadMinimaxVoicesZh()
+      loadKokoroVoicesZh()
+    })
   } else if (action.key === 'dictionarySettings') {
     loadTranslationSettings()
     showDictionarySettingsDialog.value = true
@@ -2303,6 +2734,8 @@ const handleSupplementAll = async () => {
       }
 
       let buffer = ''
+      let isCancelled = false
+      let finalMessage = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -2317,6 +2750,13 @@ const handleSupplementAll = async () => {
               const data = JSON.parse(line.slice(6))
               supplementProgress.value = data.percentage || 0
               supplementMessage.value = data.message || ''
+              // 检查是否取消或失败
+              if (data.success === false) {
+                isCancelled = true
+              }
+              if (data.message) {
+                finalMessage = data.message
+              }
             } catch (e) {
               console.error('解析SSE数据失败:', e)
             }
@@ -2326,12 +2766,15 @@ const handleSupplementAll = async () => {
 
       // 处理完成
       supplementLoading.value = false
-      supplementMessage.value = '处理完成！'
       supplementProgress.value = 100
 
       setTimeout(() => {
         showSupplementProgress.value = false
-        showNotify({ type: 'success', message: '翻译和中文语音补充完成' })
+        if (isCancelled || finalMessage.includes('取消')) {
+          showNotify({ type: 'warning', message: finalMessage || '已取消' })
+        } else {
+          showNotify({ type: 'success', message: finalMessage || '翻译和中文语音补充完成' })
+        }
       }, 1500)
 
     } catch (error: any) {
@@ -2356,10 +2799,39 @@ const handleCancelSupplement = async () => {
   }
 }
 
+// 进入分组排序模式
+const onEnterSortMode = () => {
+  // 复制当前分组列表（排除未分组，因为它固定在最后）
+  sortableGroups.value = bookGroups.value.filter(g => g.name !== '未分组')
+  showSortGroupsDialog.value = true
+}
+
+// 保存分组排序
+const onSaveGroupOrder = async () => {
+  const orderedIds = sortableGroups.value.map(g => g.id)
+  try {
+    await api.put('/categories/reorder', { category_ids: orderedIds })
+    showNotify({ type: 'success', message: '分组排序已保存', duration: 1500 })
+    await loadGroups()
+  } catch (error: any) {
+    console.error('保存分组排序失败:', error)
+    showNotify({ type: 'danger', message: error.response?.data?.detail || '保存失败' })
+  }
+  showSortGroupsDialog.value = false
+}
+
+// 取消分组排序
+const onCancelSortMode = () => {
+  sortableGroups.value = []
+  showSortGroupsDialog.value = false
+}
+
 // 书籍管理菜单选择
 const onBookActionSelect = (action: PopoverAction) => {
   if (action.key === 'addGroup') {
     showAddGroupDialog.value = true
+  } else if (action.key === 'sortGroups') {
+    onEnterSortMode()
   } else if (action.key === 'collapseAll') {
     activeNames.value = -1  // 使用 -1 表示没有展开任何分组
   }
@@ -5196,5 +5668,58 @@ onUnmounted(() => {
   color: #646566;
   word-break: break-all;
   min-height: 20px;
+}
+
+/* 分组排序样式 */
+.sort-groups-container {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.sort-group-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: move;
+}
+
+.sort-group-item.is-uncategorized {
+  background: #e8f0fe;
+  cursor: not-allowed;
+}
+
+.sort-group-item .drag-handle {
+  margin-right: 12px;
+  color: #969799;
+  font-size: 18px;
+}
+
+.sort-group-item.is-uncategorized .drag-handle {
+  color: #1989fa;
+}
+
+.sort-group-item .group-name {
+  flex: 1;
+  font-size: 14px;
+  color: #323233;
+}
+
+.sort-group-item .fixed-label {
+  font-size: 12px;
+  color: #969799;
+}
+
+.sort-ghost {
+  opacity: 0.5;
+  background: #c8c9cc;
+}
+
+.sort-drag {
+  opacity: 0.8;
+  background: #e8f0fe;
 }
 </style>

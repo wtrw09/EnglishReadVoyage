@@ -153,6 +153,24 @@ async def init_db():
                     print("Migration completed: book_category_rel.category_id now allows NULL")
                 else:
                     print("Migration check: book_category_rel.category_id already allows NULL")
+
+            # 迁移：添加 categories 表的 sort_order 字段
+            result = await conn.execute(text("PRAGMA table_info(categories)"))
+            cat_columns = [row[1] for row in result.fetchall()]
+            if 'sort_order' not in cat_columns:
+                print("Adding sort_order column to categories table...")
+                await conn.execute(text("ALTER TABLE categories ADD COLUMN sort_order INTEGER DEFAULT 0"))
+                print("Added column: sort_order")
+
+                # 为现有数据设置默认排序值（按id顺序）
+                await conn.execute(text("""
+                    UPDATE categories
+                    SET sort_order = id
+                    WHERE sort_order = 0 OR sort_order IS NULL
+                """))
+                print("Initialized sort_order values for existing categories")
+            else:
+                print("Migration check: sort_order column already exists")
         except Exception as e:
             print(f"Migration warning (may be expected for new databases): {e}")
     

@@ -27,6 +27,14 @@ except Exception as e:
 
 def setup_logging():
     """配置应用程序日志"""
+    # 【重要】在 basicConfig 之前先禁用 SQLAlchemy 日志
+    for logger_name in ['sqlalchemy', 'sqlalchemy.engine', 'sqlalchemy.engine.Engine', 
+                        'sqlalchemy.pool', 'sqlalchemy.dialects', 'aiosqlite']:
+        _logger = logging.getLogger(logger_name)
+        _logger.setLevel(logging.WARNING)
+        _logger.propagate = False  # 阻止传播到父logger
+        _logger.handlers = []
+
     # 根据环境设置日志级别
     if settings.DEBUG:
         log_level = logging.DEBUG
@@ -48,6 +56,13 @@ def setup_logging():
     logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
+    # 再次确保 SQLAlchemy 日志被禁用
+    for logger_name in ['sqlalchemy', 'sqlalchemy.engine', 'sqlalchemy.engine.Engine', 
+                        'sqlalchemy.pool', 'sqlalchemy.dialects', 'aiosqlite']:
+        _logger = logging.getLogger(logger_name)
+        _logger.setLevel(logging.WARNING)
+        _logger.propagate = False
+        _logger.handlers = []
 
     return logging.getLogger(__name__)
 
@@ -99,6 +114,36 @@ else:
 
 # 包含API路由器
 app.include_router(api_router, prefix=API_V1_PREFIX)
+
+# 添加请求体验证异常处理器，用于调试 422 错误
+from fastapi import Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """捕获并记录 Pydantic 验证错误，返回详细错误信息"""
+    errors = []
+    for error in exc.errors():
+        error_info = {
+            "loc": error.get("loc"),
+            "msg": error.get("msg"),
+            "type": error.get("type"),
+            "input": error.get("input")
+        }
+        errors.append(error_info)
+    
+    logger.error(f"[Validation Error] URL: {request.url.path}")
+    logger.error(f"[Validation Error] Errors: {errors}")
+    logger.error(f"[Validation Error] Body: {await request.body()}")
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": "Validation Error",
+            "errors": errors
+        }
+    )
 
 
 @app.get("/", tags=["root"])

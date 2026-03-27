@@ -1,6 +1,6 @@
 """分类相关的Pydantic模式"""
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 
 class CategoryBase(BaseModel):
@@ -23,9 +23,15 @@ class CategoryResponse(CategoryBase):
     id: int = Field(..., description="分类ID")
     type: str = Field(..., description="分类类型：system 或 user")
     user_id: Optional[int] = Field(None, description="所属用户ID")
+    sort_order: int = Field(0, description="排序顺序")
 
     class Config:
         from_attributes = True
+
+
+class CategoryReorderRequest(BaseModel):
+    """分类排序请求"""
+    category_ids: List[int] = Field(..., description="分类ID列表，按期望顺序排列")
 
 
 class BookCategoryRequest(BaseModel):
@@ -53,4 +59,5 @@ class BookGroup(BaseModel):
     id: int = Field(..., description="分组ID")
     name: str = Field(..., description="分组名称")
     type: str = Field(..., description="分组类型")
-    books: list[BookWithCategory] = Field(default_factory=list, description="该分组下的书籍列表")
+    sort_order: int = Field(0, description="排序顺序")
+    books: List[BookWithCategory] = Field(default_factory=list, description="该分组下的书籍列表")

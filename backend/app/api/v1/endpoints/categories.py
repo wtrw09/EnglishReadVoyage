@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
-from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse, BookCategoryRequest, BookWithCategory, BookGroup
+from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse, BookCategoryRequest, BookWithCategory, BookGroup, CategoryReorderRequest
 from app.services.category_service import category_service
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -31,6 +31,29 @@ async def create_category(
 ):
     """创建新分类"""
     return await category_service.create_category(db, current_user.id, category.name)
+
+
+@router.put("/reorder")
+async def reorder_categories(
+    request: CategoryReorderRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """重新排序分类"""
+    # 调试日志
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[Reorder] category_ids type: {type(request.category_ids)}, value: {request.category_ids}")
+    
+    success = await category_service.reorder_categories(
+        db, current_user.id, request.category_ids
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="排序更新失败"
+        )
+    return {"success": True, "message": "排序更新成功"}
 
 
 @router.put("/{category_id}", response_model=CategoryResponse)
@@ -145,3 +168,4 @@ async def get_book_read_status(
     """获取书籍的已读状态"""
     is_read = await category_service.get_book_read_status(db, book_id, current_user.id)
     return {"book_id": book_id, "is_read": is_read}
+

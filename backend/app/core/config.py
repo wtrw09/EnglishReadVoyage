@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     MINIMAX_API_URL: str = "https://api.minimaxi.com/v1/t2a_v2"
     MINIMAX_DEFAULT_MODEL: str = "speech-2.8-hd"
     MINIMAX_DEFAULT_VOICE: str = "male-qn-qingse"
+    MINIMAX_DEFAULT_VOICE_ZH: str = "male-qn-qingse"  # 默认中文语音（青涩青年）
     MINIMAX_DEFAULT_SPEED: float = 1.0
     MINIMAX_MIN_INTERVAL: float = 3.0  # 最小请求间隔(秒)，确保 20 RPM
 

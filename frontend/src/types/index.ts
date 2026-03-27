@@ -14,6 +14,7 @@ export interface BookGroup {
   id: number
   name: string
   type: string
+  sort_order: number
   books: Book[]
 }
 
@@ -34,6 +35,7 @@ export interface TtsVoice {
 export interface TtsConfig {
   service_name: TtsServiceName
   voice: string
+  voice_zh?: string  // 中文音色
   speed: number
   api_url: string
   app_id: string
@@ -42,12 +44,17 @@ export interface TtsConfig {
   siliconflow_api_key: string
   siliconflow_model: string
   siliconflow_voice: string
+  siliconflow_voice_zh?: string  // 硅基流动中文音色
   edge_tts_voice: string
+  edge_tts_voice_zh?: string  // Edge-TTS中文音色
   edge_tts_speed: number
   minimax_api_key: string
   minimax_model: string
   minimax_voice: string
+  minimax_voice_zh?: string  // MiniMax中文音色
   minimax_speed: number
+  kokoro_voice_zh?: string  // Kokoro中文音色
+  doubao_voice_zh?: string  // 豆包中文音色
 }
 
 // 导入相关类型
