@@ -25,7 +25,7 @@ export interface PopoverAction {
 }
 
 // TTS 相关类型
-export type TtsServiceName = 'kokoro-tts' | 'doubao-tts' | 'siliconflow-tts' | 'edge-tts' | 'minimax-tts'
+export type TtsServiceName = 'kokoro-tts' | 'doubao-tts' | 'siliconflow-tts' | 'edge-tts' | 'minimax-tts' | 'azure-tts'
 
 export interface TtsVoice {
   id: string
@@ -53,6 +53,11 @@ export interface TtsConfig {
   minimax_voice: string
   minimax_voice_zh?: string  // MiniMax中文音色
   minimax_speed: number
+  azure_subscription_key?: string  // Azure API密钥
+  azure_region?: string  // Azure区域
+  azure_voice?: string  // Azure英文语音
+  azure_voice_zh?: string  // Azure中文音色
+  azure_speed?: number  // Azure朗读速度
   kokoro_voice_zh?: string  // Kokoro中文音色
   doubao_voice_zh?: string  // 豆包中文音色
 }

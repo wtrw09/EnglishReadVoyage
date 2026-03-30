@@ -9,9 +9,9 @@
     <div class="bilingual-mode-dialog">
       <!-- 标题 -->
       <div class="dialog-header">
-        <van-icon name="volume-o" class="header-icon" />
+        <i class="fas fa-volume-high header-icon" />
         <span>朗读模式设置</span>
-        <van-icon name="cross" class="close-icon" @click="handleClose" />
+        <i class="fas fa-xmark close-icon" @click="handleClose" />
       </div>
 
       <!-- 标签页切换 -->
@@ -58,7 +58,7 @@
           >
             <!-- 语言选择 -->
             <div class="segment-lang">
-              <van-icon :name="segment.lang === 'en' ? 'notes-o' : 'chat-o'" />
+              <i :class="segment.lang === 'en' ? 'fas fa-file-lines' : 'fas fa-comment'" />
               <span>{{ segment.lang === 'en' ? '英文' : '中文' }}</span>
             </div>
             <!-- 重复次数 -->
@@ -73,33 +73,29 @@
               />
             </div>
             <!-- 删除按钮 -->
-            <van-icon
-              name="cross"
-              class="delete-btn"
-              @click="removeSegment(index)"
-            />
+            <i class="fas fa-xmark delete-btn" @click="removeSegment(index)" />
           </div>
         </div>
         <!-- 添加按钮 -->
         <div class="add-segment-btns">
           <van-button
             class="add-btn"
-            icon="plus"
             type="primary"
             plain
             size="small"
             @click="addSegment('en')"
           >
+            <i class="fas fa-plus" style="margin-right: 4px;"></i>
             添加英文
           </van-button>
           <van-button
             class="add-btn"
-            icon="plus"
             type="warning"
             plain
             size="small"
             @click="addSegment('zh')"
           >
+            <i class="fas fa-plus" style="margin-right: 4px;"></i>
             添加中文
           </van-button>
         </div>
@@ -132,7 +128,7 @@
 
       <!-- 音频可用性警告 -->
       <div v-if="missingZhCount > 0" class="warning-section">
-        <van-icon name="warning-o" class="warning-icon" />
+        <i class="fas fa-triangle-exclamation warning-icon" />
         <span>当前书籍有 <strong>{{ missingZhCount }}</strong> 个句子缺少中文音频，缺少中文时将自动跳过</span>
       </div>
 
@@ -458,7 +454,7 @@ const handleConfirm = () => {
       font-weight: 500;
       color: #333;
 
-      .van-icon {
+      i {
         font-size: 18px;
         color: #666;
       }

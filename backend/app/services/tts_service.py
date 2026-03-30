@@ -6,6 +6,7 @@ import httpx
 import asyncio
 import json
 import logging
+import concurrent.futures
 from typing import Optional, List, Set
 
 from app.core.config import get_settings
@@ -29,6 +30,10 @@ class TTSService:
         self._minimax_semaphore = asyncio.Semaphore(1)
         self._minimax_last_request_time = 0.0
         self._minimax_min_interval = 3.0  # 最小请求间隔（秒），确保 20 RPM
+        # Azure TTS 限速：200 QPS
+        self._azure_semaphore = asyncio.Semaphore(1)
+        self._azure_last_request_time = 0.0
+        self._azure_min_interval = 0.005  # 最小请求间隔（秒），确保 200 QPS
 
     def _validate_edge_voice(self, voice: str, default_voice: str) -> str:
         """
@@ -63,7 +68,9 @@ class TTSService:
         siliconflow_model: Optional[str] = None,
         minimax_api_key: Optional[str] = None,
         minimax_model: Optional[str] = None,
-        speed: Optional[float] = None
+        speed: Optional[float] = None,
+        azure_subscription_key: Optional[str] = None,
+        azure_region: Optional[str] = None
     ) -> TTSResponse:
         """
         使用TTS API从文本生成语音
@@ -72,7 +79,7 @@ class TTSService:
             text: 要转换为语音的文本
             voice: 语音ID（默认为配置的默认语音）
             api_url: 自定义TTS服务地址，为空则使用系统默认
-            service_name: 服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts', 'edge-tts' 或 'minimax-tts'
+            service_name: 服务名称 'kokoro-tts', 'doubao-tts', 'siliconflow-tts', 'edge-tts', 'minimax-tts' 或 'azure-tts'
             doubao_app_id: 豆包APP ID
             doubao_access_key: 豆包Access Key
             doubao_resource_id: 豆包Resource ID
@@ -81,6 +88,8 @@ class TTSService:
             minimax_api_key: MiniMax API Key
             minimax_model: MiniMax模型名称
             speed: 朗读速度 (0.5-2.0)
+            azure_subscription_key: Azure API密钥
+            azure_region: Azure区域
 
         返回:
             包含音频URL的TTSResponse
@@ -121,6 +130,16 @@ class TTSService:
                 voice=voice,
                 api_key=minimax_api_key,
                 model=minimax_model,
+                speed=speed
+            )
+
+        if service_name == "azure-tts":
+            logger.debug("进入 azure-tts 分支")
+            return await self.generate_azure_tts_speech(
+                text=text,
+                voice=voice,
+                subscription_key=azure_subscription_key,
+                region=azure_region,
                 speed=speed
             )
 
@@ -748,6 +767,109 @@ class TTSService:
             raise last_error
 
         return TTSResponse(audio_data=audio_base64)
+
+    async def generate_azure_tts_speech(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        subscription_key: Optional[str] = None,
+        region: Optional[str] = None,
+        speed: Optional[float] = None
+    ) -> TTSResponse:
+        """
+        使用 Azure TTS REST API 从文本生成语音（非阻塞，支持取消）
+        - 使用 httpx.AsyncClient 异步调用
+        - 支持并发控制（QPS <= 100）
+        - 支持语速设置
+
+        参数:
+            text: 要转换为语音的文本
+            voice: 语音ID (如 en-US-JennyNeural, zh-CN-XiaoxiaoNeural)
+            subscription_key: Azure API密钥
+            region: Azure区域
+            speed: 朗读速度 (0.5-2.0)
+
+        返回:
+            包含音频数据的TTSResponse
+
+        异常:
+            Exception: 如果TTS API调用失败
+        """
+        # 使用默认值
+        if voice is None:
+            voice = self.settings.AZURE_TTS_DEFAULT_VOICE
+        if speed is None:
+            speed = 1.0
+        if not subscription_key:
+            raise Exception("Azure TTS需要配置Subscription Key，请在朗读设置中填写")
+        if not region:
+            raise Exception("Azure TTS需要配置Region，请在朗读设置中填写")
+
+        logger.info(f"调用Azure TTS REST API: region={region}, voice={voice}, speed={speed}")
+        logger.debug(f"  text长度={len(text)}, text前50字符={text[:50]}...")
+
+        # Azure TTS 限流控制：确保 200 QPS
+        async with self._azure_semaphore:
+            current_time = asyncio.get_event_loop().time()
+            time_since_last = current_time - self._azure_last_request_time
+            if time_since_last < self._azure_min_interval:
+                wait_time = self._azure_min_interval - time_since_last
+                logger.debug(f"Azure TTS 限流等待 {wait_time:.4f} 秒")
+                await asyncio.sleep(wait_time)
+            self._azure_last_request_time = asyncio.get_event_loop().time()
+
+        try:
+            # 构建 SSML（统一使用 SSML 以支持语速控制）
+            rate_percent = int((speed - 1.0) * 100)
+            rate_str = f"{rate_percent:+d}%"
+            voice_lang = '-'.join(voice.split('-')[:2]) if voice else 'en-US'
+
+            ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{voice_lang}'>
+    <voice name='{voice}'>
+        <prosody rate='{rate_str}'>{text}</prosody>
+    </voice>
+</speak>"""
+
+            # REST API endpoint
+            url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+            headers = {
+                "Ocp-Apim-Subscription-Key": subscription_key,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+            }
+
+            # 使用 httpx.AsyncClient 进行异步请求（非阻塞，支持取消）
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, headers=headers, content=ssml.encode('utf-8'))
+
+                if response.status_code != 200:
+                    error_text = response.text
+                    logger.error(f"Azure TTS REST API 错误: HTTP {response.status_code}, {error_text[:200]}")
+                    raise Exception(f"Azure TTS API返回 {response.status_code}: {error_text[:200]}")
+
+                audio_data = response.content
+                if not audio_data or len(audio_data) == 0:
+                    raise Exception("未收到Azure TTS音频数据")
+
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                logger.info(f"Azure TTS生成成功, 大小: {len(audio_data)} bytes")
+
+                return TTSResponse(audio_data=audio_base64)
+
+        except httpx.RequestError as e:
+            # httpx 会自动处理取消（httpx.ConnectError, httpx.TimeoutException 等）
+            error_msg = f"Azure TTS网络请求失败: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Azure TTS 异常详情: {error_msg}")
+            # 打印更详细的错误信息
+            import traceback
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
+            if "Azure" not in error_msg:
+                error_msg = f"Azure TTS生成失败: {error_msg}"
+            raise Exception(error_msg)
 
     async def generate_batch_speech(
         self,

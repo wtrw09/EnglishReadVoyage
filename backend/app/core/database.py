@@ -120,6 +120,23 @@ async def init_db():
                 await conn.execute(text("ALTER TABLE user_settings ADD COLUMN siliconflow_voice_zh VARCHAR"))
                 print("Added column: siliconflow_voice_zh")
 
+            # 添加 Azure TTS 字段
+            if 'azure_subscription_key' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN azure_subscription_key VARCHAR"))
+                print("Added column: azure_subscription_key")
+            if 'azure_region' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN azure_region VARCHAR"))
+                print("Added column: azure_region")
+            if 'azure_voice' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN azure_voice VARCHAR"))
+                print("Added column: azure_voice")
+            if 'azure_voice_zh' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN azure_voice_zh VARCHAR"))
+                print("Added column: azure_voice_zh")
+            if 'azure_speed' not in columns:
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN azure_speed FLOAT DEFAULT 1.0"))
+                print("Added column: azure_speed")
+
             # 迁移：允许 book_category_rel 的 category_id 为 NULL（用于"未分组"功能）
             result = await conn.execute(text("PRAGMA table_info(book_category_rel)"))
             rel_columns = {row[1]: row for row in result.fetchall()}

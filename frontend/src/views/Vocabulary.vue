@@ -10,17 +10,8 @@
       @click-left="goBack"
     >
       <template #right>
-        <van-icon
-          name="exchange"
-          size="20"
-          @click="openMemoryMode"
-          style="margin-right: 12px;"
-        />
-        <van-icon
-          name="down"
-          size="20"
-          @click="openExportDialog"
-        />
+        <i class="fas fa-right-left" size="20" @click="openMemoryMode" style="margin-right: 12px; cursor: pointer; color: #333;"></i>
+        <i class="fas fa-download" size="20" @click="openExportDialog" style="cursor: pointer; color: #333;"></i>
       </template>
     </van-nav-bar>
 
@@ -32,7 +23,7 @@
 
     <!-- 空状态 -->
     <div v-else-if="vocabularyList.length === 0" class="empty-container">
-      <van-icon name="records-o" size="48" color="#ccc" />
+      <i class="fas fa-clipboard-list" style="font-size: 48px; color: #ccc;"></i>
       <p>暂无生词</p>
       <p class="empty-tip">在阅读时长按单词查词，点击"加入生词本"即可添加</p>
     </div>
@@ -83,8 +74,12 @@
       :style="{ maxHeight: '70%' }"
     >
       <div class="detail-popup-header">
-        <span class="detail-popup-title">{{ selectedWord?.word }}</span>
-        <van-icon name="cross" class="detail-popup-close" @click="showDetailDialog = false" />
+        <span class="detail-popup-title">{{ selectedWord?.word }}<i 
+          class="fas fa-volume-up detail-speak-btn"
+          :class="{ 'speaking': isSpeaking }"
+          @click="speakWord"
+        ></i></span>
+        <i class="fas fa-xmark detail-popup-close" @click="showDetailDialog = false" style="font-size: 20px; color: #999; cursor: pointer; padding: 4px;"></i>
       </div>
       <div class="word-detail" v-if="selectedWord">
         <div class="detail-section" v-if="selectedWord.phonetic">
@@ -105,7 +100,7 @@
         <div class="detail-section" v-if="selectedWord.book_name">
           <div class="detail-label">来源书籍</div>
           <div class="detail-book">
-            <van-icon name="bookmark-o" />
+            <i class="fas fa-bookmark"></i>
             <span>{{ selectedWord.book_name }}</span>
           </div>
         </div>
@@ -182,7 +177,7 @@
     >
       <div class="memory-popup-header">
         <span class="memory-popup-title">记忆模式</span>
-        <van-icon name="cross" class="memory-popup-close" @click="showMemoryDialog = false" />
+        <i class="fas fa-xmark memory-popup-close" @click="showMemoryDialog = false" style="font-size: 20px; color: #999; cursor: pointer; padding: 4px;"></i>
       </div>
 
       <!-- 选择单词 -->
@@ -299,18 +294,18 @@
         <!-- 导航按钮 -->
         <div class="memory-nav">
           <van-button
-            icon="arrow-left"
-            :disabled="currentMemoryIndex === 0"
             @click="prevMemoryCard"
-          />
+          >
+            <i class="fas fa-arrow-left" />
+          </van-button>
           <van-button type="primary" @click="exitMemoryMode">
             退出
           </van-button>
           <van-button
-            icon="arrow"
-            :disabled="currentMemoryIndex === memorySelectedVocab.length - 1"
             @click="nextMemoryCard"
-          />
+          >
+            <i class="fas fa-arrow-right" />
+          </van-button>
         </div>
       </div>
     </van-popup>
@@ -324,7 +319,7 @@
     >
       <div class="export-popup-header">
         <span class="export-popup-title">导出Word文档</span>
-        <van-icon name="cross" class="export-popup-close" @click="showExportDialog = false" />
+        <i class="fas fa-xmark export-popup-close" @click="showExportDialog = false" style="font-size: 20px; color: #999; cursor: pointer; padding: 4px;"></i>
       </div>
 
       <div class="export-content">
@@ -394,7 +389,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { api } from '@/store/auth'
@@ -416,6 +411,10 @@ const showDetailDialog = ref(false)
 const selectedWord = ref<VocabularyItem | null>(null)
 const showDeleteMenu = ref(false)
 const deleteItemId = ref<number | null>(null)
+
+// 朗读相关状态
+const isSpeaking = ref(false)  // 朗读状态
+let currentWordAudio: HTMLAudioElement | null = null  // 当前播放音频
 
 // 多选模式相关
 const isMultiSelect = ref(false)
@@ -480,6 +479,49 @@ const loadVocabulary = async () => {
 const showWordDetail = (item: VocabularyItem) => {
   selectedWord.value = item
   showDetailDialog.value = true
+}
+
+// 朗读单词（使用有道词典发音）
+const speakWord = async () => {
+  if (!selectedWord.value?.word) return
+
+  if (isSpeaking.value) {
+    // 停止播放
+    if (currentWordAudio) {
+      currentWordAudio.pause()
+      currentWordAudio.currentTime = 0
+      currentWordAudio = null
+    }
+    isSpeaking.value = false
+    return
+  }
+
+  isSpeaking.value = true
+  try {
+    // 调用发音API获取音频URL
+    const res = await api.get<{ audio_url: string | null }>(`/pronunciation/${encodeURIComponent(selectedWord.value.word)}`)
+    
+    if (res.data.audio_url) {
+      currentWordAudio = new Audio(res.data.audio_url)
+      currentWordAudio.play()
+      currentWordAudio.onended = () => {
+        isSpeaking.value = false
+        currentWordAudio = null
+      }
+      currentWordAudio.onerror = () => {
+        isSpeaking.value = false
+        currentWordAudio = null
+        showToast('播放失败')
+      }
+    } else {
+      isSpeaking.value = false
+      showToast('未找到发音')
+    }
+  } catch (error) {
+    console.error('朗读失败:', error)
+    isSpeaking.value = false
+    showToast('朗读失败')
+  }
 }
 
 // 确认删除（右键菜单）
@@ -801,6 +843,16 @@ const exportToWord = async () => {
 onMounted(() => {
   loadVocabulary()
 })
+
+// 监听详情弹窗关闭，停止朗读
+watch(showDetailDialog, (newVal) => {
+  if (!newVal && currentWordAudio) {
+    currentWordAudio.pause()
+    currentWordAudio.currentTime = 0
+    currentWordAudio = null
+    isSpeaking.value = false
+  }
+})
 </script>
 
 <style scoped>
@@ -932,6 +984,28 @@ onMounted(() => {
 
 .detail-popup-close:hover {
   color: #666;
+}
+
+.detail-speak-btn {
+  margin-left: 4px;
+  cursor: pointer;
+  color: #1989fa;
+  font-size: 18px;
+  transition: all 0.3s;
+}
+
+.detail-speak-btn:hover {
+  color: #1277d8;
+}
+
+.detail-speak-btn.speaking {
+  color: #07c160;
+  animation: speak-pulse 1s infinite;
+}
+
+@keyframes speak-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
 }
 
 .detail-section {

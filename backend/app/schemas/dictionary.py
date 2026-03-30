@@ -64,6 +64,12 @@ class UserTtsSettings(BaseModel):
     minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型(英文)")
     minimax_voice_zh: Optional[str] = Field(None, description="MiniMax语音类型(中文)")
     minimax_speed: float = Field(1.0, description="MiniMax朗读速度 (0.25-4.0)")
+    # Azure TTS设置
+    azure_subscription_key: Optional[str] = Field(None, description="Azure API密钥")
+    azure_region: Optional[str] = Field(None, description="Azure区域")
+    azure_voice: Optional[str] = Field(None, description="Azure语音类型(英文)")
+    azure_voice_zh: Optional[str] = Field(None, description="Azure语音类型(中文)")
+    azure_speed: float = Field(1.0, description="Azure朗读速度 (0.5-2.0)")
 
 
 class UserPhoneticSettings(BaseModel):
@@ -84,7 +90,7 @@ class UpdateUiSettingsRequest(BaseModel):
 class UserSettingsResponse(BaseModel):
     """用户设置响应"""
     dictionary: UserDictionarySettings
-    tts: UserTtsSettings
+    tts: Optional[UserTtsSettings] = None  # 普通用户返回 None
     phonetic: UserPhoneticSettings
     ui: UserUiSettings
 
@@ -129,6 +135,12 @@ class UpdateTtsSettingsRequest(BaseModel):
     minimax_voice: Optional[str] = Field(None, description="MiniMax语音类型(英文)")
     minimax_voice_zh: Optional[str] = Field(None, description="MiniMax语音类型(中文)")
     minimax_speed: Optional[float] = Field(None, description="MiniMax朗读速度 (0.25-4.0)")
+    # Azure TTS设置
+    azure_subscription_key: Optional[str] = Field(None, description="Azure API密钥")
+    azure_region: Optional[str] = Field(None, description="Azure区域")
+    azure_voice: Optional[str] = Field(None, description="Azure语音类型(英文)")
+    azure_voice_zh: Optional[str] = Field(None, description="Azure语音类型(中文)")
+    azure_speed: Optional[float] = Field(None, description="Azure朗读速度 (0.5-2.0)")
 
 
 class WordDefinition(BaseModel):

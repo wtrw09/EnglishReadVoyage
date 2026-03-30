@@ -1,13 +1,13 @@
 """用户设置API端点。"""
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 import json
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_current_admin
 from app.models.database_models import User, UserSettings
 from app.schemas.dictionary import (
     UserSettingsResponse,
@@ -57,7 +57,13 @@ def get_default_tts_config():
             "minimax_model": settings.MINIMAX_DEFAULT_MODEL,
             "minimax_voice": settings.MINIMAX_DEFAULT_VOICE,
             "minimax_voice_zh": settings.MINIMAX_DEFAULT_VOICE_ZH,
-            "minimax_speed": settings.MINIMAX_DEFAULT_SPEED
+            "minimax_speed": settings.MINIMAX_DEFAULT_SPEED,
+            # Azure TTS 默认配置
+            "azure_subscription_key": None,
+            "azure_region": settings.AZURE_TTS_REGION or None,
+            "azure_voice": settings.AZURE_TTS_DEFAULT_VOICE,
+            "azure_voice_zh": settings.AZURE_TTS_DEFAULT_VOICE_ZH,
+            "azure_speed": settings.AZURE_TTS_DEFAULT_SPEED
         }
     return _default_tts_config
 
@@ -100,11 +106,10 @@ async def get_user_settings(
         except (json.JSONDecodeError, ValueError):
             hide_read_books_map = {}
 
-    return UserSettingsResponse(
-        dictionary=UserDictionarySettings(
-            dictionary_source=settings.dictionary_source
-        ),
-        tts=UserTtsSettings(
+    # 构建 TTS 响应（普通用户返回空）
+    tts_response = None
+    if current_user.role == "admin":
+        tts_response = UserTtsSettings(
             service_name=settings.tts_service_name or default_config["service_name"],
             # Kokoro TTS 设置
             kokoro_voice=settings.kokoro_voice or default_config.get("kokoro_voice"),
@@ -132,14 +137,43 @@ async def get_user_settings(
             minimax_model=settings.minimax_model or default_config.get("minimax_model"),
             minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
             minimax_voice_zh=settings.minimax_voice_zh or default_config.get("minimax_voice_zh"),
-            minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
+            minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0),
+            # Azure TTS设置
+            azure_subscription_key=settings.azure_subscription_key or default_config.get("azure_subscription_key"),
+            azure_region=settings.azure_region or default_config.get("azure_region"),
+            azure_voice=settings.azure_voice or default_config.get("azure_voice"),
+            azure_voice_zh=settings.azure_voice_zh or default_config.get("azure_voice_zh"),
+            azure_speed=settings.azure_speed if settings.azure_speed is not None else default_config.get("azure_speed", 1.0)
+        )
+
+    return UserSettingsResponse(
+        dictionary=UserDictionarySettings(
+            dictionary_source=settings.dictionary_source
         ),
+        tts=tts_response,
         phonetic=UserPhoneticSettings(
             accent=settings.phonetic_accent or "uk"
         ),
         ui=UserUiSettings(
             hide_read_books_map=hide_read_books_map
         )
+    )
+
+
+@router.get("/dictionary", response_model=UserDictionarySettings)
+async def get_dictionary_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取用户的词典设置（轻量级API）。
+
+    Returns:
+        用户的词典设置
+    """
+    settings = await get_or_create_user_settings(db, current_user.id)
+    return UserDictionarySettings(
+        dictionary_source=settings.dictionary_source
     )
 
 
@@ -215,16 +249,19 @@ async def update_phonetic_settings(
 async def update_tts_settings(
     request: UpdateTtsSettingsRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_admin)  # 只有管理员可以修改朗读设置
 ):
     """
-    更新用户的朗读设置。
+    更新用户的朗读设置（仅限管理员）。
 
     Args:
         request: 包含 service_name, voice, speed, api_url 的请求体
 
     Returns:
         更新后的朗读设置
+
+    Raises:
+        HTTPException: 403 如果不是管理员
     """
     settings = await get_or_create_user_settings(db, current_user.id)
 
@@ -318,6 +355,23 @@ async def update_tts_settings(
             )
         settings.minimax_speed = request.minimax_speed
 
+    # 更新 Azure TTS 设置
+    if request.azure_subscription_key is not None:
+        settings.azure_subscription_key = request.azure_subscription_key.strip() if request.azure_subscription_key.strip() else None
+    if request.azure_region is not None:
+        settings.azure_region = request.azure_region.strip() if request.azure_region.strip() else None
+    if request.azure_voice is not None:
+        settings.azure_voice = request.azure_voice.strip() if request.azure_voice.strip() else None
+    if request.azure_voice_zh is not None:
+        settings.azure_voice_zh = request.azure_voice_zh.strip() if request.azure_voice_zh.strip() else None
+    if request.azure_speed is not None:
+        if not (0.5 <= request.azure_speed <= 2.0):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Azure 朗读速度必须在 0.5 到 2.0 之间"
+            )
+        settings.azure_speed = request.azure_speed
+
     await db.commit()
     await db.refresh(settings)
 
@@ -350,7 +404,13 @@ async def update_tts_settings(
         minimax_model=settings.minimax_model or default_config.get("minimax_model"),
         minimax_voice=settings.minimax_voice or default_config.get("minimax_voice"),
         minimax_voice_zh=settings.minimax_voice_zh or default_config.get("minimax_voice_zh"),
-        minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0)
+        minimax_speed=settings.minimax_speed if settings.minimax_speed is not None else default_config.get("minimax_speed", 1.0),
+        # Azure TTS设置
+        azure_subscription_key=settings.azure_subscription_key or default_config.get("azure_subscription_key"),
+        azure_region=settings.azure_region or default_config.get("azure_region"),
+        azure_voice=settings.azure_voice or default_config.get("azure_voice"),
+        azure_voice_zh=settings.azure_voice_zh or default_config.get("azure_voice_zh"),
+        azure_speed=settings.azure_speed if settings.azure_speed is not None else default_config.get("azure_speed", 1.0)
     )
 
 
@@ -1033,4 +1093,190 @@ async def get_minimax_usage(
                 return {"error": f"查询失败: {response.status_code}, {response.text[:200]}"}
     except Exception as e:
         print(f"MiniMax用量查询异常: {e}")
+        return {"error": str(e)}
+
+
+# ==================== Azure TTS 端点 ====================
+# Azure 语音列表缓存（内存缓存，减少 API 调用）
+# 缓存有效期 1 小时
+azure_voices_cache = {}
+
+def _get_cached_full_data(subscription_key: str, region: str) -> tuple:
+    """获取缓存的完整语音列表"""
+    key = f"{subscription_key}:{region}:full"
+    if key in azure_voices_cache:
+        import time
+        cached_data, cached_time = azure_voices_cache[key]
+        if time.time() - cached_time < 3600:  # 1小时有效期
+            return cached_data, True
+    return None, False
+
+def _set_cached_full_data(subscription_key: str, region: str, data: list):
+    """设置完整数据缓存"""
+    import time
+    key = f"{subscription_key}:{region}:full"
+    azure_voices_cache[key] = (data, time.time())
+
+async def _get_azure_voices_from_api(subscription_key: str, region: str) -> list:
+    """从 Azure API 获取语音列表（异步版本）"""
+    import httpx
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/voices/list"
+    headers = {"Ocp-Apim-Subscription-Key": subscription_key}
+    # 增加超时时间到 60 秒，因为从国内访问 Azure 全球云较慢
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    raise Exception(f"HTTP {response.status_code}")
+
+async def _get_filtered_voices(subscription_key: str, region: str, locale_prefix: str) -> list:
+    """获取筛选后的语音列表（带缓存，异步版本）"""
+    # 先检查缓存
+    cached, found = _get_cached_full_data(subscription_key, region)
+    if not found:
+        cached = await _get_azure_voices_from_api(subscription_key, region)
+        _set_cached_full_data(subscription_key, region, cached)
+    
+    # 筛选对应语言
+    voices = []
+    for voice in cached:
+        short_name = voice.get('ShortName', '')
+        locale = voice.get('Locale', '')
+        
+        if locale_prefix == "en" and (short_name.startswith("en-US") or short_name.startswith("en-GB")):
+            display_name = short_name.replace("Neural", "").replace("en-US-", "美式-").replace("en-GB-", "英式-")
+            voices.append({"id": short_name, "name": display_name, "locale": locale, "gender": voice.get('Gender', '')})
+        elif locale_prefix == "zh" and locale.startswith("zh-"):
+            display_name = short_name.replace("Neural", "").replace("zh-CN-", "中/").replace("zh-HK-", "粤/").replace("zh-TW-", "台/")
+            voices.append({"id": short_name, "name": display_name, "locale": locale, "gender": voice.get('Gender', '')})
+    
+    return voices
+
+
+@router.get("/tts/azure/voices")
+async def get_azure_voices(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取 Azure TTS 可用的英文语音列表。
+
+    从 Azure Speech SDK 获取支持的神经网络语音列表。
+
+    Returns:
+        英文语音列表
+    """
+    import os
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+
+    # 优先从用户数据库设置获取配置
+    subscription_key = settings.azure_subscription_key if settings.azure_subscription_key else os.getenv("AZURE_TTS_SUBSCRIPTION_KEY")
+    region = settings.azure_region if settings.azure_region else os.getenv("AZURE_TTS_REGION")
+
+    if not subscription_key or not region:
+        return {"voices": [], "error": "未配置 Azure TTS Subscription Key 或 Region"}
+
+    try:
+        # 使用带缓存的筛选函数
+        voices = await _get_filtered_voices(subscription_key, region, "en")
+        return {"voices": voices}
+
+    except Exception as e:
+        print(f"Azure TTS 英文语音列表获取异常: {e}")
+        return {"voices": [], "error": str(e)}
+
+
+@router.get("/tts/azure/voices/zh")
+async def get_azure_voices_zh(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取 Azure TTS 可用的中文语音列表。
+
+    从 Azure Speech SDK 获取支持的中文神经网络语音列表。
+
+    Returns:
+        中文语音列表
+    """
+    import os
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+
+    # 优先从用户数据库设置获取配置
+    subscription_key = settings.azure_subscription_key if settings.azure_subscription_key else os.getenv("AZURE_TTS_SUBSCRIPTION_KEY")
+    region = settings.azure_region if settings.azure_region else os.getenv("AZURE_TTS_REGION")
+
+    if not subscription_key or not region:
+        return {"voices": [], "error": "未配置 Azure TTS Subscription Key 或 Region"}
+
+    try:
+        # 使用带缓存的筛选函数
+        voices = await _get_filtered_voices(subscription_key, region, "zh")
+        return {"voices": voices}
+
+    except Exception as e:
+        print(f"Azure TTS 中文语音列表获取异常: {e}")
+        return {"voices": [], "error": str(e)}
+
+
+@router.get("/tts/azure/usage")
+async def get_azure_usage(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(30, description="查询天数，默认30天")
+):
+    """
+    查询 Azure TTS 使用量。
+
+    通过 Azure Monitor API 获取指定时间范围内的 TTS 使用统计。
+
+    Args:
+        days: 查询天数，默认30天
+
+    Returns:
+        使用量统计
+    """
+    import os
+    from datetime import datetime, timedelta
+
+    # 获取用户设置
+    settings = await get_or_create_user_settings(db, current_user.id)
+
+    # 优先从用户数据库设置获取配置
+    subscription_key = settings.azure_subscription_key if settings.azure_subscription_key else os.getenv("AZURE_TTS_SUBSCRIPTION_KEY")
+    region = settings.azure_region if settings.azure_region else os.getenv("AZURE_TTS_REGION")
+
+    if not subscription_key or not region:
+        return {"error": "未配置 Azure TTS Subscription Key 或 Region"}
+
+    try:
+        # 计算时间范围
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=days)
+
+        # Azure Monitor Metrics API
+        url = f"https://management.azure.com/subscriptions/{{subscription_id}}/resourceGroups/{{resource_group}}/providers/Microsoft.CognitiveServices/accounts/{{account_name}}/metrics?api-version=2023-05-01"
+
+        # 由于 Azure Monitor API 需要复杂的认证和订阅信息，这里使用简化的方式
+        # 实际使用中可以通过 Azure Portal 或 Azure CLI 查询
+
+        # 尝试使用 Azure REST API 查询用量
+        # 注意：实际部署时需要替换为正确的订阅和资源信息
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 构造 Azure Resource Manager 请求
+            # 这里需要用户的 Azure 订阅信息，实际使用中可能需要额外配置
+            return {
+                "message": f"Azure TTS 使用量查询需要配置 Azure 订阅信息",
+                "subscription_key_configured": bool(subscription_key),
+                "region_configured": bool(region),
+                "days": days,
+                "note": "请通过 Azure Portal (https://portal.azure.com) -> 您的语音服务资源 -> 指标 查看详细使用量"
+            }
+
+    except Exception as e:
+        print(f"Azure TTS 用量查询异常: {e}")
         return {"error": str(e)}

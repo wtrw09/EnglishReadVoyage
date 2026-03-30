@@ -28,3 +28,15 @@
 .van-toast__text {
   color: #fff !important;
 }
+
+/* 修复弹窗打开时滚动条消失导致页面抖动 */
+html {
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+body {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}

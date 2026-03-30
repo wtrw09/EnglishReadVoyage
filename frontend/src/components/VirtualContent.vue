@@ -18,6 +18,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'contextmenu', event: MouseEvent): void
   (e: 'click', event: MouseEvent): void
+  (e: 'mousedown', event: MouseEvent): void
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
@@ -90,6 +91,7 @@ onMounted(() => {
   if (containerRef.value) {
     containerRef.value.addEventListener('contextmenu', handleContextMenu as EventListener)
     containerRef.value.addEventListener('click', handleClick as EventListener)
+    containerRef.value.addEventListener('mousedown', handleMouseDown as EventListener)
   }
 })
 
@@ -102,6 +104,7 @@ onUnmounted(() => {
   if (containerRef.value) {
     containerRef.value.removeEventListener('contextmenu', handleContextMenu as EventListener)
     containerRef.value.removeEventListener('click', handleClick as EventListener)
+    containerRef.value.removeEventListener('mousedown', handleMouseDown as EventListener)
   }
 })
 
@@ -113,6 +116,11 @@ const handleContextMenu = (e: Event) => {
 // 处理点击事件
 const handleClick = (e: Event) => {
   emit('click', e as MouseEvent)
+}
+
+// 处理鼠标按下事件
+const handleMouseDown = (e: Event) => {
+  emit('mousedown', e as MouseEvent)
 }
 </script>
 

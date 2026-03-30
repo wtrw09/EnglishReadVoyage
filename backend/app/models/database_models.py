@@ -114,6 +114,13 @@ class UserSettings(Base):
     minimax_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
     minimax_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
 
+    # Azure TTS 设置（独立存储）
+    azure_subscription_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    azure_region: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    azure_voice: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 英文语音
+    azure_voice_zh: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 中文语音
+    azure_speed: Mapped[Optional[float]] = mapped_column(default=1.0, nullable=True)
+
     # 音标设置：'uk' 表示英式音标，'us' 表示美式音标
     phonetic_accent: Mapped[str] = mapped_column(String, default="uk", nullable=False)
     # UI设置：隐藏已读书籍状态（按分组存储，JSON格式）

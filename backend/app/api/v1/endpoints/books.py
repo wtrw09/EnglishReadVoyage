@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 import hashlib
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Query, Path as FastAPIPath
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Query, Path as FastAPIPath, Body
 from fastapi.responses import StreamingResponse
 from typing import List, Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,21 +87,31 @@ def create_sse_stream_generator(
         异步生成器
     """
     async def event_generator():
+        logger.debug(f"[SSE] event_generator 启动, task_id={id(task)}")
         while True:
             try:
+                logger.debug(f"[SSE] 等待队列数据... (task_done={task.done()})")
                 data = await asyncio.wait_for(queue.get(), timeout=0.5)
+                logger.debug(f"[SSE] 收到数据: percentage={data.get('percentage')}, message={data.get('message')}")
                 # 构建额外的参数（排除 percentage 和 message）
                 extra = {k: v for k, v in data.items() if k not in ("percentage", "message")}
-                yield format_sse_message(data.get("percentage", 0), data.get("message", ""), **extra)
+                sse_msg = format_sse_message(data.get("percentage", 0), data.get("message", ""), **extra)
+                logger.debug(f"[SSE] 发送消息: {sse_msg[:100]}...")
+                yield sse_msg
             except asyncio.TimeoutError:
+                logger.debug(f"[SSE] 队列等待超时, task_done={task.done()}")
                 if task.done():
                     try:
                         result = task.result()
+                        logger.debug(f"[SSE] 任务完成, result类型={type(result)}, result={result}")
                         if hasattr(result, "success") and hasattr(result, "message"):
+                            logger.debug(f"[SSE] result有success和message属性: success={result.success}, message={result.message}")
                             yield format_sse_message(100, result.message, result.success)
                         elif hasattr(result, "success"):
+                            logger.debug(f"[SSE] result只有success属性: success={result.success}")
                             yield format_sse_message(100, final_message, result.success)
                         else:
+                            logger.debug(f"[SSE] result没有success属性")
                             yield format_sse_message(100, final_message, True)
                     except Exception as e:
                         logger.error(f"SSE任务异常: {e}")
@@ -765,6 +775,8 @@ async def generate_book_chinese_audio(
     4. 更新 sentences.json
     force参数：True时强制重新生成所有音频，False时跳过已有音频
     """
+    logger.info(f"[DEBUG] generate_chinese_audio 请求: book_id={book_id}, force={force}")
+    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
@@ -818,8 +830,10 @@ async def cancel_audio_task(
         # 获取取消事件并设置取消标志
         cancel_event = get_cancel_event(book_id)
         cancel_event.set()
+        logger.info(f"[取消] 用户 {current_user.username} 请求取消书籍 {book_id} 的音频生成任务")
         return {"success": True, "message": "任务取消请求已发送"}
     except Exception as e:
+        logger.error(f"[取消] 取消任务失败: {str(e)}")
         return {"success": False, "message": f"取消失败: {str(e)}"}
 
 
@@ -1201,7 +1215,7 @@ async def upload_book_image(
 
 @router.post("/export")
 async def export_books(
-    request: dict,
+    request: dict = Body(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1247,12 +1261,8 @@ async def export_books(
             if not book_folder.exists():
                 continue
 
-            # 如果只有一本书，直接将内容放在ZIP根目录
-            if len(books) == 1:
-                prefix = ""
-            else:
-                # 多本书时，每本书放在自己的文件夹中
-                prefix = f"{book.title}/"
+            # 每本书都放在自己的文件夹中，与批量导出格式保持一致
+            prefix = f"{book.title}/"
 
             # 遍历书籍文件夹中的所有文件
             for root, dirs, files in os.walk(book_folder):
@@ -1426,7 +1436,7 @@ async def check_zip_integrity(
 ):
     """
     检查上传的ZIP文件资源完整性
-    返回完整性检查结果，不实际导入
+    返回每本书的详细检查结果，不实际导入
     """
     # 检查文件扩展名
     if not file.filename.endswith('.zip'):
@@ -1441,6 +1451,52 @@ async def check_zip_integrity(
     # 检查完整性
     result = await book_service.check_zip_integrity(content)
 
+    return result
+
+
+@router.post("/cleanup-failed-import")
+async def cleanup_failed_import(
+    book_titles: List[str] = Body(...),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    清理导入失败的书籍文件夹
+    """
+    import shutil
+    
+    deleted = []
+    for title in book_titles:
+        safe_name = title.replace(" ", "_")
+        book_folder = Path("Books") / safe_name
+        if book_folder.exists():
+            try:
+                shutil.rmtree(book_folder)
+                deleted.append(title)
+                logger.info(f"已删除不完整的书籍文件夹: {safe_name}")
+            except Exception as e:
+                logger.error(f"删除书籍文件夹失败: {safe_name}, 错误: {e}")
+    
+    return {"deleted": deleted}
+
+
+@router.post("/check-zip-all")
+async def check_zip_all(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    同时检查ZIP文件的完整性和重复情况
+    返回合并的检查结果
+    """
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="只支持 .zip 格式的文件"
+        )
+
+    content = await file.read()
+    result = await book_service.check_zip_all(db, content)
     return result
 
 
