@@ -10,7 +10,7 @@
     
     <div class="login-content">
       <div class="logo-area">
-        <van-icon name="list-switch" class="logo-icon" />
+        <i class="fas fa-list logo-icon" />
         <h2>英语阅读之旅</h2>
         <p>{{ isActivateMode ? '请输入邀请码激活账户' : '请登录以继续' }}</p>
       </div>
@@ -24,7 +24,7 @@
             label="用户名"
             placeholder="请输入用户名"
             :rules="[{ required: true, message: '请填写用户名' }]"
-            left-icon="user-o"
+            left-icon="fa-user"
           />
           <van-field
             v-model="form.password"
@@ -33,7 +33,7 @@
             label="密码"
             placeholder="请输入密码"
             :rules="[{ required: true, message: '请填写密码' }]"
-            left-icon="lock"
+            left-icon="fa-lock"
           />
         </van-cell-group>
 
@@ -63,7 +63,7 @@
             label="邀请码"
             placeholder="请输入邀请码"
             :rules="[{ required: true, message: '请填写邀请码' }]"
-            left-icon="coupon-o"
+            left-icon="fa-ticket"
           />
           <van-field
             v-model="activateForm.password"
@@ -72,7 +72,7 @@
             label="设置密码"
             placeholder="请设置登录密码"
             :rules="[{ required: true, message: '请设置密码' }]"
-            left-icon="lock"
+            left-icon="fa-lock"
           />
           <van-field
             v-model="activateForm.confirmPassword"
@@ -84,7 +84,7 @@
               { required: true, message: '请确认密码' },
               { validator: validateConfirmPassword, message: '两次输入的密码不一致' }
             ]"
-            left-icon="lock"
+            left-icon="fa-lock"
           />
         </van-cell-group>
 

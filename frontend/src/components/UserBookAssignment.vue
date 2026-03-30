@@ -20,10 +20,12 @@
         <div class="section-header">
           <span class="section-title">分组管理</span>
           <div class="section-actions">
-            <van-button type="primary" size="small" icon="exchange" @click="showSortCategories" style="margin-right: 8px;">
+            <van-button type="primary" size="small" @click="showSortCategories" style="margin-right: 8px;">
+              <i class="fas fa-sort"></i>
               排序
             </van-button>
-            <van-button type="primary" size="small" icon="plus" @click="showCreateCategoryDialog">
+            <van-button type="primary" size="small" @click="showCreateCategoryDialog">
+              <i class="fas fa-plus"></i>
               新建分组
             </van-button>
           </div>
@@ -50,15 +52,17 @@
                 <van-button
                   type="warning"
                   size="mini"
-                  icon="edit"
                   @click="showEditCategoryDialog(category)"
-                />
+                >
+                  <i class="fas fa-pencil"></i>
+                </van-button>
                 <van-button
                   type="danger"
                   size="mini"
-                  icon="delete"
                   @click="confirmDeleteCategory(category)"
-                />
+                >
+                  <i class="fas fa-trash"></i>
+                </van-button>
               </div>
             </template>
 
@@ -92,7 +96,7 @@
                       :alt="book.title"
                       loading="lazy"
                     />
-                    <van-icon v-else name="book" size="24" color="#dcdee0" />
+                    <i v-else class="fas fa-book" style="font-size: 24px; color: #dcdee0;" />
                   </div>
                   <div class="book-info">
                     <span class="book-title">{{ book.title }}</span>
@@ -176,7 +180,7 @@
                       :alt="book.title"
                       loading="lazy"
                     />
-                    <van-icon v-else name="book" size="24" color="#dcdee0" />
+                    <i v-else class="fas fa-book" style="font-size: 24px; color: #dcdee0;" />
                   </div>
                   <div class="book-info">
                     <span class="book-title">{{ book.title }}</span>
@@ -289,7 +293,7 @@
               class="sort-category-item"
               :class="{ 'is-uncategorized': element.name === '未分组' }"
             >
-              <van-icon name="bars" class="drag-handle" />
+              <i class="fas fa-bars drag-handle" />
               <span class="category-name">{{ element.name }}</span>
               <span v-if="element.name === '未分组'" class="fixed-label">(固定)</span>
             </div>
@@ -336,7 +340,7 @@
       <div class="select-category-dialog">
         <div class="select-category-header">
           <span>选择分组</span>
-          <van-icon name="cross" @click="showSelectCategoryPopup = false" />
+          <i class="fas fa-xmark" @click="showSelectCategoryPopup = false" style="cursor: pointer; color: #999; font-size: 18px;"></i>
         </div>
         <div class="select-category-content">
           <van-radio-group v-model="selectedCategoryForBook">

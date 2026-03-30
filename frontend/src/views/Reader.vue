@@ -11,17 +11,17 @@
       <template #right>
         <!-- 播放按钮：始终显示 -->
                 <div class="nav-icon-btn" :class="{ 'playing': isPlayingAll, 'disabled': loading }" @click="!loading && togglePlayAll()">
-          <van-icon :name="isPlayingAll ? 'pause-circle-o' : 'play-circle-o'" />
+          <i :class="['fas', isPlayingAll ? 'fa-pause-circle' : 'fa-play-circle']"></i>
         </div>
         <!-- 横屏直接显示的按钮 -->
                 <div class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && openDictionaryDialog()">
-          <van-icon name="search" />
+          <i class="fas fa-search"></i>
         </div>
                 <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && openEditDialog()">
-          <van-icon name="description" />
+          <i class="fas fa-file-lines"></i>
         </div>
                 <div v-if="authStore.isAdmin" class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && checkBookAudio()">
-          <van-icon name="warning-o" />
+          <i class="fas fa-triangle-exclamation"></i>
         </div>
         <!-- 竖屏更多菜单 -->
         <van-popover
@@ -33,7 +33,7 @@
         >
           <template #reference>
             <div class="nav-icon-btn nav-more-trigger" :class="{ 'disabled': loading }">
-              <van-icon name="ellipsis" />
+              <i class="fas fa-ellipsis-vertical"></i>
             </div>
           </template>
         </van-popover>
@@ -53,7 +53,7 @@
           class="page-content"
           :class="{ 'landscape': isLandscape }"
           :content="currentPageContent"
-          @click="handleContentClick"
+          @mousedown.left="handleContentClick"
           @contextmenu="handleContextMenu"
         />
       </template>
@@ -62,7 +62,7 @@
         class="page-content"
         :class="{ 'landscape': isLandscape }"
         v-html="currentPageContent"
-        @click="handleContentClick"
+        @mousedown.left="handleContentClick"
         @touchstart="handleTouchStart"
         @touchend="handleTouchEnd"
         @touchmove="handleTouchMove"
@@ -72,7 +72,7 @@
       <!-- 分页控制栏 -->
       <div v-if="totalPagesCount > 1" class="pagination-bar">
         <div class="page-btn" :class="{ 'disabled': currentPage <= 0 }" @click="goToPrevPage">
-          <van-icon name="arrow-left" />
+          <i class="fas fa-chevron-left"></i>
           <span>上一页</span>
         </div>
         <div class="page-indicator" @click="showPagePicker = true">
@@ -82,7 +82,7 @@
         </div>
         <div class="page-btn" :class="{ 'disabled': currentPage >= totalPagesCount - 1 }" @click="goToNextPage">
           <span>下一页</span>
-          <van-icon name="arrow" />
+          <i class="fas fa-chevron-right"></i>
         </div>
       </div>
     </div>
@@ -96,7 +96,7 @@
       <div class="page-picker-content">
         <div class="page-picker-header">
           <span>跳转到页面</span>
-          <van-icon name="cross" class="close-btn" @click="showPagePicker = false" />
+          <i class="fas fa-xmark close-btn" @click="showPagePicker = false"></i>
         </div>
         <div class="page-picker-grid">
           <div
@@ -140,7 +140,7 @@
       <div class="dictionary-input-popup">
         <div class="dictionary-input-header">
           <span class="dictionary-input-title">查词典</span>
-          <van-icon name="cross" class="dictionary-input-close" @click="showDictionaryInputDialog = false" />
+          <i class="fas fa-xmark dictionary-input-close" @click="showDictionaryInputDialog = false"></i>
         </div>
         <div class="dictionary-input-content">
           <van-field
@@ -172,7 +172,7 @@
           <span>查询中...</span>
         </div>
         <div v-else-if="dictError" class="dict-error">
-          <van-icon name="warning-o" size="32" color="#ee0a24" />
+          <i class="fas fa-triangle-exclamation" size="32" style="font-size: 32px; color: #ee0a24;"></i>
           <p>{{ dictError }}</p>
         </div>
         <div v-else-if="dictData" class="dict-result">
@@ -183,21 +183,19 @@
               <span class="dict-source-tag">本地词典</span>
               <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
               <van-loading v-if="dictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
-              <van-icon
+              <i
                 v-else-if="dictPhoneticAudio"
-                name="volume-o"
-                class="dict-audio-btn"
+                class="fas fa-volume-up dict-audio-btn"
                 @click="playPhoneticAudio(dictPhoneticAudio)"
               />
                <van-button
                 class="vocab-btn"
                 size="mini"
                 type="primary"
-                icon="plus"
                 :loading="addingToVocabulary"
                 @click="addToVocabulary"
               >
-                生词本
+                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
               </van-button>
               <div v-if="dictData.tag" class="dict-tags">
                 <span v-for="(tag, idx) in formatTags(dictData.tag)" :key="idx" class="dict-tag">{{ tag }}</span>
@@ -245,21 +243,19 @@
               <h3 class="dict-word">{{ dictData.word }}</h3>
               <span class="dict-source-tag">在线词典</span>
               <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
-              <van-icon
+              <i
                 v-if="dictData.phonetics?.[0]?.audio"
-                name="volume-o"
-                class="dict-audio-btn"
+                class="fas fa-volume-up dict-audio-btn"
                 @click="playPhoneticAudio(dictData.phonetics[0].audio)"
               />
               <van-button
                 class="vocab-btn"
                 size="mini"
                 type="primary"
-                icon="plus"
                 :loading="addingToVocabulary"
                 @click="addToVocabulary"
               >
-                生词本
+                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
               </van-button>
             </div>
             <div class="dict-meanings">
@@ -307,7 +303,7 @@
           <span>查询中...</span>
         </div>
         <div v-else-if="secondDictError" class="dict-error">
-          <van-icon name="warning-o" size="32" color="#ee0a24" />
+          <i class="fas fa-triangle-exclamation" style="font-size: 32px; color: #ee0a24;"></i>
           <p>{{ secondDictError }}</p>
         </div>
         <div v-else-if="secondDictData" class="dict-result">
@@ -318,21 +314,19 @@
               <span class="dict-source-tag">本地词典</span>
               <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
               <van-loading v-if="secondDictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
-              <van-icon
+              <i
                 v-else-if="secondDictPhoneticAudio"
-                name="volume-o"
-                class="dict-audio-btn"
+                class="fas fa-volume-up dict-audio-btn"
                 @click="playPhoneticAudio(secondDictPhoneticAudio)"
               />
               <van-button
                 class="vocab-btn"
                 size="mini"
                 type="primary"
-                icon="plus"
                 :loading="addingToVocabulary"
                 @click="addSecondWordToVocabulary"
               >
-                生词本
+                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
               </van-button>
               <div v-if="secondDictData.tag" class="dict-tags">
                 <span v-for="(tag, idx) in formatTags(secondDictData.tag)" :key="idx" class="dict-tag">{{ tag }}</span>
@@ -382,21 +376,19 @@
               <h3 class="dict-word">{{ secondDictData.word }}</h3>
               <span class="dict-source-tag">在线词典</span>
               <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
-              <van-icon
+              <i
                 v-if="secondDictData.phonetics?.[0]?.audio"
-                name="volume-o"
-                class="dict-audio-btn"
+                class="fas fa-volume-up dict-audio-btn"
                 @click="playPhoneticAudio(secondDictData.phonetics[0].audio)"
               />
               <van-button
                 class="vocab-btn"
                 size="mini"
                 type="primary"
-                icon="plus"
                 :loading="addingToVocabulary"
                 @click="addSecondWordToVocabulary"
               >
-                生词本
+                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
               </van-button>
             </div>
             <div class="dict-meanings">
@@ -447,7 +439,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { showToast, showDialog } from 'vant'
 import md5 from 'blueimp-md5'
 import { api, useAuthStore } from '@/store/auth'
 import VirtualContent from '@/components/VirtualContent.vue'
@@ -508,14 +500,16 @@ const loading = ref(true)
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const currentSentence = ref<HTMLElement | null>(null)
 const isPlayingAll = ref(false)
+// 记录最后一次播放的句子（用于恢复播放）
+const lastPlayedSentence = ref<HTMLElement | null>(null)
 
 // 更多菜单
 const showMorePopover = ref(false)
 const moreActions = computed(() => {
-  const actions = [{ text: '查词', icon: 'search' }]
+  const actions = [{ text: '查词', icon: 'fa-search' }]
   if (authStore.isAdmin) {
-    actions.push({ text: '编辑', icon: 'description' })
-    actions.push({ text: '检查音频', icon: 'warning-o' })
+    actions.push({ text: '编辑', icon: 'fa-file-lines' })
+    actions.push({ text: '检查音频', icon: 'fa-triangle-exclamation' })
   }
   return actions
 })
@@ -751,6 +745,9 @@ const preloadPages = () => {
 const jumpToPage = async (pageIndex: number) => {
   if (pageIndex < 0 || pageIndex >= totalPages.value) return
 
+  // 切换页面时清除恢复播放位置
+  lastPlayedSentence.value = null
+
   currentPage.value = pageIndex
   showPagePicker.value = false
 
@@ -901,6 +898,8 @@ const loadBookContent = async () => {
 
 // 初始加载：只加载第1页和基本信息
 const loadBook = async () => {
+  // 切换书籍时清除恢复播放位置
+  lastPlayedSentence.value = null
   isInitialLoading.value = true
   loading.value = true
 
@@ -1008,6 +1007,7 @@ const playSentence = async (el: HTMLElement) => {
 }
 
 const handleContentClick = (e: MouseEvent) => {
+  // mousedown.left 已经由 Vue 修饰符过滤，只处理左键点击
   const target = e.target as HTMLElement
   // 向上查找最近的 .tts-sentence 元素（处理点击子元素的情况）
   const sentenceEl = target.closest('.tts-sentence') as HTMLElement | null
@@ -1130,6 +1130,11 @@ const handleContextMenu = async (e: MouseEvent) => {
 
   // 阻止默认右键菜单
   e.preventDefault()
+  // 阻止事件冒泡，避免触发父元素的其他事件
+  e.stopPropagation()
+
+  // 停止正在进行的朗读
+  stopPlayAll()
 
   // 尝试使用 Range 获取点击位置的文本
   let word = ''
@@ -1723,8 +1728,50 @@ const togglePlayAll = () => {
   if (isPlayingAll.value) {
     stopPlayAll()
   } else {
-    startPlayAll()
+    // 检查是否有可恢复的播放进度
+    if (lastPlayedSentence.value) {
+      showDialog({
+        title: '继续播放',
+        message: '上次朗读到此处，是否从中断位置继续？',
+        showCancelButton: true,
+        confirmButtonText: '继续播放',
+        cancelButtonText: '重新开始',
+      }).then(() => {
+        // 用户点击继续
+        resumeFromLastPosition()
+      }).catch(() => {
+        // 用户点击取消（重新开始）
+        restartFromBeginning()
+      })
+    } else {
+      startPlayAll()
+    }
   }
+}
+
+// 从上次停止的位置继续播放
+const resumeFromLastPosition = () => {
+  if (lastPlayedSentence.value) {
+    // 清除之前的高亮
+    if (currentSentence.value) {
+      currentSentence.value.classList.remove('active-sentence')
+    }
+    // 设置当前句子为上次停止的位置
+    currentSentence.value = lastPlayedSentence.value
+    lastPlayedSentence.value.classList.add('active-sentence')
+    currentSentence.value.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+    // 开始播放
+    isPlayingAll.value = true
+    playSentence(currentSentence.value)
+  }
+}
+
+// 从头开始播放
+const restartFromBeginning = () => {
+  // 清除恢复位置记录
+  lastPlayedSentence.value = null
+  startPlayAll()
 }
 
 // 开始全文朗读（从当前页开始）
@@ -1758,6 +1805,10 @@ const startPlayAll = () => {
 }
 
 const stopPlayAll = () => {
+  // 保存当前播放位置，以便恢复
+  if (currentSentence.value) {
+    lastPlayedSentence.value = currentSentence.value
+  }
   isPlayingAll.value = false
   if (audioPlayer.value) {
     audioPlayer.value.pause()
@@ -1775,6 +1826,8 @@ const handleAudioEnded = () => {
       playSentence(allSentences[currentIndex + 1])
     } else {
       // 当前页朗读完毕，停止播放
+      // 清除恢复位置记录（正常播放完毕）
+      lastPlayedSentence.value = null
       stopPlayAll()
     }
   }
@@ -1849,7 +1902,7 @@ onUnmounted(() => {
   transition: all 0.2s;
   flex-shrink: 0;
 
-  .van-icon {
+  .fas {
     font-size: 20px;
     color: #1989fa;
   }
@@ -1862,7 +1915,7 @@ onUnmounted(() => {
   &.playing {
     background: #1989fa;
 
-    .van-icon {
+    .fas {
       color: #fff;
     }
 
@@ -1877,7 +1930,7 @@ onUnmounted(() => {
     cursor: not-allowed;
     pointer-events: none;
 
-    .van-icon {
+    .fas {
       color: #969799;
     }
   }
@@ -2080,7 +2133,7 @@ onUnmounted(() => {
     color: #333;
 
     .close-btn {
-      font-size: 20px;
+      font-size: 18px;
       color: #999;
       cursor: pointer;
 

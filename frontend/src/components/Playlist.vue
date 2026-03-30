@@ -5,9 +5,8 @@
       <div class="header-actions">
         <!-- 排序模式切换 -->
         <div class="sort-mode-wrapper">
-          <van-icon
-            :name="isSortMode ? 'success' : 'exchange'"
-            :class="['sort-mode-icon', { 'active': isSortMode }]"
+          <i
+            :class="[isSortMode ? 'fas fa-check' : 'fas fa-right-left', 'sort-mode-icon', { 'active': isSortMode }]"
             @click="toggleSortMode"
           />
           <span v-if="isSortMode" class="sort-mode-text">完成</span>
@@ -26,17 +25,17 @@
               :class="{ 'active': currentSort === option.value }"
               @click="handleSortSelect(option.value)"
             >
-              <van-icon :name="option.icon" />
+              <i :class="option.icon" />
               <span>{{ option.label }}</span>
             </div>
           </div>
           <template #reference>
             <div v-if="!isSortMode" class="header-icon-wrapper">
-              <van-icon name="ascending" class="header-icon" />
+              <i class="fas fa-arrow-up header-icon" />
             </div>
           </template>
         </van-popover>
-        <van-icon name="delete-o" class="header-icon" @click="$emit('clear')" />
+        <i class="fas fa-trash header-icon" @click="$emit('clear')" />
       </div>
     </div>
     <div class="playlist-body">
@@ -56,7 +55,7 @@
             :class="{ 'active': index === currentIndex }"
           >
             <div class="drag-handle">
-              <van-icon name="bars" />
+              <i class="fas fa-bars" />
             </div>
             <div class="playlist-item-content">
               <img
@@ -67,13 +66,12 @@
                 decoding="async"
               />
               <div v-else class="playlist-item-placeholder">
-                <van-icon name="book-o" />
+                <i class="fas fa-book" />
               </div>
               <span class="playlist-item-title">{{ element.book_title }}</span>
             </div>
-            <van-icon
-              name="cross"
-              class="playlist-item-remove-btn"
+            <i
+              class="fas fa-xmark playlist-item-remove-btn"
               @click.stop="$emit('remove', element.id)"
             />
           </div>
@@ -98,7 +96,7 @@
               decoding="async"
             />
             <div v-else class="playlist-item-placeholder">
-              <van-icon name="book-o" />
+              <i class="fas fa-book" />
             </div>
             <span class="playlist-item-title">{{ item.book_title }}</span>
             <!-- 播放按钮：悬停或当前播放时显示 -->
@@ -107,18 +105,17 @@
               class="playlist-item-play-btn"
               @click.stop="$emit('play', index)"
             >
-              <van-icon :name="index === currentIndex && isPlaying ? 'pause-circle' : 'play-circle'" />
+              <i :class="index === currentIndex && isPlaying ? 'fas fa-circle-pause' : 'fas fa-circle-play'" />
             </div>
           </div>
-          <van-icon
-            name="cross"
-            class="playlist-item-remove-btn"
+          <i
+            class="fas fa-xmark playlist-item-remove-btn"
             @click.stop="$emit('remove', item.id)"
           />
         </div>
       </template>
       <div v-if="items.length === 0" class="empty-playlist">
-        <van-icon name="music-o" size="48" />
+        <i class="fas fa-music" style="font-size: 48px;" />
         <p>播放列表为空</p>
         <van-button type="primary" size="small" @click="$emit('add')">
           添加书籍
@@ -179,11 +176,11 @@ watch(() => props.items, (newItems) => {
 
 // 排序选项
 const sortOptions: { label: string; value: SortType; icon: string }[] = [
-  { label: '默认顺序', value: 'default', icon: 'exchange' },
-  { label: '书名升序', value: 'name', icon: 'ascending' },
-  { label: '书名降序', value: 'nameDesc', icon: 'descending' },
-  { label: '添加时间升序', value: 'addedTime', icon: 'clock-o' },
-  { label: '添加时间降序', value: 'addedTimeDesc', icon: 'clock' },
+  { label: '默认顺序', value: 'default', icon: 'fa-right-left' },
+  { label: '书名升序', value: 'name', icon: 'fa-arrow-up' },
+  { label: '书名降序', value: 'nameDesc', icon: 'fa-arrow-down' },
+  { label: '添加时间升序', value: 'addedTime', icon: 'fa-clock' },
+  { label: '添加时间降序', value: 'addedTimeDesc', icon: 'fa-clock' },
 ]
 
 // 根据排序方式显示的项目
@@ -249,7 +246,7 @@ const handleSortSelect = (sortType: SortType) => {
   font-weight: 600;
   font-size: 16px;
 
-  .van-icon {
+  i {
     font-size: 18px;
     color: #666;
     cursor: pointer;
@@ -303,7 +300,7 @@ const handleSortSelect = (sortType: SortType) => {
       justify-content: center;
       background: #f5f5f5;
 
-      .van-icon {
+      i {
         font-size: 24px;
         color: #ccc;
       }
@@ -324,7 +321,7 @@ const handleSortSelect = (sortType: SortType) => {
       cursor: pointer;
       flex-shrink: 0;
 
-      .van-icon {
+      i {
         font-size: 20px;
         color: #07c160;
 
@@ -433,7 +430,7 @@ const handleSortSelect = (sortType: SortType) => {
     background: #f0f9f0;
   }
 
-  .van-icon {
+  i {
     font-size: 16px;
   }
 }
@@ -452,7 +449,7 @@ const handleSortSelect = (sortType: SortType) => {
       cursor: grabbing;
     }
 
-    .van-icon {
+    i {
       font-size: 18px;
     }
   }

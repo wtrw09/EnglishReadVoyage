@@ -12,7 +12,8 @@
     <div class="content">
       <!-- 管理员界面：创建用户按钮 -->
       <div v-if="isAdmin" class="action-bar">
-        <van-button type="primary" icon="plus" size="small" @click="showCreateDialog">
+        <van-button type="primary" size="small" @click="showCreateDialog">
+          <i class="fas fa-plus" style="margin-right: 4px;"></i>
           新建用户
         </van-button>
       </div>
@@ -33,11 +34,7 @@
                 @contextmenu.prevent="handleContextMenu($event, user)"
               >
                 <template #icon>
-                  <van-icon
-                    :name="user.role === 'admin' ? 'manager-o' : 'user-o'"
-                    class="user-icon"
-                    :class="{ admin: user.role === 'admin' }"
-                  />
+                  <i :class="['fas', user.role === 'admin' ? 'fa-user-gear' : 'fa-user', 'user-icon', { admin: user.role === 'admin' }]" />
                 </template>
                 <template #value>
                   <div class="user-tags">
@@ -125,7 +122,7 @@
 
           <div class="action-buttons">
             <van-button type="primary" block @click="showChangePasswordDialog">
-              <van-icon name="lock" />
+              <i class="fas fa-lock" style="margin-right: 4px;"></i>
               修改密码
             </van-button>
           </div>
@@ -236,7 +233,7 @@
     >
       <div class="context-menu-list">
         <div class="context-menu-item" @click="handleMenuEdit">
-          <van-icon name="edit" />
+          <i class="fas fa-pencil" />
           <span>编辑</span>
         </div>
         <div
@@ -252,7 +249,7 @@
           class="context-menu-item"
           @click="handleMenuResetPassword"
         >
-          <van-icon name="lock" />
+          <i class="fas fa-lock" />
           <span>重置密码</span>
         </div>
         <div
@@ -260,7 +257,7 @@
           class="context-menu-item"
           @click="handleMenuGetInvitationCode"
         >
-          <van-icon name="coupon-o" />
+          <i class="fas fa-ticket" />
           <span>获取邀请码</span>
         </div>
         <div
@@ -268,7 +265,7 @@
           class="context-menu-item danger"
           @click="handleMenuDelete"
         >
-          <van-icon name="delete-o" />
+          <i class="fas fa-trash" />
           <span>删除</span>
         </div>
       </div>
@@ -294,9 +291,9 @@
             <van-button
               type="primary"
               size="small"
-              icon="copy-o"
               @click="copyInvitationCode"
             >
+              <i class="fas fa-copy" style="margin-right: 4px;"></i>
               复制
             </van-button>
           </div>
@@ -942,12 +939,12 @@ onMounted(() => {
   &.danger {
     color: #ee0a24;
 
-    .van-icon {
+    i {
       color: #ee0a24;
     }
   }
 
-  .van-icon {
+  i {
     font-size: 18px;
     color: #969799;
   }

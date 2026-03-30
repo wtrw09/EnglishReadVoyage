@@ -76,7 +76,11 @@ def clear_cancel_event(book_id: str):
 def is_cancelled(book_id: str) -> bool:
     """检查书籍任务是否被取消"""
     if book_id in active_tasks:
-        return active_tasks[book_id].is_set()
+        result = active_tasks[book_id].is_set()
+        if result:
+            logger.info(f"[取消] is_cancelled({book_id}) = True, 事件已设置")
+        return result
+    logger.debug(f"[取消] is_cancelled({book_id}) = False, book_id 不在 active_tasks 中")
     return False
 
 
@@ -1293,16 +1297,13 @@ class BookService:
 
     async def check_zip_integrity(self, file_content: bytes) -> dict:
         """
-        检查ZIP文件的资源完整性
-        返回完整性检查结果
+        检查ZIP文件中每本书的资源完整性
+        返回每本书的详细检查结果
         """
         result = {
             "is_valid": True,
-            "has_md_file": False,
-            "has_assets": False,
-            "has_audio": False,
-            "has_mapping": False,
-            "missing_images": [],
+            "books": [],  # 每本书的详细检查结果
+            "failed_books": [],  # 失败的书籍列表
             "message": ""
         }
 
@@ -1310,111 +1311,60 @@ class BookService:
             with zipfile.ZipFile(io.BytesIO(file_content)) as zf:
                 file_list = zf.namelist()
 
-                # 检查是否有MD文件
-                md_files = [f for f in file_list if f.endswith('.md')]
-                if not md_files:
-                    result["is_valid"] = False
-                    result["message"] = "ZIP文件中未找到MD文件"
-                    return result
+                # 收集所有子文件夹作为候选书籍
+                subfolders = set()
+                for f in file_list:
+                    if '/' in f:
+                        folder = f.split('/')[0]
+                        subfolders.add(folder)
 
-                result["has_md_file"] = True
+                # 检查每个子文件夹
+                for folder in sorted(subfolders):
+                    # 只检查该文件夹内的MD文件
+                    folder_md_files = [f for f in file_list if f.startswith(f"{folder}/") and f.endswith('.md')]
+                    
+                    # 查找对应的MD文件（BookName/BookName.md），大小写不敏感
+                    expected_md = f"{folder}/{folder}.md"
+                    has_matching_md = any(f.lower() == expected_md.lower() for f in folder_md_files)
+                    
+                    book_title = folder
+                    book_info = {
+                        "title": book_title,
+                        "is_valid": True,
+                        "has_md_file": has_matching_md,
+                        "has_assets": any(f.startswith(f"{folder}/assets/") for f in file_list),
+                        "has_audio": any(f.startswith(f"{folder}/audio/") for f in file_list),
+                        "has_mapping": any(f"{folder}/audio/sentences.json" in f for f in file_list),
+                        "reason": ""
+                    }
 
-                # 首先尝试查找根目录下的MD文件（单本书导出格式）
-                root_md_files = [f for f in md_files if '/' not in f]
-                is_multi_book_format = False
+                    # 判断完整性 - md文件是必需的
+                    if not has_matching_md:
+                        book_info["is_valid"] = False
+                        book_info["reason"] = "导入包信息不全（缺少md文件）"
+                    elif not book_info["has_assets"]:
+                        book_info["is_valid"] = False
+                        book_info["reason"] = "导入包信息不全（缺少assets文件夹）"
+                    elif not book_info["has_audio"]:
+                        book_info["is_valid"] = False
+                        book_info["reason"] = "导入包信息不全（缺少audio文件夹）"
+                    elif not book_info["has_mapping"]:
+                        book_info["is_valid"] = False
+                        book_info["reason"] = "导入包信息不全（缺少sentences.json）"
 
-                if not root_md_files:
-                    # 可能是多书籍打包格式（子文件夹中包含MD文件）
-                    # 查找子文件夹中的MD文件，如 BookName/BookName.md
-                    for f in md_files:
-                        parts = f.split('/')
-                        if len(parts) == 2:  # 只有一层子文件夹
-                            folder_name = parts[0]
-                            file_name = parts[1]
-                            if file_name.lower() == f"{folder_name.lower()}.md":
-                                root_md_files.append(f)
-                                is_multi_book_format = True
+                    result["books"].append(book_info)
 
-                if not root_md_files:
-                    # 如果还是没找到，使用所有MD文件
-                    root_md_files = md_files
+                    if not book_info["is_valid"]:
+                        result["is_valid"] = False
+                        result["failed_books"].append(book_info["title"])
 
-                main_md = root_md_files[0]
-
-                # 检查是否有assets文件夹（支持单本和多本格式）
-                if is_multi_book_format:
-                    # 多本格式：BookName/assets/xxx
-                    book_folder = main_md.split('/')[0]
-                    assets_files = [f for f in file_list if f.startswith(f"{book_folder}/assets/")]
-                    audio_files = [f for f in file_list if f.startswith(f"{book_folder}/audio/")]
-                    mapping_files = [f for f in file_list if f.startswith(f"{book_folder}/audio/") and 'sentences.json' in f]
+                # 生成总体消息
+                total_books = len(result["books"])
+                failed_count = len(result["failed_books"])
+                if failed_count > 0:
+                    result["message"] = f"共 {total_books} 本书，{failed_count} 本信息不全"
                 else:
-                    # 单本格式：assets/xxx
-                    assets_files = [f for f in file_list if '/assets/' in f or f.startswith('assets/')]
-                    audio_files = [f for f in file_list if '/audio/' in f or f.startswith('audio/')]
-                    mapping_files = [f for f in file_list if 'sentences.json' in f]
-
-                result["has_assets"] = len(assets_files) > 0
-                result["has_audio"] = len(audio_files) > 0
-                result["has_mapping"] = len(mapping_files) > 0
-
-                # 读取MD内容检查图片引用
-                try:
-                    with zf.open(main_md) as f:
-                        content = f.read().decode('utf-8')
-
-                        # 查找所有图片引用
-                        img_matches = re.findall(r'!\[[^\]]*\]\(([^)]+)\)', content)
-
-                        for img_path in img_matches:
-                            # 只检查本地相对路径
-                            if not img_path.startswith(('http://', 'https://', 'data:')):
-                                # 在ZIP中查找对应的文件
-                                if is_multi_book_format:
-                                    book_folder = main_md.split('/')[0]
-                                    possible_paths = [
-                                        f"{book_folder}/{img_path}",
-                                        f"{book_folder}/{img_path.lstrip('./')}",
-                                        f"{book_folder}/assets/{img_path.split('/')[-1]}"
-                                    ]
-                                else:
-                                    possible_paths = [
-                                        img_path,
-                                        img_path.lstrip('./'),
-                                        img_path.lstrip('.'),
-                                        f"assets/{img_path.split('/')[-1]}"
-                                    ]
-
-                                found = False
-                                for path in possible_paths:
-                                    if path in file_list:
-                                        found = True
-                                        break
-                                    # 检查是否以该路径开头
-                                    for zip_path in file_list:
-                                        if zip_path.endswith(path) or zip_path.endswith(img_path.split('/')[-1]):
-                                            found = True
-                                            break
-                                    if found:
-                                        break
-
-                                if not found:
-                                    result["missing_images"].append(img_path)
-                except Exception as e:
-                    logger.error(f"检查MD内容失败: {e}")
-
-                # 判断完整性
-                if result["missing_images"]:
-                    result["is_valid"] = False
-                    result["message"] = f"缺少 {len(result['missing_images'])} 个图片资源"
-                elif not result["has_audio"]:
-                    result["is_valid"] = False
-                    result["message"] = "缺少音频文件"
-                elif not result["has_mapping"]:
-                    result["is_valid"] = False
-                    result["message"] = "缺少语音映射文件"
-                else:
-                    result["message"] = "资源完整"
+                    result["message"] = "所有书籍资源完整"
 
         except zipfile.BadZipFile:
             result["is_valid"] = False
@@ -1422,6 +1372,64 @@ class BookService:
         except Exception as e:
             result["is_valid"] = False
             result["message"] = f"检查失败: {str(e)}"
+
+        return result
+
+    async def check_zip_all(self, db: AsyncSession, file_content: bytes) -> dict:
+        """
+        同时检查ZIP文件的完整性和重复情况
+        返回合并的检查结果
+        """
+        result = {
+            "valid_books": [],      # 可以导入的书籍
+            "invalid_books": [],     # 不完整的书籍
+            "duplicate_books": [],   # 已存在的书籍
+            "total": 0,
+            "message": ""
+        }
+
+        try:
+            # 1. 获取完整性检查结果
+            integrity_result = await self.check_zip_integrity(file_content)
+            
+            # 2. 获取重复检查结果
+            duplicates_result = await self.check_zip_duplicates(db, file_content)
+
+            # 合并结果
+            result["total"] = len(integrity_result.get("books", []))
+            
+            # 不完整的书籍
+            result["invalid_books"] = [
+                {"title": book["title"], "reason": book["reason"]}
+                for book in integrity_result.get("books", [])
+                if not book.get("is_valid", True)
+            ]
+            
+            # 已存在的书籍
+            result["duplicate_books"] = [
+                {"title": book.get("title", ""), "book_id": book.get("book_id", "")}
+                for book in duplicates_result.get("duplicate_books", [])
+            ]
+            
+            # 可以导入的书籍：完整且不重复
+            valid_titles = set(
+                book["title"] for book in integrity_result.get("books", [])
+                if book.get("is_valid", True)
+            )
+            duplicate_titles = set(
+                book.get("title", "") for book in duplicates_result.get("duplicate_books", [])
+            )
+            result["valid_books"] = list(valid_titles - duplicate_titles)
+            
+            # 生成消息
+            if result["invalid_books"] or result["duplicate_books"]:
+                result["message"] = f"共 {result['total']} 本书，{len(result['invalid_books'])} 本信息不全，{len(result['duplicate_books'])} 本已存在"
+            else:
+                result["message"] = "所有书籍可以导入"
+
+        except Exception as e:
+            result["message"] = f"检查失败: {str(e)}"
+            logger.error(f"check_zip_all 失败: {e}")
 
         return result
 
@@ -1508,6 +1516,55 @@ class BookService:
 
         except zipfile.BadZipFile:
             result["error"] = "无效的ZIP文件"
+        except Exception as e:
+            result["error"] = f"检查失败: {str(e)}"
+
+        return result
+
+    async def check_md_duplicates(self, db: AsyncSession, file_list: List[tuple]) -> dict:
+        """
+        检查多个MD文件中包含的书籍是否已存在
+        file_list: [(filename, content), ...]
+        返回重复书籍清单
+        """
+        result = {
+            "has_duplicates": False,
+            "duplicate_books": [],
+            "new_books": [],
+            "total_books": len(file_list)
+        }
+
+        try:
+            from sqlalchemy import select
+            from app.models.database_models import Book
+
+            for filename, content in file_list:
+                book_title = Path(filename).stem
+                safe_name = book_title.replace(" ", "_")
+                book_folder_name = safe_name
+                book_folder_path = Path("Books") / book_folder_name
+                md_file_path = book_folder_path / f"{book_folder_name}.md"
+                book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+
+                stmt = select(Book).where(Book.id == book_id)
+                query_result = await db.execute(stmt)
+                existing_book = query_result.scalar_one_or_none()
+
+                book_info = {
+                    "title": book_title,
+                    "safe_name": safe_name,
+                    "book_id": book_id,
+                    "filename": filename
+                }
+
+                if existing_book:
+                    book_info["existing_title"] = existing_book.title
+                    result["duplicate_books"].append(book_info)
+                else:
+                    result["new_books"].append(book_info)
+
+            result["has_duplicates"] = len(result["duplicate_books"]) > 0
+
         except Exception as e:
             result["error"] = f"检查失败: {str(e)}"
 
@@ -2443,6 +2500,10 @@ class BookService:
         if service_name == "siliconflow-tts":
             return True, "Siliconflow TTS服务可用"
 
+        # Azure TTS 是在线服务，不需要本地检查
+        if service_name == "azure-tts":
+            return True, "Azure TTS服务可用"
+
         # Edge-TTS 是在线服务，不需要本地检查
         if service_name == "edge-tts":
             return True, "Edge TTS服务可用"
@@ -2477,8 +2538,11 @@ class BookService:
         logger.info(f"[DEBUG] regenerate_audio 开始: book_id={book_id}, user_id={user_id}, force={force}")
         
         async def update_progress(percentage: int, message: str):
+            logger.debug(f"[进度] {percentage}% - {message}")
             if progress_callback:
                 await progress_callback(percentage, message)
+            else:
+                logger.warning("[进度] progress_callback 为 None")
 
         await update_progress(5, "正在获取用户TTS设置...")
 
@@ -2506,6 +2570,8 @@ class BookService:
         minimax_model = None
         siliconflow_api_key = None
         siliconflow_model = None
+        azure_subscription_key = None
+        azure_region = None
 
         if service_name == "kokoro-tts":
             voice = user_settings.kokoro_voice if user_settings else settings.KOKORO_DEFAULT_VOICE
@@ -2524,6 +2590,12 @@ class BookService:
             voice = user_settings.siliconflow_voice if user_settings else settings.SILICONFLOW_DEFAULT_VOICE
             siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
             siliconflow_model = user_settings.siliconflow_model if user_settings else settings.SILICONFLOW_DEFAULT_MODEL
+        elif service_name == "azure-tts":
+            voice = user_settings.azure_voice if user_settings else settings.AZURE_TTS_DEFAULT_VOICE
+            speed = user_settings.azure_speed if user_settings and user_settings.azure_speed is not None else 1.0
+            azure_subscription_key = user_settings.azure_subscription_key if user_settings else None
+            azure_region = user_settings.azure_region if user_settings else None
+            logger.debug(f"Azure配置: subscription_key={'已设置' if azure_subscription_key else '未设置'}, region={azure_region}")
         else:
             # 豆包TTS
             voice = user_settings.doubao_voice if user_settings else settings.DOUBAO_DEFAULT_VOICE
@@ -2647,7 +2719,9 @@ class BookService:
                         await update_progress(progress, f"跳过已有音频 ({current}/{total_count})...")
                         return {**sent_info, 'audio_file': target_filename, 'duration': existing_duration}
 
-                    logger.debug(f"generate_sentence_audio: service_name={service_name}, voice={voice}, minimax_api_key={'已设置' if minimax_api_key else '未设置'}, siliconflow_api_key={'已设置' if siliconflow_api_key else '未设置'}")
+                    logger.debug(f"generate_sentence_audio: service_name={service_name}, voice={voice}")
+                    logger.debug(f"Azure配置: subscription_key={'已设置' if azure_subscription_key else '未设置'}, region={azure_region}")
+                    logger.debug(f"minimax_api_key={'已设置' if minimax_api_key else '未设置'}, siliconflow_api_key={'已设置' if siliconflow_api_key else '未设置'}")
                     # 使用tts_service生成语音
                     try:
                         # 检查是否已取消
@@ -2655,7 +2729,7 @@ class BookService:
                             cancelled[0] = True
                             return None
 
-                            logger.debug(f"调用 tts_service.generate_speech")
+                        logger.debug(f"调用 tts_service.generate_speech")
                         tts_result = await tts_service.generate_speech(
                             text=text,
                             voice=voice,
@@ -2667,7 +2741,9 @@ class BookService:
                             minimax_model=minimax_model,
                             siliconflow_api_key=siliconflow_api_key,
                             siliconflow_model=siliconflow_model,
-                            speed=speed
+                            speed=speed,
+                            azure_subscription_key=azure_subscription_key,
+                            azure_region=azure_region
                         )
 
                         # 检查是否已取消
@@ -2691,7 +2767,11 @@ class BookService:
                             generated_count[0] += 1
                             current = generated_count[0]
                             progress = 30 + int(current / total_count * 65)
+                            logger.info(f"[DEBUG] 音频生成成功，准备更新进度: {progress}% ({current}/{total_count})")
                             await update_progress(progress, f"正在生成语音 ({current}/{total_count})...")
+                            logger.info(f"[DEBUG] 进度更新完成: {progress}%")
+                            # 让出事件循环，确保SSE消息能及时发送
+                            await asyncio.sleep(0)
                             return {**sent_info, 'audio_file': target_filename, 'duration': audio_duration}
                         else:
                             error_msg = "音频数据为空"
@@ -2700,6 +2780,7 @@ class BookService:
                             current = generated_count[0]
                             progress = 30 + int(current / total_count * 65)
                             await update_progress(progress, f"生成失败 ({current}/{total_count}): {error_msg}")
+                            await asyncio.sleep(0)
                             return {**sent_info, 'audio_file': None, 'error': error_msg}
                     except Exception as e:
                         error_msg = str(e)
@@ -2708,6 +2789,7 @@ class BookService:
                         current = generated_count[0]
                         progress = 30 + int(current / total_count * 65)
                         await update_progress(progress, f"生成失败 ({current}/{total_count}): {error_msg}")
+                        await asyncio.sleep(0)
                         return {**sent_info, 'audio_file': None, 'error': error_msg}
 
             tasks = [generate_sentence_audio(sent) for sent in sentences_mapping]
@@ -3248,6 +3330,7 @@ class BookService:
     async def _supplement_single_book(
         self,
         db: AsyncSession,
+        book_id: str,
         book,
         translation_api,
         service_name: str,
@@ -3260,6 +3343,8 @@ class BookService:
         minimax_model: str = None,
         siliconflow_api_key: str = None,
         siliconflow_model: str = None,
+        azure_subscription_key: str = None,
+        azure_region: str = None,
         progress_callback: Optional[callable] = None,
         force: bool = False,
         cancelled: Optional[list] = None
@@ -3334,7 +3419,8 @@ class BookService:
         async def process_sentence(sent_info: dict) -> dict:
             async with semaphore:
                 # 检查是否已取消（支持两种取消机制）
-                if (cancelled and cancelled[0]) or is_cancelled(book.id):
+                if (cancelled and cancelled[0]) or is_cancelled(book_id):
+                    logger.info(f"[取消] 检测到取消信号，跳过句子: {sent_info['text'][:30]}...")
                     return {**sent_info, 'translation': existing_map.get(sent_info['text'], {}).get('translation', ''), 'audio_file_zh': existing_map.get(sent_info['text'], {}).get('audio_file_zh', ''), 'cancelled': True}
 
                 text = sent_info['text']
@@ -3359,6 +3445,7 @@ class BookService:
                     current = updated_count[0]
                     progress = 10 + int((current / total_count) * 85)
                     await update_progress_local(progress, f"跳过已有 ({current}/{total_count})")
+                    await asyncio.sleep(0)
                     return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file}
 
                 # 更新处理进度（统一使用 total_count 作为分母，避免进度超过100%）
@@ -3366,6 +3453,11 @@ class BookService:
                 current = updated_count[0]
                 progress = 10 + int((current / total_count) * 85)
                 await update_progress_local(progress, f"处理中 ({current}/{total_count})")
+                await asyncio.sleep(0)
+
+                # 检查是否已取消
+                if (cancelled and cancelled[0]) or is_cancelled(book_id):
+                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file, 'cancelled': True}
 
                 # 需要翻译
                 if need_translate and not translation:
@@ -3379,6 +3471,10 @@ class BookService:
                             translation = trans_result
                     except Exception as e:
                                     logger.error(f"翻译失败: {text[:30]}... - {e}")
+
+                # 检查是否已取消（翻译后、TTS前）
+                if (cancelled and cancelled[0]) or is_cancelled(book_id):
+                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file, 'cancelled': True}
 
                 # 需要生成中文音频
                 audio_generated = False  # 标记是否成功生成音频
@@ -3396,7 +3492,9 @@ class BookService:
                             minimax_model=minimax_model,
                             siliconflow_api_key=siliconflow_api_key,
                             siliconflow_model=siliconflow_model,
-                            speed=speed
+                            speed=speed,
+                            azure_subscription_key=azure_subscription_key,
+                            azure_region=azure_region
                         )
 
                         if tts_result and tts_result.audio_data:
@@ -3412,6 +3510,8 @@ class BookService:
                             current = updated_count[0]
                             progress = 10 + int((current / total_count) * 85)
                             await update_progress_local(progress, f"生成中 ({current}/{total_count})")
+                            # 让出事件循环，确保SSE消息能及时发送
+                            await asyncio.sleep(0)
                             # 获取时长
                             try:
                                 audio = MP3(str(audio_path))
@@ -3429,15 +3529,29 @@ class BookService:
                     'audio_file': audio_file,
                     'duration': existing.get('duration', 0.0),
                 }
-                # 只有成功生成中文音频或已有音频文件时才包含 audio_file_zh
-                if audio_generated or (existing.get('audio_file_zh') and (audio_folder / existing['audio_file_zh']).exists()):
-                    result['audio_file_zh'] = audio_file_zh if audio_generated else existing['audio_file_zh']
-                    result['duration_zh'] = duration_zh if audio_generated else existing.get('duration_zh', 0.0)
+                # 只有成功生成中文音频时才包含 audio_file_zh
+                # 注意：在覆盖模式下(force=True)，即使旧文件存在，生成失败也不应该保留旧文件
+                if audio_generated:
+                    result['audio_file_zh'] = audio_file_zh
+                    result['duration_zh'] = duration_zh
+                elif not force and existing.get('audio_file_zh') and (audio_folder / existing['audio_file_zh']).exists():
+                    # 非覆盖模式下，保留已存在的音频文件
+                    result['audio_file_zh'] = existing['audio_file_zh']
+                    result['duration_zh'] = existing.get('duration_zh', 0.0)
                 return result
 
         # 并发处理所有句子
         tasks = [process_sentence(sent) for sent in sentences_mapping]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 检查是否被取消
+        if (cancelled and cancelled[0]) or is_cancelled(book_id):
+            logger.info(f"[取消] 任务被取消，返回取消结果")
+            await update_progress_local(100, "已取消")
+            return {
+                "success": False,
+                "message": "用户取消了生成任务"
+            }
 
         # 分离成功和失败的结果
         successful_results = []
@@ -3893,6 +4007,12 @@ class BookService:
         4. 生成中文音频
         5. 更新 sentences.json
         """
+        # 初始化取消事件，确保取消功能正常工作
+        # 清除可能存在的旧取消状态，重新创建事件
+        clear_cancel_event(book_id)
+        cancel_event = get_cancel_event(book_id)
+        logger.info(f"[取消] 初始化取消事件: book_id={book_id}")
+        
         async def update_progress_local(percentage: int, message: str):
             if progress_callback:
                 await progress_callback(percentage, message)
@@ -3932,6 +4052,8 @@ class BookService:
         minimax_model = None
         siliconflow_api_key = None
         siliconflow_model = None
+        azure_subscription_key = None
+        azure_region = None
 
         if service_name == "kokoro-tts":
             voice_zh = user_settings.kokoro_voice_zh if user_settings and user_settings.kokoro_voice_zh else app_settings.KOKORO_DEFAULT_VOICE_ZH
@@ -3950,6 +4072,11 @@ class BookService:
             voice_zh = user_settings.siliconflow_voice_zh if user_settings and user_settings.siliconflow_voice_zh else app_settings.SILICONFLOW_DEFAULT_VOICE
             siliconflow_api_key = user_settings.siliconflow_api_key if user_settings else None
             siliconflow_model = user_settings.siliconflow_model if user_settings else app_settings.SILICONFLOW_DEFAULT_MODEL
+        elif service_name == "azure-tts":
+            voice_zh = user_settings.azure_voice_zh if user_settings and user_settings.azure_voice_zh else app_settings.AZURE_TTS_DEFAULT_VOICE_ZH
+            speed = user_settings.azure_speed if user_settings and user_settings.azure_speed is not None else 1.0
+            azure_subscription_key = user_settings.azure_subscription_key if user_settings else None
+            azure_region = user_settings.azure_region if user_settings else app_settings.AZURE_TTS_REGION
         else:
             # 豆包TTS
             voice_zh = user_settings.doubao_voice_zh if user_settings and user_settings.doubao_voice_zh else app_settings.DOUBAO_DEFAULT_VOICE_ZH
@@ -3961,6 +4088,7 @@ class BookService:
         # 调用内部方法补充中文音频
         result = await self._supplement_single_book(
             db=db,
+            book_id=book_id,
             book=book,
             translation_api=translation_api,
             service_name=service_name,
@@ -3973,10 +4101,15 @@ class BookService:
             minimax_model=minimax_model,
             siliconflow_api_key=siliconflow_api_key,
             siliconflow_model=siliconflow_model,
+            azure_subscription_key=azure_subscription_key,
+            azure_region=azure_region,
             progress_callback=progress_callback,
             force=force,
             cancelled=cancelled
         )
+
+        # 清除取消事件，为下次生成做准备
+        clear_cancel_event(book_id)
 
         return TranslationGenerateResult(success=result["success"], message=result["message"])
 

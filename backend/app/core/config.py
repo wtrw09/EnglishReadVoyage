@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     MINIMAX_DEFAULT_SPEED: float = 1.0
     MINIMAX_MIN_INTERVAL: float = 3.0  # 最小请求间隔(秒)，确保 20 RPM
 
+    # Azure语音合成
+    AZURE_TTS_SUBSCRIPTION_KEY: str = ""
+    AZURE_TTS_REGION: str = ""
+    AZURE_TTS_DEFAULT_VOICE: str = "en-US-JennyNeural"
+    AZURE_TTS_DEFAULT_VOICE_ZH: str = "zh-CN-XiaoxiaoNeural"
+    AZURE_TTS_DEFAULT_SPEED: float = 1.0
+    AZURE_TTS_MIN_INTERVAL: float = 0.01  # 最小请求间隔(秒)，确保 100 QPS
+
     # JWT 认证
     # 不再提供默认值，生产环境必须通过环境变量设置
     SECRET_KEY: str = ""

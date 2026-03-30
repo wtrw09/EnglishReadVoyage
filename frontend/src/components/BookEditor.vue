@@ -7,15 +7,15 @@
       :style="{ left: contextMenuX + 'px', top: contextMenuY + 'px' }"
     >
       <div class="context-menu-item" @click="handlePaste">
-        <van-icon name="records-o" />
+        <i class="fas fa-clipboard"></i>
         <span>粘贴</span>
       </div>
       <div class="context-menu-item" @click="handleInsertImage">
-        <van-icon name="photo-o" />
+        <i class="fas fa-image"></i>
         <span>插入图片</span>
       </div>
       <div class="context-menu-item" @click="insertPageBreak">
-        <van-icon name="bookmark-o" />
+        <i class="fas fa-bookmark"></i>
         <span>插入换页符</span>
       </div>
     </div>
@@ -36,7 +36,7 @@
     >
       <div class="find-replace-header" @mousedown="startDragPanel">
         <span>查找和替换</span>
-        <van-icon name="cross" class="close-btn" @click.stop="closeFindReplace" />
+        <i class="fas fa-xmark close-btn" @click.stop="closeFindReplace" />
       </div>
       <div class="find-replace-content">
         <div class="find-row">
@@ -81,7 +81,7 @@
     >
       <div class="image-preview-header" @mousedown="startDragImagePreview">
         <span>图片预览</span>
-        <van-icon name="cross" class="close-btn" @click="showImagePreview = false" />
+        <i class="fas fa-xmark close-btn" @click="showImagePreview = false" />
       </div>
       <div class="image-preview-content">
         <img v-if="previewImageUrl" :src="previewImageUrl" class="preview-image" alt="预览" />
@@ -1386,7 +1386,7 @@ onUnmounted(() => {
   background-color: #e8e8e8;
 }
 
-.context-menu-item .van-icon {
+.context-menu-item i {
   font-size: 18px;
   color: #666;
 }

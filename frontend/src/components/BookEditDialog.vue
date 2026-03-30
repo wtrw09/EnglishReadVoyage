@@ -150,7 +150,7 @@
               <div class="sentence-text">{{ sentence.text }}</div>
               <div class="sentence-meta">第 {{ sentence.page + 1 }} 页，第 {{ sentence.index + 1 }} 句</div>
             </div>
-            <van-icon name="edit" class="edit-icon" />
+            <i class="fas fa-pencil edit-icon"></i>
           </div>
         </template>
       </div>
@@ -253,11 +253,11 @@ const showAudioPopover = ref(false)
 
 // 下拉菜单选项
 const audioActions = [
-  { text: '翻译+生成双语', icon: 'play-circle-o' },
-  { text: '预览断句', icon: 'orders-o' },
-  { text: '生成英文语音', icon: 'music-o' },
-  { text: '生成句子翻译', icon: 'chat-o' },
-  { text: '生成中文语音', icon: 'volume-o' }
+  { text: '翻译+生成双语', icon: 'fa-play-circle' },
+  { text: '预览断句', icon: 'fa-list-ol' },
+  { text: '生成英文语音', icon: 'fa-music' },
+  { text: '生成句子翻译', icon: 'fa-comment' },
+  { text: '生成中文语音', icon: 'fa-volume-high' }
 ]
 
 // 生成模式选择 ActionSheet 相关状态
@@ -724,11 +724,21 @@ const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
 
     let buffer = ''
 
+    // 添加调试日志
+    console.log('[SSE] 开始接收数据...')
+    let totalReceived = 0
+
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        console.log('[SSE] 数据接收完成, 总共收到', totalReceived, '个chunk')
+        break
+      }
 
-      buffer += decoder.decode(value, { stream: true })
+      totalReceived++
+      const decoded = decoder.decode(value, { stream: true })
+      buffer += decoded
+      console.log('[SSE] 收到chunk #' + totalReceived + ', buffer长度=' + buffer.length + ', 数据=' + decoded.substring(0, 100))
       let hasValidData = false
 
       // 处理所有完整的 SSE 消息
@@ -751,11 +761,13 @@ const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
         try {
           const data = JSON.parse(fullJson)
           hasValidData = true
+          console.log('[SSE] 解析成功:', data.percentage, data.message)
 
           if (data.percentage !== undefined) {
             // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
             audioProgress.value = Math.min(100, data.percentage)
             audioProgressMsg.value = data.message || ''
+            console.log('[SSE] 更新进度:', audioProgress.value, audioProgressMsg.value)
           }
 
           // 检测错误消息
@@ -774,9 +786,20 @@ const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
           if (data.success === true) {
             showToast(data.message)
           } else if (data.success === false) {
-            hasError = true
-            errorMessage = data.message
-            showErrorDialog(data.message)
+            // 检查是否是用户取消的情况
+            if (data.message && data.message.includes('取消')) {
+              showToast('已取消')
+              // 重置状态
+              generatingAudio.value = false
+              audioProgress.value = 0
+              audioProgressMsg.value = ''
+              audioAbortController = null
+              return  // 直接返回，不再处理后续逻辑
+            } else {
+              hasError = true
+              errorMessage = data.message
+              showErrorDialog(data.message)
+            }
           }
         } catch (e) {
           console.error('解析SSE数据失败:', e, 'JSON:', fullJson)
@@ -1743,13 +1766,23 @@ const continueGenerateChineseAudio = async (forceRegenerate: boolean) => {
           if (data.success === true) {
             showToast(data.message)
           } else if (data.success === false) {
-            hasError = true
-            errorMessage = data.message
-            // 特别处理 Edge-TTS 服务暂时不可用的情况
-            if (data.message.includes('503') || data.message.includes('暂时不可用')) {
-              showWarningDialog('Edge-TTS服务暂时不可用，已生成的音频会保留，下次点击将继续生成剩余部分')
+            // 检查是否是用户取消的情况
+            if (data.message && data.message.includes('取消')) {
+              showToast('已取消')
+              // 重置状态
+              generatingAudio.value = false
+              audioProgress.value = 0
+              audioProgressMsg.value = ''
+              audioAbortController = null
             } else {
-              showErrorDialog(data.message)
+              hasError = true
+              errorMessage = data.message
+              // 特别处理 Edge-TTS 服务暂时不可用的情况
+              if (data.message.includes('503') || data.message.includes('暂时不可用')) {
+                showWarningDialog('Edge-TTS服务暂时不可用，已生成的音频会保留，下次点击将继续生成剩余部分')
+              } else {
+                showErrorDialog(data.message)
+              }
             }
           }
         } catch (e) {
@@ -1811,24 +1844,28 @@ const handleCancelAudioTask = async () => {
 
   cancelling.value = true
   try {
-    // 调用后端取消端点
+    // 调用后端取消端点，让后端停止生成
     await api.post(`/books/${props.bookId}/cancel-audio-task`)
 
-    // 中止前端 fetch 请求
+    // 注意：不要立即中止 fetch 请求
+    // 让后端自然结束并发送最终的 SSE 消息
+    // 前端会继续读取 SSE 直到收到 "已取消" 消息
+
+    // 显示取消中提示
+    audioProgressMsg.value = '正在取消...'
+  } catch (error: any) {
+    console.error('取消任务失败:', error)
+    // 如果后端取消失败，再中止前端请求
     if (audioAbortController) {
       audioAbortController.abort()
     }
-
-    showToast('已取消')
-  } catch (error: any) {
-    console.error('取消任务失败:', error)
-    // 忽略取消过程中的错误
-  } finally {
-    cancelling.value = false
+    showToast('取消失败')
     generatingAudio.value = false
     audioProgress.value = 0
     audioProgressMsg.value = ''
     audioAbortController = null
+  } finally {
+    cancelling.value = false
   }
 }
 

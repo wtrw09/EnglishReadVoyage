@@ -20,7 +20,7 @@
             @click.stop.prevent="handleTitleClick(item)"
           >
             <span class="title-text">《{{ item.title }}》</span>
-            <van-icon v-if="(item.book_id || props.bookId) && (item.fixed_fields?.length > 0 || item.warnings?.length > 0)" name="edit" class="edit-icon" />
+            <i class="fas fa-pencil edit-icon" />
           </div>
           <!-- 修复成功的字段（绿色） -->
           <ul v-if="item.fixed_fields?.length > 0" class="audio-success-details">
@@ -43,7 +43,7 @@
           <!-- 调试信息：显示 book_id -->
           <div class="audio-error-title" :class="{ 'clickable': item.book_id }" @click.stop="item.book_id && emit('edit-book', item.book_id)">
             <span class="title-text">《{{ item.title }}》</span>
-            <van-icon v-if="item.book_id" name="edit" class="edit-icon" />
+            <i class="fas fa-pencil edit-icon" />
           </div>
           <!-- 调试用：显示 book_id -->
           <div style="font-size: 10px; color: #999; margin-top: 2px;">book_id: {{ item.book_id || 'undefined (无法编辑)' }}</div>
@@ -54,7 +54,7 @@
       </div>
       <!-- 无问题提示 -->
       <div v-if="audioFixedList.length === 0 && audioErrorList.length === 0" class="audio-no-issue">
-        <van-icon name="passed" size="32" color="#07c160" />
+        <i class="fas fa-check-circle" style="font-size: 32px; color: #07c160;" />
         <p>语音配置正常，无需修复</p>
       </div>
     </div>

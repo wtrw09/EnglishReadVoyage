@@ -15,7 +15,6 @@ declare module 'vue' {
     BilingualModeDialog: typeof import('./src/components/BilingualModeDialog.vue')['default']
     BookEditDialog: typeof import('./src/components/BookEditDialog.vue')['default']
     BookEditor: typeof import('./src/components/BookEditor.vue')['default']
-    HelloWorld: typeof import('./src/components/HelloWorld.vue')['default']
     Playlist: typeof import('./src/components/Playlist.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
@@ -48,6 +47,8 @@ declare module 'vue' {
     VanStepper: typeof import('vant/es')['Stepper']
     VanSwipeCell: typeof import('vant/es')['SwipeCell']
     VanSwitch: typeof import('vant/es')['Switch']
+    VanTab: typeof import('vant/es')['Tab']
+    VanTabs: typeof import('vant/es')['Tabs']
     VanTag: typeof import('vant/es')['Tag']
     VirtualContent: typeof import('./src/components/VirtualContent.vue')['default']
   }

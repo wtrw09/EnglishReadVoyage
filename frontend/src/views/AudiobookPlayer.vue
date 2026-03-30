@@ -7,15 +7,15 @@
         <!-- 顶部导航 -->
         <div class="player-nav">
           <div class="nav-left" @click="goBack">
-            <van-icon name="arrow-left" />
+            <i class="fas fa-chevron-left"></i>
           </div>
           <div class="nav-title">听书模式</div>
           <div class="nav-right">
             <div class="nav-icon-btn playlist-toggle-btn" @click="showPlaylist = true">
-              <van-icon name="list-switch" />
+              <i class="fas fa-list"></i>
             </div>
             <div class="nav-icon-btn" @click="showAddBooks = true">
-              <van-icon name="plus" />
+              <i class="fas fa-plus"></i>
             </div>
           </div>
         </div>
@@ -32,21 +32,21 @@
               decoding="async"
             />
             <div v-else class="book-cover-placeholder">
-              <van-icon name="book-o" />
+              <i class="fas fa-book"></i>
             </div>
           </div>
           <h2 class="book-title">{{ currentBook?.book_title || '暂无书籍' }}</h2>
           <!-- 定时器状态和朗读模式显示在封面区域 -->
           <div class="status-info-row">
             <p v-if="sleepTimer && sleepTimerType" class="timer-status">
-              <van-icon name="clock-o" />
+              <i class="fas fa-clock"></i>
               <span v-if="sleepTimerType === 'time'">
                 {{ sleepTimerRemaining > 0 ? sleepTimerRemainingLabel + '后关闭' : sleepTimer + '分钟后关闭' }}
               </span>
               <span v-else-if="sleepTimerType === 'episode'">还剩{{ episodesToPlay }}集</span>
             </p>
             <p v-if="isBilingualMode && currentBookTotalDuration > 0" class="read-mode-display">
-              <van-icon name="volume-o" />
+              <i class="fas fa-volume-up"></i>
               <span>{{ getCurrentModeDisplay() }}</span>
             </p>
           </div>
@@ -159,7 +159,7 @@
       <div class="sleep-timer-popup">
         <div class="popup-header">
           <span>定时</span>
-          <van-icon name="cross" class="close-icon" @click="showSleepTimer = false" />
+          <i class="fas fa-xmark close-icon" @click="showSleepTimer = false"></i>
         </div>
 
         <!-- 上次定时 / 倒计时显示 -->
@@ -180,7 +180,7 @@
           <div class="section-title-row">
             <span class="section-title">按时间</span>
             <div class="finish-current-option" @click="finishCurrentEnabled = !finishCurrentEnabled">
-              <van-icon :name="finishCurrentEnabled ? 'checked' : 'circle'" :class="['check-icon', { 'checked': finishCurrentEnabled }]" />
+              <i :class="['fas', finishCurrentEnabled ? 'fa-check-square' : 'fa-square', 'check-icon', { 'checked': finishCurrentEnabled }]"></i>
               <span :class="{ 'checked': finishCurrentEnabled }">播完整集声音再停止</span>
             </div>
           </div>
@@ -225,7 +225,7 @@
       <div class="custom-timer-popup">
         <div class="popup-header">
           <span>自定义关闭</span>
-          <van-icon name="cross" class="close-icon" @click="showCustomTimer = false" />
+          <i class="fas fa-xmark close-icon" @click="showCustomTimer = false"></i>
         </div>
         <div class="custom-timer-inputs">
           <div class="timer-input-item">
@@ -276,7 +276,7 @@
                 @click.stop
               />
               <span class="group-name">{{ group.group_name }}</span>
-              <van-icon :name="expandedGroups.includes(group.group_id) ? 'arrow-down' : 'arrow'" />
+              <i :class="['fas', expandedGroups.includes(group.group_id) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
             </div>
             <div v-show="expandedGroups.includes(group.group_id)" class="group-books">
               <div
@@ -298,14 +298,14 @@
                   decoding="async"
                 />
                 <div v-else class="book-thumb-placeholder">
-                  <van-icon name="book-o" />
+                  <i class="fas fa-book"></i>
                 </div>
                 <span class="book-name">{{ book.title }}</span>
               </div>
             </div>
           </div>
           <div v-if="filteredAvailableBooks.length === 0" class="empty-books-list">
-            <van-icon name="success" size="48" color="#07c160" />
+            <i class="fas fa-check-circle" style="font-size: 48px; color: #07c160;"></i>
             <p>所有书籍都已添加到播放列表</p>
           </div>
         </div>
@@ -332,7 +332,7 @@
       <div class="audio-check-popup">
         <div class="check-title">
           <van-loading v-if="isChecking" type="spinner" size="24px" />
-          <van-icon v-else name="warning-o" class="warning-icon" />
+          <i v-else class="fas fa-triangle-exclamation warning-icon"></i>
           <span>{{ isChecking ? '正在检查音频完整性...' : '音频完整性检查结果' }}</span>
         </div>
 
@@ -1899,7 +1899,7 @@ onUnmounted(() => {
       justify-content: center;
       cursor: pointer;
 
-      .van-icon {
+      .fas {
         font-size: 20px;
         color: #333;
       }
@@ -1932,7 +1932,7 @@ onUnmounted(() => {
       background: rgba(0, 0, 0, 0.1);
     }
 
-    .van-icon {
+    .fas {
       font-size: 18px;
       color: #333;
     }
@@ -1987,7 +1987,7 @@ onUnmounted(() => {
       justify-content: center;
       background: #f0f0f0;
 
-      .van-icon {
+      .fas {
         font-size: 64px;
         color: #ccc;
       }
@@ -2014,7 +2014,7 @@ onUnmounted(() => {
     align-items: center;
     gap: 4px;
 
-    .van-icon {
+    .fas {
       font-size: 14px;
     }
   }
@@ -2027,7 +2027,7 @@ onUnmounted(() => {
     align-items: center;
     gap: 4px;
 
-    .van-icon {
+    .fas {
       font-size: 14px;
     }
   }
@@ -2543,7 +2543,7 @@ onUnmounted(() => {
           justify-content: center;
           background: #f0f0f0;
 
-          .van-icon {
+          .fas {
             font-size: 20px;
             color: #ccc;
           }
