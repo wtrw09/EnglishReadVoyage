@@ -1,3 +1,11 @@
+/**
+ * TtsSettingsContent.vue - TTS朗读设置内容
+ *
+ * 功能：TTS 服务和朗读模式设置
+ * - 选择 TTS 服务（Kokoro、Azure、Edge 等）
+ * - 选择中英文音色
+ * - 配置朗读模式（预设/自定义）
+ */
 <template>
   <div class="tts-settings-content">
     <!-- 服务名称 -->
@@ -265,6 +273,11 @@
 <script setup lang="ts">
 import { computed, watch, onMounted, onUnmounted } from 'vue'
 import { useTtsSettings } from '../../Home/composables/useTtsSettings'
+
+// 组件名称，用于在 Settings.vue 中识别组件
+defineOptions({
+  name: 'TtsSettingsContent'
+})
 
 const {
   ttsServiceName,

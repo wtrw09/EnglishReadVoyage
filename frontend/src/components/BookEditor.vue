@@ -1,3 +1,13 @@
+/**
+ * BookEditor.vue - 书籍 Markdown 编辑器
+ *
+ * 功能：基于 CodeMirror 的 Markdown 编辑器
+ * - 语法高亮（标题、加粗、斜体、代码、链接等）
+ * - 上下文菜单（粘贴、插入图片、插入换页符）
+ * - 查找和替换功能（Ctrl+F / Ctrl+H）
+ * - 图片上传和预览
+ * - 键盘快捷键支持
+ */
 <template>
   <div class="editor-component">
     <!-- 上下文菜单 -->

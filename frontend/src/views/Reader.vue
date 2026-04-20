@@ -1,3 +1,13 @@
+/**
+ * Reader.vue - 阅读器页面
+ *
+ * 功能：
+ * - 分页显示书籍内容（Markdown 渲染）
+ * - 点击单词查词，显示词典释义
+ * - 单词加入生词本
+ * - 播放当前句子的语音
+ * - 管理员功能：编辑书籍、检查音频
+ */
 <template>
   <div class="reader">
     <van-nav-bar
@@ -159,271 +169,35 @@
     </van-popup>
 
     <!-- 单词翻译弹窗 -->
-    <van-popup
-      v-model:show="showDictPopup"
-      position="bottom"
-      round
-      :style="{ maxHeight: '60%' }"
-      @click-overlay="handleDictPopupOverlayClick"
-    >
-      <div class="dict-popup-content" @click="handleDictPopupContentClick">
-        <div v-if="dictLoading" class="dict-loading">
-          <van-loading type="spinner" size="24px" />
-          <span>查询中...</span>
-        </div>
-        <div v-else-if="dictError" class="dict-error">
-          <i class="fas fa-triangle-exclamation" size="32" style="font-size: 32px; color: #ee0a24;"></i>
-          <p>{{ dictError }}</p>
-        </div>
-        <div v-else-if="dictData" class="dict-result">
-          <!-- ECDICT 格式显示 -->
-          <template v-if="dictData.source === 'ecdict'">
-            <div class="dict-header">
-              <h3 class="dict-word">{{ dictData.word }}</h3>
-              <span class="dict-source-tag">本地词典</span>
-              <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
-              <van-loading v-if="dictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
-              <i
-                v-else-if="dictPhoneticAudio"
-                class="fas fa-volume-up dict-audio-btn"
-                @click="playPhoneticAudio(dictPhoneticAudio)"
-              />
-               <van-button
-                class="vocab-btn"
-                size="mini"
-                type="primary"
-                :loading="addingToVocabulary"
-                @click="addToVocabulary"
-              >
-                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
-              </van-button>
-              <div v-if="dictData.tag" class="dict-tags">
-                <span v-for="(tag, idx) in formatTags(dictData.tag)" :key="idx" class="dict-tag">{{ tag }}</span>
-              </div>
-            </div>
-            <!-- 中文翻译 -->
-            <div v-if="dictData.translation" class="dict-translation">
-              <div class="dict-section-title">中文释义</div>
-              <div class="dict-translation-content">{{ dictData.translation }}</div>
-            </div>
-            <!-- 句子翻译结果 -->
-            <div v-if="currentSentenceText" class="dict-sentence-translation">
-              <div class="dict-section-title">句子翻译</div>
-              <div class="dict-sentence-original">{{ currentSentenceText }}</div>
-              <div v-if="dictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
-              <div v-else-if="dictSentenceError" class="dict-sentence-error">{{ dictSentenceError }}</div>
-              <div v-else class="dict-sentence-translated">{{ dictData.sentence_translation || '' }}</div>
-            </div>
-            <!-- 分隔线 -->
-            <div v-if="dictData.translation && dictData.definition" class="dict-divider"></div>
-            <!-- 英文释义 -->
-            <div v-if="dictData.definition" class="dict-definition">
-              <div class="dict-section-title">英文释义</div>
-              <div class="dict-definition-content">{{ dictData.definition }}</div>
-            </div>
-            <!-- 时态变换 -->
-            <div v-if="dictData.exchange" class="dict-exchange">
-              <div class="dict-section-title">词形变换</div>
-              <div class="dict-exchange-content">{{ formatExchange(dictData.exchange) }}</div>
-            </div>
-            <!-- 相关词组 -->
-            <div v-if="dictData.related_phrases && dictData.related_phrases.length > 0" class="dict-related-phrases">
-              <div class="dict-section-title">相关词组</div>
-              <div class="dict-phrases-list">
-                <div v-for="(item, idx) in dictData.related_phrases" :key="idx" class="dict-phrase-item">
-                  <span class="dict-phrase">{{ item.phrase }}</span>
-                  <span class="dict-phrase-translation">{{ item.translation }}</span>
-                </div>
-              </div>
-            </div>
-          </template>
-          <!-- API 格式显示 -->
-          <template v-else>
-            <div class="dict-header">
-              <h3 class="dict-word">{{ dictData.word }}</h3>
-              <span class="dict-source-tag">在线词典</span>
-              <span v-if="dictData.phonetic" class="dict-phonetic">{{ dictData.phonetic }}</span>
-              <i
-                v-if="dictData.phonetics?.[0]?.audio"
-                class="fas fa-volume-up dict-audio-btn"
-                @click="playPhoneticAudio(dictData.phonetics[0].audio)"
-              />
-              <van-button
-                class="vocab-btn"
-                size="mini"
-                type="primary"
-                :loading="addingToVocabulary"
-                @click="addToVocabulary"
-              >
-                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
-              </van-button>
-            </div>
-            <div class="dict-meanings">
-              <div
-                v-for="(meaning, idx) in dictData.meanings.slice(0, 3)"
-                :key="idx"
-                class="dict-meaning-item"
-              >
-                <div class="dict-pos">{{ meaning.partOfSpeech }}</div>
-                <ol class="dict-def-list">
-                  <li
-                    v-for="(def, dIdx) in meaning.definitions.slice(0, 2)"
-                    :key="dIdx"
-                    class="dict-def-item"
-                  >
-                    <p class="dict-def-text">{{ def.definition }}</p>
-                    <p v-if="def.example" class="dict-def-example">"{{ def.example }}"</p>
-                  </li>
-                </ol>
-              </div>
-            </div>
-            <!-- 句子翻译结果 -->
-            <div v-if="currentSentenceText" class="dict-sentence-translation">
-              <div class="dict-section-title">句子翻译</div>
-              <div class="dict-sentence-original">{{ currentSentenceText }}</div>
-              <div v-if="dictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
-              <div v-else-if="dictSentenceError" class="dict-sentence-error">{{ dictSentenceError }}</div>
-              <div v-else class="dict-sentence-translated">{{ dictData.sentence_translation || '' }}</div>
-            </div>
-          </template>
-        </div>
-      </div>
-    </van-popup>
+    <DictResultPopup
+      :show="showDictPopup"
+      :data="dictData"
+      :loading="dictLoading"
+      :error="dictError"
+      :sentence-text="currentSentenceText"
+      :sentence-loading="dictSentenceLoading"
+      :sentence-error="dictSentenceError"
+      @update:show="handleDictPopupShowUpdate"
+      @add-to-vocabulary="addToVocabulary"
+      @lookup-word="lookupSecondWord"
+      @lookup-phrase="lookupPhraseDirectTranslation"
+    />
 
     <!-- 第二个单词翻译弹窗（在弹窗内点击单词时显示） -->
-    <van-popup
-      v-model:show="showSecondDictPopup"
-      position="bottom"
-      round
-      :style="{ maxHeight: '50%' }"
-    >
-      <div class="dict-popup-content">
-        <div v-if="secondDictLoading" class="dict-loading">
-          <van-loading type="spinner" size="24px" />
-          <span>查询中...</span>
-        </div>
-        <div v-else-if="secondDictError" class="dict-error">
-          <i class="fas fa-triangle-exclamation" style="font-size: 32px; color: #ee0a24;"></i>
-          <p>{{ secondDictError }}</p>
-        </div>
-        <div v-else-if="secondDictData" class="dict-result">
-          <!-- ECDICT 格式显示 -->
-          <template v-if="secondDictData.source === 'ecdict'">
-            <div class="dict-header">
-              <h3 class="dict-word">{{ secondDictData.word }}</h3>
-              <span class="dict-source-tag">本地词典</span>
-              <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
-              <van-loading v-if="secondDictPhoneticLoading" type="spinner" size="16px" class="dict-audio-btn" />
-              <i
-                v-else-if="secondDictPhoneticAudio"
-                class="fas fa-volume-up dict-audio-btn"
-                @click="playPhoneticAudio(secondDictPhoneticAudio)"
-              />
-              <van-button
-                class="vocab-btn"
-                size="mini"
-                type="primary"
-                :loading="addingToVocabulary"
-                @click="addSecondWordToVocabulary"
-              >
-                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
-              </van-button>
-              <div v-if="secondDictData.tag" class="dict-tags">
-                <span v-for="(tag, idx) in formatTags(secondDictData.tag)" :key="idx" class="dict-tag">{{ tag }}</span>
-              </div>
-            </div>
-            <!-- 中文翻译 -->
-            <div v-if="secondDictData.translation" class="dict-translation">
-              <div class="dict-section-title">中文释义</div>
-              <div class="dict-translation-content">{{ secondDictData.translation }}</div>
-            </div>
-            <!-- 句子翻译结果 -->
-            <div v-if="secondDictSentenceLoading || secondDictData.sentence_translation || secondDictSentenceError" class="dict-sentence-translation">
-              <div class="dict-section-title">句子翻译</div>
-              <div v-if="secondDictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
-              <div v-else-if="secondDictSentenceError" class="dict-sentence-error">{{ secondDictSentenceError }}</div>
-              <template v-else>
-                <div class="dict-sentence-original">{{ secondDictSentence }}</div>
-                <div class="dict-sentence-translated">{{ secondDictData.sentence_translation }}</div>
-              </template>
-            </div>
-            <!-- 分隔线 -->
-            <div v-if="secondDictData.translation && secondDictData.definition" class="dict-divider"></div>
-            <!-- 英文释义 -->
-            <div v-if="secondDictData.definition" class="dict-definition">
-              <div class="dict-section-title">英文释义</div>
-              <div class="dict-definition-content">{{ secondDictData.definition }}</div>
-            </div>
-            <!-- 时态变换 -->
-            <div v-if="secondDictData.exchange" class="dict-exchange">
-              <div class="dict-section-title">词形变换</div>
-              <div class="dict-exchange-content">{{ formatExchange(secondDictData.exchange) }}</div>
-            </div>
-            <!-- 相关词组 -->
-            <div v-if="secondDictData.related_phrases && secondDictData.related_phrases.length > 0" class="dict-related-phrases">
-              <div class="dict-section-title">相关词组</div>
-              <div class="dict-phrases-list">
-                <div v-for="(item, idx) in secondDictData.related_phrases" :key="idx" class="dict-phrase-item">
-                  <span class="dict-phrase">{{ item.phrase }}</span>
-                  <span class="dict-phrase-translation">{{ item.translation }}</span>
-                </div>
-              </div>
-            </div>
-          </template>
-          <!-- API 格式显示 -->
-          <template v-else>
-            <div class="dict-header">
-              <h3 class="dict-word">{{ secondDictData.word }}</h3>
-              <span class="dict-source-tag">在线词典</span>
-              <span v-if="secondDictData.phonetic" class="dict-phonetic">{{ secondDictData.phonetic }}</span>
-              <i
-                v-if="secondDictData.phonetics?.[0]?.audio"
-                class="fas fa-volume-up dict-audio-btn"
-                @click="playPhoneticAudio(secondDictData.phonetics[0].audio)"
-              />
-              <van-button
-                class="vocab-btn"
-                size="mini"
-                type="primary"
-                :loading="addingToVocabulary"
-                @click="addSecondWordToVocabulary"
-              >
-                <i class="fas fa-plus" style="margin-right: 4px;"></i>生词本
-              </van-button>
-            </div>
-            <div class="dict-meanings">
-              <div
-                v-for="(meaning, idx) in secondDictData.meanings.slice(0, 3)"
-                :key="idx"
-                class="dict-meaning-item"
-              >
-                <div class="dict-pos">{{ meaning.partOfSpeech }}</div>
-                <ol class="dict-def-list">
-                  <li
-                    v-for="(def, dIdx) in meaning.definitions.slice(0, 2)"
-                    :key="dIdx"
-                    class="dict-def-item"
-                  >
-                    <p class="dict-def-text">{{ def.definition }}</p>
-                    <p v-if="def.example" class="dict-def-example">"{{ def.example }}"</p>
-                  </li>
-                </ol>
-              </div>
-            </div>
-            <!-- 句子翻译结果 -->
-            <div v-if="secondDictSentenceLoading || secondDictData.sentence_translation || secondDictSentenceError" class="dict-sentence-translation">
-              <div class="dict-section-title">句子翻译</div>
-              <div v-if="secondDictSentenceLoading" class="dict-sentence-loading">翻译中...</div>
-              <div v-else-if="secondDictSentenceError" class="dict-sentence-error">{{ secondDictSentenceError }}</div>
-              <template v-else>
-                <div class="dict-sentence-original">{{ secondDictSentence }}</div>
-                <div class="dict-sentence-translated">{{ secondDictData.sentence_translation }}</div>
-              </template>
-            </div>
-          </template>
-        </div>
-      </div>
-    </van-popup>
+    <DictResultPopup
+      :show="showSecondDictPopup"
+      :data="secondDictData"
+      :loading="secondDictLoading"
+      :error="secondDictError"
+      :sentence-text="secondDictSentence"
+      :sentence-loading="secondDictSentenceLoading"
+      :sentence-error="secondDictSentenceError"
+      :is-phrase="secondDictIsPhrase"
+      @update:show="showSecondDictPopup = $event"
+      @add-to-vocabulary="addSecondWordToVocabulary"
+      @lookup-word="lookupSecondWord"
+      @lookup-phrase="lookupPhraseDirectTranslation"
+    />
 
     <!-- 音频检查修复弹窗 -->
     <AudioFixDialog
@@ -443,6 +217,26 @@ import { showToast, showDialog } from 'vant'
 import md5 from 'blueimp-md5'
 import { api, useAuthStore } from '@/store/auth'
 import VirtualContent from '@/components/VirtualContent.vue'
+import WordPronunciation from '@/components/WordPronunciation.vue'
+import DictResultPopup from '@/components/DictResultPopup.vue'
+import { useDictionarySettings } from '@/views/Home/composables/useDictionarySettings'
+
+// 获取词典设置（全局共享状态）
+const { dictionarySource, loadDictionarySettings } = useDictionarySettings()
+
+// 词典源显示名称映射
+const dictionarySourceLabels: Record<string, string> = {
+  'local': '本地ECDICT',
+  'api': 'FreeDictionary',
+  'merriam-webster': '韦氏词典',
+  'merriam-webster-learners': '韦氏词典'
+}
+
+// 获取当前词典源显示名称
+const currentDictionaryLabel = computed(() => {
+  const source = dictionarySource.value
+  return dictionarySourceLabels[source] || '在线词典'
+})
 
 // 懒加载编辑和音频检查对话框（代码分割）
 const BookEditDialog = defineAsyncComponent(() => import('@/components/BookEditDialog.vue'))
@@ -465,6 +259,7 @@ interface DictionaryData {
       definition: string
       example?: string
       synonyms: string[]
+      antonyms: string[]
     }>
   }>
   source?: string
@@ -472,6 +267,7 @@ interface DictionaryData {
   translation?: string
   definition?: string
   exchange?: string
+  origin?: string
   baidu_translation?: string
   sentence_translation?: string
   related_phrases?: Array<{ phrase: string; translation: string }>
@@ -546,8 +342,6 @@ const dictError = ref('')
 const dictData = ref<DictionaryData | null>(null)
 const dictSentenceLoading = ref(false)  // 句子翻译加载状态
 const dictSentenceError = ref('')  // 句子翻译错误信息
-const dictPhoneticLoading = ref(false)  // 发音加载状态
-const dictPhoneticAudio = ref<string | null>(null)  // 发音音频URL
 let longPressTimer: number | null = null
 let isLongPress = false
 let currentTouchTarget: HTMLElement | null = null
@@ -564,8 +358,7 @@ const secondDictData = ref<DictionaryData | null>(null)
 const secondDictSentence = ref('')
 const secondDictSentenceLoading = ref(false)  // 句子翻译加载状态
 const secondDictSentenceError = ref('')  // 句子翻译错误信息
-const secondDictPhoneticLoading = ref(false)  // 发音加载状态
-const secondDictPhoneticAudio = ref<string | null>(null)  // 发音音频URL
+const secondDictIsPhrase = ref(false)  // 是否为词组查询
 
 // 生词本相关状态
 const addingToVocabulary = ref(false)
@@ -656,8 +449,6 @@ const loadPages = async (startPage: number, endPage: number) => {
     const maxPage = Math.max(...pagesToLoad) + 1
     const range = maxPage - minPage
     
-    console.log('Loading pages:', minPage, 'to', maxPage, 'range:', range)
-    
     // 如果范围太大，分批请求
     if (range > MAX_CHUNK_SIZE) {
       const promises = []
@@ -701,7 +492,6 @@ const loadPages = async (startPage: number, endPage: number) => {
       })
 
       const data = res.data
-      console.log('Loaded data:', data.title, 'total pages:', data.page_count)
       bookPath.value = data.book_path
       bookTitle.value = data.title
 
@@ -944,7 +734,6 @@ const loadSentencesMap = async (baseUrl: string) => {
         }
         sentencesMap.value[hash] = item
       })
-      console.log('Loaded sentences map:', Object.keys(sentencesMap.value).length, 'entries')
     } else if (res.status === 404) {
       // 404 是正常情况（音频尚未生成），静默处理
       console.log('sentences.json 不存在，音频可能尚未生成')
@@ -956,8 +745,6 @@ const loadSentencesMap = async (baseUrl: string) => {
 
 const playSentence = async (el: HTMLElement) => {
   const text = el.dataset.tts
-  console.log('Play sentence text:', JSON.stringify(text), 'dataset:', el.dataset)
-
   // 高亮当前句子
   if (currentSentence.value) {
     currentSentence.value.classList.remove('active-sentence')
@@ -972,7 +759,6 @@ const playSentence = async (el: HTMLElement) => {
   if (text && audioPlayer.value) {
     const hash = md5Hash(text.trim())
     const mapping = sentencesMap.value[hash]
-    console.log('Looking for audio by hash:', hash, mapping)
     if (mapping && mapping.audio_file) {
       // 先暂停当前播放，避免冲突
       audioPlayer.value.pause()
@@ -1398,13 +1184,12 @@ const lookupWord = async (word: string, sentence: string = '') => {
   dictError.value = ''
   dictData.value = null
   dictSentenceLoading.value = false
-  dictPhoneticLoading.value = false
-  dictPhoneticAudio.value = null
   currentSentenceText.value = sentence  // 保存当前句子
 
   try {
-    // 查询单词
-    const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(word)}`)
+    // 查询单词（使用用户选择的词典来源）
+    const url = `/dictionary/lookup?word=${encodeURIComponent(word)}&source=${dictionarySource.value}`
+    const res = await api.get<DictionaryData>(url)
     dictData.value = res.data
   } catch (error: any) {
     dictError.value = error.response?.data?.detail || '查询失败'
@@ -1414,21 +1199,6 @@ const lookupWord = async (word: string, sentence: string = '') => {
 
   // 单词查询完成后关闭 loading
   dictLoading.value = false
-
-  // 获取发音（仅本地词典需要）
-  if (dictData.value?.source === 'ecdict') {
-    dictPhoneticLoading.value = true
-    try {
-      const pronRes = await api.get<{audio_url: string, accent: string}>(`/pronunciation/${encodeURIComponent(word)}`)
-      if (pronRes.data.audio_url) {
-        dictPhoneticAudio.value = pronRes.data.audio_url
-      }
-    } catch (pronError: any) {
-      console.error('获取发音失败:', pronError)
-    } finally {
-      dictPhoneticLoading.value = false
-    }
-  }
 
   // 如果有句子，在后台单独请求句子翻译
   if (sentence) {
@@ -1471,12 +1241,11 @@ const lookupSecondWord = async (word: string, sentence: string = '') => {
   secondDictData.value = null
   secondDictSentence.value = sentence
   secondDictSentenceLoading.value = false
-  secondDictPhoneticLoading.value = false
-  secondDictPhoneticAudio.value = null
+  secondDictIsPhrase.value = false  // 标记为单词查询
 
   try {
-    // 查询单词
-    const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(word)}`)
+    // 查询单词（使用用户选择的词典来源）
+    const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(word)}&source=${dictionarySource.value}`)
     secondDictData.value = res.data
   } catch (error: any) {
     secondDictError.value = error.response?.data?.detail || '查询失败'
@@ -1486,21 +1255,6 @@ const lookupSecondWord = async (word: string, sentence: string = '') => {
 
   // 单词查询完成后关闭 loading
   secondDictLoading.value = false
-
-  // 获取发音（仅本地词典需要）
-  if (secondDictData.value?.source === 'ecdict') {
-    secondDictPhoneticLoading.value = true
-    try {
-      const pronRes = await api.get<{audio_url: string, accent: string}>(`/pronunciation/${encodeURIComponent(word)}`)
-      if (pronRes.data.audio_url) {
-        secondDictPhoneticAudio.value = pronRes.data.audio_url
-      }
-    } catch (pronError: any) {
-      console.error('获取发音失败:', pronError)
-    } finally {
-      secondDictPhoneticLoading.value = false
-    }
-  }
 
   // 如果有句子，在后台单独请求句子翻译
   if (sentence) {
@@ -1532,80 +1286,41 @@ const lookupSecondWord = async (word: string, sentence: string = '') => {
   }
 }
 
-// 处理词典弹窗内容点击（查找点击的单词）
-const handleDictPopupContentClick = (e: MouseEvent) => {
-  // 如果第二个弹窗已经打开，不再处理
-  if (showSecondDictPopup.value) return
+// 查询词组的翻译（用于右键/长按）
+const lookupPhraseDirectTranslation = async (phrase: string, translation: string) => {
+  showSecondDictPopup.value = true
+  secondDictLoading.value = true
+  secondDictError.value = ''
+  secondDictData.value = null
+  secondDictSentence.value = ''
+  secondDictSentenceLoading.value = false
+  secondDictIsPhrase.value = true  // 标记为词组查询
 
-  const target = e.target as HTMLElement
-
-  // 检查点击的是否是英文文本
-  const word = getWordFromClick(e, target)
-  if (word && /^[a-zA-Z]+$/.test(word)) {
-    lookupSecondWord(word)
+  try {
+    // 调用API查询词组（使用用户选择的词典来源）
+    const res = await api.get<DictionaryData>(`/dictionary/lookup?word=${encodeURIComponent(phrase)}&source=${dictionarySource.value}`)
+    secondDictData.value = res.data
+  } catch (error: any) {
+    // API查询失败时，使用词组本身的翻译
+    secondDictData.value = {
+      word: phrase,
+      translation: translation,
+      source: 'phrase_translation',
+      meanings: []
+    } as any
+    console.error('词组API查询失败:', error)
+  } finally {
+    secondDictLoading.value = false
   }
 }
 
-// 从点击事件中提取单词
-const getWordFromClick = (e: MouseEvent, _target: HTMLElement): string => {
-  // 如果有选中的文本，使用选中的内容
-  const selection = window.getSelection()
-  if (selection && selection.toString().trim()) {
-    return selection.toString().trim()
-  }
-
-  // 否则尝试从点击位置获取单词
-  let range: Range | null = null
-
-  if (document.caretPositionFromPoint) {
-    const pos = document.caretPositionFromPoint(e.clientX, e.clientY)
-    if (pos) {
-      range = document.createRange()
-      range.setStart(pos.offsetNode, pos.offset)
-      range.setEnd(pos.offsetNode, pos.offset)
-    }
-  } else if ((document as any).caretRangeFromPoint) {
-    range = (document as any).caretRangeFromPoint(e.clientX, e.clientY)
-  }
-
-  if (range) {
-    const textNode = range.startContainer
-    if (textNode.nodeType === Node.TEXT_NODE) {
-      const textContent = textNode.textContent || ''
-      let startOffset = range.startOffset
-      let endOffset = range.startOffset
-
-      while (startOffset > 0 && /[a-zA-Z]/.test(textContent[startOffset - 1])) {
-        startOffset--
-      }
-
-      while (endOffset < textContent.length && /[a-zA-Z]/.test(textContent[endOffset])) {
-        endOffset++
-      }
-
-      return textContent.substring(startOffset, endOffset)
-    }
-  }
-
-  return ''
-}
-
-// 处理第一个弹窗的遮罩层点击
-const handleDictPopupOverlayClick = () => {
-  // 如果第二个弹窗打开，先关闭第二个
-  if (showSecondDictPopup.value) {
+// 处理第一个弹窗的显示状态更新
+const handleDictPopupShowUpdate = (value: boolean) => {
+  // 如果要关闭主弹窗，但二级弹窗还开着，先关闭二级
+  if (!value && showSecondDictPopup.value) {
     showSecondDictPopup.value = false
   }
-}
-
-// 播放音标音频
-const playPhoneticAudio = (audioUrl: string) => {
-  if (!audioUrl) return
-  const audio = new Audio(audioUrl)
-  audio.play().catch(err => {
-    console.error('播放发音失败:', err)
-    showToast('播放失败')
-  })
+  showDictPopup.value = value
 }
 
 // 添加到生词本
@@ -1861,6 +1576,8 @@ const handleResize = () => {
 }
 
 onMounted(async () => {
+  // 加载词典设置（确保使用用户选择的词典）
+  await loadDictionarySettings()
   await loadBook()
   // 检查URL参数，如果edit=true则自动打开编辑对话框
   if (route.query.edit === 'true') {
@@ -2466,6 +2183,8 @@ onUnmounted(() => {
   gap: 8px;
   font-size: 13px;
   line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
 }
 
 .dict-phrase {
@@ -2568,5 +2287,72 @@ onUnmounted(() => {
   .van-field {
     padding: 8px 0;
   }
+}
+
+/* 词源样式 */
+.dict-origin {
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+}
+.dict-origin-content {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.6;
+}
+
+/* 词性标题样式 */
+.dict-pos-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  padding: 8px 16px 4px;
+}
+
+/* 释义容器 */
+.dict-definitions {
+  padding: 0 16px 8px;
+}
+
+/* 单个释义项 */
+.dict-def-item {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed #f0f0f0;
+}
+.dict-def-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+/* 释义/例句/同义词/反义词的通用标签样式 */
+.dict-label {
+  color: #999;
+  font-size: 12px;
+}
+
+/* 释义文本 */
+.dict-definition-text {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+
+/* 例句文本 */
+.dict-example-text {
+  font-size: 13px;
+  color: #666;
+  font-style: italic;
+  margin: 4px 0 4px 0;
+  padding-left: 8px;
+  border-left: 2px solid #e3f2fd;
+}
+
+/* 同义词/反义词文本 */
+.dict-synonyms-text,
+.dict-antonyms-text {
+  font-size: 12px;
+  color: #1989fa;
+  margin-top: 4px;
 }
 </style>

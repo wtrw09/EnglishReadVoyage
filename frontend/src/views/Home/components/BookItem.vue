@@ -1,3 +1,12 @@
+/**
+ * BookItem.vue - 书籍列表项组件
+ *
+ * 功能：单个书籍的显示和交互
+ * - 显示封面、标题、阅读进度
+ * - 点击跳转阅读器/听书
+ * - 长按/右键显示操作菜单
+ * - 多选模式支持
+ */
 <template>
   <van-swipe-cell
     :ref="(el) => { if (el) swipeCellRefs[book.id] = el }"

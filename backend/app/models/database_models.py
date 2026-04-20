@@ -79,6 +79,8 @@ class UserSettings(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
     # 词典设置：'local' 表示本地ECDICT，'api' 表示FreeDictionaryAPI
     dictionary_source: Mapped[str] = mapped_column(String, default="local", nullable=False)
+    # 词典页面专用词典：'local' ECDICT，'api' FreeDictionaryAPI，'merriam-webster' 韦氏词典
+    dictionary_page_source: Mapped[str] = mapped_column(String, default="local", nullable=False)
     # 朗读服务名称
     tts_service_name: Mapped[Optional[str]] = mapped_column(String, default="kokoro-tts", nullable=True)
 
@@ -195,3 +197,46 @@ class TranslationAPI(Base):
     app_key: Mapped[str] = mapped_column(String, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class MerriamWebsterAPI(Base):
+    """韦氏词典API配置表（仅管理员可用）"""
+    __tablename__ = "merriam_webster_apis"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 管理员用户ID
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # Learner's Dictionary API Key
+    learners_key: Mapped[str] = mapped_column(String, nullable=False)
+    # Collegiate Thesaurus API Key
+    thesaurus_key: Mapped[str] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship()
+
+
+class DictionaryHistory(Base):
+    """词典查询历史表"""
+    __tablename__ = "dictionary_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    word: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship()
+
+
+class MerriamWebsterCache(Base):
+    """韦氏词典离线缓存表（纯JSON存储）"""
+    __tablename__ = "merriam_webster_cache"
+
+    word: Mapped[str] = mapped_column(String, primary_key=True)
+    # 完整数据JSON，包含 phonetic, phonetics, meanings, thesaurus_synonyms, thesaurus_antonyms, idioms 等
+    data_json: Mapped[str] = mapped_column(String, nullable=False)
+    # 本地音频文件名（相对于 word_audio 目录）
+    audio_filename: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    cached_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

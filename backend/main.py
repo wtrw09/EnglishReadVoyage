@@ -112,6 +112,12 @@ if BOOKS_DIR.exists():
 else:
     logger.warning(f"Books directory not found at {BOOKS_DIR}")
 
+# 挂载单词发音缓存音频目录（放在 data 目录下）
+WORD_AUDIO_DIR = Path(settings.BASE_DIR) / "data" / "word_audio"
+WORD_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/audio/data/word_audio", StaticFiles(directory=str(WORD_AUDIO_DIR)), name="word_audio")
+logger.info(f"Word audio cache mounted: {WORD_AUDIO_DIR}")
+
 # 包含API路由器
 app.include_router(api_router, prefix=API_V1_PREFIX)
 

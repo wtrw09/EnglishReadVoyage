@@ -1,3 +1,22 @@
+/**
+ * BilingualModeDialog.vue - 双语朗读模式设置对话框
+ *
+ * 功能说明：
+ * - 提供预设朗读模式选择（英文→中文、英文×2→中文、仅英文等）
+ * - 支持自定义朗读模式，用户可自由组合朗读段并设置重复次数
+ * - 实时预览当前选择的朗读模式效果
+ * - 检测并提示书籍中缺失中文音频的句子数量
+ *
+ * Props：
+ * - show: 控制对话框显示
+ * - currentPresetId: 当前选中的预设ID
+ * - currentSegments: 当前自定义朗读段配置
+ * - missingZhCount: 缺失中文音频的句子数量
+ *
+ * Events：
+ * - update:show: 关闭对话框时触发
+ * - confirm: 确认选择时触发，参数为 (presetId, segments)
+ */
 <template>
   <van-popup
     v-model:show="visible"

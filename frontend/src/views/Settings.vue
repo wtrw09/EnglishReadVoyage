@@ -1,3 +1,12 @@
+/**
+ * Settings.vue - 高级设置页面
+ *
+ * 功能：
+ * - 标签页切换（词典、音标、工具、朗读）
+ * - 未保存更改提示
+ * - 统一保存功能
+ * - 管理员/普通用户不同视图
+ */
 <template>
   <div class="settings-page">
     <!-- 顶部导航栏 -->
@@ -31,6 +40,7 @@
       offset-top="46"
       line-width="40px"
       :before-change="beforeTabChange"
+      :lazy-render="false"
     >
       <van-tab
         v-for="(tab, index) in settingTabs"
@@ -158,16 +168,41 @@ const handleBack = () => {
 
 // 保存当前标签页设置
 const handleSave = async () => {
-  const currentIndex = settingTabs.value.findIndex(t => t.key === activeTab.value)
-  if (contentRefs.value[currentIndex]?.save) {
+  // 通过标签页 key 查找对应的组件，而不是依赖数组索引
+  const currentTab = settingTabs.value.find(t => t.key === activeTab.value)
+  if (!currentTab) {
+    console.error('未找到当前标签页，activeTab:', activeTab.value)
+    showNotify({ type: 'warning', message: '保存失败，请重试' })
+    return
+  }
+
+  // 通过组件名称查找对应的组件实例
+  const targetComponent = contentRefs.value.find((ref: any) => {
+    if (!ref) return false
+    // 检查组件的 $options.name（defineOptions 设置的 name）
+    return ref.$options?.name === currentTab.component?.name
+  })
+
+  if (!targetComponent) {
+    console.error('未找到当前标签页组件，activeTab:', activeTab.value, 'contentRefs:', contentRefs.value)
+    showNotify({ type: 'warning', message: '保存失败，请重试' })
+    return
+  }
+
+  console.log('保存标签页:', currentTab.key, '组件名:', targetComponent.$options?.name)
+
+  if (targetComponent?.save) {
     try {
-      await contentRefs.value[currentIndex].save()
+      await targetComponent.save()
       hasUnsavedChanges.value = false
       saveMessage.value = '保存成功'
       showSaveToast.value = true
     } catch (error) {
       // 错误已在子组件中处理
+      console.error('保存失败:', error)
     }
+  } else {
+    console.warn('当前标签页组件没有 save 方法:', targetComponent, 'currentTab:', currentTab)
   }
 }
 

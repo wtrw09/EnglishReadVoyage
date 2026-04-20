@@ -188,6 +188,16 @@ async def init_db():
                 print("Initialized sort_order values for existing categories")
             else:
                 print("Migration check: sort_order column already exists")
+
+            # 迁移：添加 user_settings 表的 dictionary_page_source 字段
+            result = await conn.execute(text("PRAGMA table_info(user_settings)"))
+            user_settings_columns = [row[1] for row in result.fetchall()]
+            if 'dictionary_page_source' not in user_settings_columns:
+                print("Adding dictionary_page_source column to user_settings table...")
+                await conn.execute(text("ALTER TABLE user_settings ADD COLUMN dictionary_page_source VARCHAR DEFAULT 'local'"))
+                print("Added column: dictionary_page_source")
+            else:
+                print("Migration check: dictionary_page_source column already exists")
         except Exception as e:
             print(f"Migration warning (may be expected for new databases): {e}")
     

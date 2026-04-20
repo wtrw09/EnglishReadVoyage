@@ -173,7 +173,8 @@ async def get_dictionary_settings(
     """
     settings = await get_or_create_user_settings(db, current_user.id)
     return UserDictionarySettings(
-        dictionary_source=settings.dictionary_source
+        dictionary_source=settings.dictionary_source,
+        dictionary_page_source=getattr(settings, 'dictionary_page_source', 'local') or 'local'
     )
 
 
@@ -187,27 +188,66 @@ async def update_dictionary_settings(
     更新用户的词典设置。
 
     Args:
-        request: 包含 dictionary_source 的请求体，值为 'local' 或 'api'
+        request: 包含 dictionary_source 和/或 dictionary_page_source 的请求体
 
     Returns:
         更新后的词典设置
 
     Raises:
-        HTTPException: 如果 dictionary_source 值无效
+        HTTPException: 如果词典来源值无效
     """
-    if request.dictionary_source not in ["local", "api"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="词典来源必须是 'local' 或 'api'"
-        )
+    # 获取请求数据，排除 None 值，只处理实际提供的字段
+    request_data = request.model_dump(exclude_none=True)
+        
+    # 验证 dictionary_source
+    if 'dictionary_source' in request_data:
+        valid_sources = ["local", "api", "merriam-webster"]
+        if request.dictionary_source not in valid_sources:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"词典来源必须是 {', '.join(valid_sources)}"
+            )
     
+    # 验证 dictionary_page_source
+    if 'dictionary_page_source' in request_data:
+        valid_page_sources = ["local", "api", "merriam-webster"]
+        if request.dictionary_page_source not in valid_page_sources:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"词典页面词典必须是 {', '.join(valid_page_sources)}"
+            )
+        
     settings = await get_or_create_user_settings(db, current_user.id)
-    settings.dictionary_source = request.dictionary_source
+        
+    # 只更新请求中实际提供的字段
+    if 'dictionary_source' in request_data:
+        settings.dictionary_source = request.dictionary_source
+    if 'dictionary_page_source' in request_data:
+        settings.dictionary_page_source = request.dictionary_page_source
+    
     await db.commit()
     await db.refresh(settings)
     
     return UserDictionarySettings(
-        dictionary_source=settings.dictionary_source
+        dictionary_source=settings.dictionary_source,
+        dictionary_page_source=getattr(settings, 'dictionary_page_source', 'local') or 'local'
+    )
+
+
+@router.get("/phonetic", response_model=UserPhoneticSettings)
+async def get_phonetic_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取用户的音标设置。
+    
+    Returns:
+        用户的音标设置
+    """
+    settings = await get_or_create_user_settings(db, current_user.id)
+    return UserPhoneticSettings(
+        accent=settings.phonetic_accent or "uk"
     )
 
 

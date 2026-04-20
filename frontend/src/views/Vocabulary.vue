@@ -1,3 +1,13 @@
+/**
+ * Vocabulary.vue - 生词本页面
+ *
+ * 功能：
+ * - 显示用户收藏的单词
+ * - 查词显示详细信息（释义、音标、例句）
+ * - 单词复习模式
+ * - 导出生词到文件
+ * - 删除生词（支持批量删除）
+ */
 <template>
   <div class="vocabulary-page">
     <!-- 顶部导航栏 -->
@@ -498,8 +508,12 @@ const speakWord = async () => {
 
   isSpeaking.value = true
   try {
+    // 获取用户音标偏好
+    const phoneticRes = await api.get<{ accent: string }>('/settings/phonetic')
+    const accent = phoneticRes.data.accent || 'uk'
+    
     // 调用发音API获取音频URL
-    const res = await api.get<{ audio_url: string | null }>(`/pronunciation/${encodeURIComponent(selectedWord.value.word)}`)
+    const res = await api.get<{ audio_url: string | null }>(`/pronunciation/${encodeURIComponent(selectedWord.value.word)}?accent=${accent}`)
     
     if (res.data.audio_url) {
       currentWordAudio = new Audio(res.data.audio_url)
@@ -942,6 +956,7 @@ watch(showDetailDialog, (newVal) => {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  line-clamp: 2;
 }
 
 .word-date {

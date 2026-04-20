@@ -1,3 +1,10 @@
+/**
+ * PhoneticSettingsContent.vue - 音标设置内容
+ *
+ * 功能：音标显示偏好
+ * - 选择英式/美式音标
+ * - 音标对比示例展示
+ */
 <template>
   <div class="phonetic-settings-content">
     <van-cell-group inset title="音标设置">
@@ -82,16 +89,22 @@
 import { ref, onMounted, watch } from 'vue'
 import { showNotify } from 'vant'
 import { api } from '@/store/auth'
-import { useDictionarySettings } from '../../Home/composables/useDictionarySettings'
 
-const { dictionarySettingsLoaded } = useDictionarySettings()
+// 组件名称，用于在 Settings.vue 中识别组件
+defineOptions({
+  name: 'PhoneticSettingsContent'
+})
 
 const phoneticAccent = ref<'uk' | 'us'>('uk')
 const emit = defineEmits(['change'])
 
-// 监听值变化，通知父组件（只在加载完成后）
-watch(phoneticAccent, () => {
-  if (dictionarySettingsLoaded.value) {
+// 组件本地的初始化标志，区分加载数据和用户修改
+const componentInitialized = ref(false)
+
+// 监听值变化，通知父组件
+watch(phoneticAccent, (newVal, oldVal) => {
+  // 只有在组件初始化完成后，且值确实发生变化才触发 change
+  if (componentInitialized.value && newVal !== oldVal) {
     emit('change')
   }
 })
@@ -99,14 +112,18 @@ watch(phoneticAccent, () => {
 // 页面加载时获取设置
 onMounted(async () => {
   await loadCurrentSettings()
+  // 数据加载完成后，延迟启用 change 检测
+  setTimeout(() => {
+    componentInitialized.value = true
+  }, 50)
 })
 
 // 加载当前设置
 const loadCurrentSettings = async () => {
   try {
-    const res = await api.get('/settings/')
-    if (res.data?.phonetic?.accent) {
-      phoneticAccent.value = res.data.phonetic.accent
+    const res = await api.get('/settings/phonetic')
+    if (res.data?.accent) {
+      phoneticAccent.value = res.data.accent
     }
   } catch (error) {
     console.error('加载音标设置失败:', error)

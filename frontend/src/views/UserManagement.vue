@@ -1,3 +1,12 @@
+/**
+ * UserManagement.vue - 用户管理页面
+ *
+ * 功能：
+ * - 管理员：创建、编辑、删除用户
+ * - 管理员：为用户分配书籍、管理分组
+ * - 普通用户：查看个人信息
+ * - 用户激活状态管理
+ */
 <template>
   <div class="user-management">
     <van-nav-bar

@@ -80,7 +80,6 @@ def is_cancelled(book_id: str) -> bool:
         if result:
             logger.info(f"[取消] is_cancelled({book_id}) = True, 事件已设置")
         return result
-    logger.debug(f"[取消] is_cancelled({book_id}) = False, book_id 不在 active_tasks 中")
     return False
 
 
@@ -413,7 +412,6 @@ class BookService:
         # 首先尝试数据库记录的路径
         if db_folder.exists():
             actual_folder = db_folder
-            logger.debug(f"使用数据库记录的路径: {db_folder}")
         else:
             # 数据库路径不存在，尝试在 Books 目录下查找匹配的文件夹
             settings = get_settings()
@@ -422,7 +420,6 @@ class BookService:
             candidate = books_dir / db_folder_name
             if candidate.exists():
                 actual_folder = candidate
-                logger.debug(f"数据库路径不存在，找到同名文件夹: {candidate}")
             else:
                 # 策略2：查找包含相同MD文件的文件夹
                 for folder in books_dir.iterdir():
@@ -430,7 +427,6 @@ class BookService:
                         md_file = folder / old_md_filename
                         if md_file.exists():
                             actual_folder = folder
-                            logger.debug(f"通过MD文件找到实际文件夹: {folder}")
                             break
         
         if not actual_folder:
@@ -1237,10 +1233,8 @@ class BookService:
 
         # 6. 保存到数据库
         # 如果是覆盖导入且提供了existing_book_id，使用它作为book_id
-        logger.debug(f"overwrite={overwrite}, existing_book_id={existing_book_id}")
         if overwrite and existing_book_id:
             book_id = existing_book_id
-            logger.debug(f"Using existing_book_id: {book_id}")
         else:
             book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
 
@@ -1287,7 +1281,6 @@ class BookService:
         precompile_service.precompile_book(book_id, str(md_file_path))
 
         await progress_callback(100, "导入完成")
-        logger.debug(f"Returning book_id: {book_id}")
         return BookImportResponse(
             success=True,
             message=f"书籍导入成功: {safe_name}",
@@ -2535,10 +2528,8 @@ class BookService:
         2. 删除现有音频文件夹内容
         3. 重新提取句子并生成音频
         """
-        logger.info(f"[DEBUG] regenerate_audio 开始: book_id={book_id}, user_id={user_id}, force={force}")
         
         async def update_progress(percentage: int, message: str):
-            logger.debug(f"[进度] {percentage}% - {message}")
             if progress_callback:
                 await progress_callback(percentage, message)
             else:
@@ -2550,14 +2541,6 @@ class BookService:
         result = await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))
         user_settings = result.scalars().first()
         settings = get_settings()
-
-        # 调试日志
-        logger.debug(f"user_settings = {user_settings}")
-        if user_settings:
-            logger.debug(f"tts_service_name = {user_settings.tts_service_name}")
-            logger.debug(f"minimax_api_key = {'已设置' if user_settings.minimax_api_key else '未设置'}")
-            logger.debug(f"minimax_model = {user_settings.minimax_model}")
-            logger.debug(f"minimax_voice = {user_settings.minimax_voice}")
 
         # 确定使用哪个TTS服务
         service_name = user_settings.tts_service_name if user_settings else "kokoro-tts"
@@ -2767,9 +2750,9 @@ class BookService:
                             generated_count[0] += 1
                             current = generated_count[0]
                             progress = 30 + int(current / total_count * 65)
-                            logger.info(f"[DEBUG] 音频生成成功，准备更新进度: {progress}% ({current}/{total_count})")
+                            
                             await update_progress(progress, f"正在生成语音 ({current}/{total_count})...")
-                            logger.info(f"[DEBUG] 进度更新完成: {progress}%")
+                            
                             # 让出事件循环，确保SSE消息能及时发送
                             await asyncio.sleep(0)
                             return {**sent_info, 'audio_file': target_filename, 'duration': audio_duration}
@@ -2857,7 +2840,6 @@ class BookService:
             await update_progress(95, f"已生成 {len(successful_results)} 个语音文件")
 
         await update_progress(100, "音频生成完成")
-        logger.info(f"[DEBUG] regenerate_audio 成功完成: book_id={book_id}, title={book.title}")
         return BookImportResponse(
             success=True,
             message=f"音频重新生成成功",
@@ -2879,7 +2861,6 @@ class BookService:
         1. regenerate_audio - 生成英文语音 (进度 0-50%)
         2. generate_chinese_audio - 生成中文语音 (进度 50-100%)
         """
-        logger.info(f"[DEBUG] regenerate_audio_bilingual 开始: book_id={book_id}, user_id={user_id}, force={force}")
         
         # 包装进度回调，分段处理英文和中文
         async def english_progress(percentage: int, message: str):
@@ -2894,7 +2875,6 @@ class BookService:
 
         try:
             # 1. 先生成英文语音
-            logger.info(f"[DEBUG] 开始生成英文语音")
             if progress_callback:
                 await progress_callback(0, "正在生成英文语音...")
             en_result = await self.regenerate_audio(
@@ -2904,15 +2884,11 @@ class BookService:
                 progress_callback=english_progress,
                 force=force
             )
-            logger.info(f"[DEBUG] 英文语音生成完成: success={en_result.success}, message={en_result.message}")
-
             # 如果英文失败，返回失败
             if not en_result.success:
-                logger.warning(f"[DEBUG] 英文语音生成失败: {en_result.message}")
                 return TranslationGenerateResult(success=False, message=f"英文语音生成失败: {en_result.message}")
 
             # 2. 再生成中文语音
-            logger.info(f"[DEBUG] 开始生成中文语音")
             if progress_callback:
                 await progress_callback(50, "正在生成中文语音...")
             zh_result = await self.generate_chinese_audio(
@@ -2922,7 +2898,6 @@ class BookService:
                 progress_callback=chinese_progress,
                 force=force
             )
-            logger.info(f"[DEBUG] 中文语音生成完成: success={zh_result.success}, message={zh_result.message}")
 
             # 返回最终结果
             if zh_result.success:
@@ -2938,9 +2913,6 @@ class BookService:
                 return TranslationGenerateResult(success=False, message=f"中文语音生成失败: {zh_result.message}")
                 
         except Exception as e:
-            logger.error(f"[DEBUG] regenerate_audio_bilingual 异常: {type(e).__name__}: {str(e)}")
-            import traceback
-            logger.error(f"[DEBUG] regenerate_audio_bilingual 堆栈: {traceback.format_exc()}")
             return TranslationGenerateResult(success=False, message=f"发生错误: {type(e).__name__}: {str(e)}")
 
     async def sync_books_from_directory(self, db: AsyncSession) -> dict:

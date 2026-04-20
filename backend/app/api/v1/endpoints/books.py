@@ -87,36 +87,24 @@ def create_sse_stream_generator(
         异步生成器
     """
     async def event_generator():
-        logger.debug(f"[SSE] event_generator 启动, task_id={id(task)}")
         while True:
             try:
-                logger.debug(f"[SSE] 等待队列数据... (task_done={task.done()})")
                 data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                logger.debug(f"[SSE] 收到数据: percentage={data.get('percentage')}, message={data.get('message')}")
                 # 构建额外的参数（排除 percentage 和 message）
                 extra = {k: v for k, v in data.items() if k not in ("percentage", "message")}
                 sse_msg = format_sse_message(data.get("percentage", 0), data.get("message", ""), **extra)
-                logger.debug(f"[SSE] 发送消息: {sse_msg[:100]}...")
                 yield sse_msg
             except asyncio.TimeoutError:
-                logger.debug(f"[SSE] 队列等待超时, task_done={task.done()}")
                 if task.done():
                     try:
                         result = task.result()
-                        logger.debug(f"[SSE] 任务完成, result类型={type(result)}, result={result}")
                         if hasattr(result, "success") and hasattr(result, "message"):
-                            logger.debug(f"[SSE] result有success和message属性: success={result.success}, message={result.message}")
                             yield format_sse_message(100, result.message, result.success)
                         elif hasattr(result, "success"):
-                            logger.debug(f"[SSE] result只有success属性: success={result.success}")
                             yield format_sse_message(100, final_message, result.success)
                         else:
-                            logger.debug(f"[SSE] result没有success属性")
                             yield format_sse_message(100, final_message, True)
                     except Exception as e:
-                        logger.error(f"SSE任务异常: {e}")
-                        import traceback
-                        logger.error(f"SSE任务堆栈: {traceback.format_exc()}")
                         yield format_sse_message(0, f"{error_message}: {str(e)}", False)
                     break
 
@@ -570,25 +558,18 @@ async def regenerate_book_audio_bilingual(
     2. 翻译每个句子为中文
     3. 生成英文和中文语音
     """
-    logger.info(f"[DEBUG] regenerate-audio-bilingual 请求: book_id={book_id}, force={force}, user_id={current_user.id}")
-    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
-        logger.warning(f"[DEBUG] 书籍未找到: {book_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="书籍未找到"
         )
     
-    logger.info(f"[DEBUG] 找到书籍: {book.title}, file_path={book.file_path}")
-    
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
         progress_callback = create_progress_callback(queue)
-        
-        logger.info(f"[DEBUG] 开始执行 regenerate_audio_bilingual")
         
         try:
             # 启动后台任务
@@ -609,9 +590,6 @@ async def regenerate_book_audio_bilingual(
                 yield sse_msg
                 
         except Exception as e:
-            logger.error(f"[DEBUG] event_generator 异常: {type(e).__name__}: {str(e)}")
-            import traceback
-            logger.error(f"[DEBUG] event_generator 堆栈: {traceback.format_exc()}")
             yield format_sse_message(0, f"发生错误: {type(e).__name__}: {str(e)}", False)
 
     return StreamingResponse(
@@ -638,26 +616,18 @@ async def generate_book_translation(
     2. 翻译每个句子为中文
     3. 保存到 sentences.json（不生成音频）
     """
-    logger.info(f"[DEBUG] generate-translation 请求: book_id={book_id}, force={force}, user_id={current_user.id}")
-    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
-        logger.warning(f"[DEBUG] 书籍未找到: {book_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="书籍未找到"
         )
     
-    logger.info(f"[DEBUG] 找到书籍: {book.title}")
-
     # 使用生成器推送SSE进度
     async def event_generator():
         queue = asyncio.Queue()
         progress_callback = create_progress_callback(queue)
-
-        logger.info(f"[DEBUG] 开始执行 generate_translation")
-        
         try:
             # 启动后台任务
             task = asyncio.create_task(
@@ -677,9 +647,6 @@ async def generate_book_translation(
                 yield sse_msg
                 
         except Exception as e:
-            logger.error(f"[DEBUG] event_generator 异常: {type(e).__name__}: {str(e)}")
-            import traceback
-            logger.error(f"[DEBUG] event_generator 堆栈: {traceback.format_exc()}")
             yield format_sse_message(0, f"发生错误: {type(e).__name__}: {str(e)}", False)
 
     return StreamingResponse(
@@ -775,8 +742,6 @@ async def generate_book_chinese_audio(
     4. 更新 sentences.json
     force参数：True时强制重新生成所有音频，False时跳过已有音频
     """
-    logger.info(f"[DEBUG] generate_chinese_audio 请求: book_id={book_id}, force={force}")
-    
     # 获取书籍信息
     book = await book_service.repository.get(db, book_id)
     if not book:
@@ -876,15 +841,11 @@ async def get_book_content_from_file(
     # 直接读取文件内容
     import os
     file_path = book.file_path
-    logger.debug(f"Reading content from file: {file_path}")
-    logger.debug(f"File exists: {os.path.exists(file_path)}")
 
     # 如果文件存在，直接读取
     if os.path.exists(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        logger.debug(f"Content length: {len(content)}")
-        logger.debug(f"First 200 chars: {content[:200]}")
         return {"content": content}
 
     # 如果文件不存在，返回空
@@ -1137,20 +1098,10 @@ async def upload_book_image(
     book_folder = book_path.parent
     assets_folder = book_folder / "assets"
 
-    # 调试：打印路径信息
-    logger.debug(f"[UPLOAD] 书籍ID: {PROJECT_ROOT}")
-    logger.debug(f"[UPLOAD] PROJECT_ROOT: {PROJECT_ROOT}")
-    logger.debug(f"[UPLOAD] book.file_path: {book.file_path}")
-    logger.debug(f"[UPLOAD] book_path: {book_path}")
-    logger.debug(f"[UPLOAD] book_folder: {book_folder}")
-    logger.debug(f"[UPLOAD] assets_folder: {assets_folder}")
-    logger.debug(f"[UPLOAD] assets_folder exists: {assets_folder.exists()}")
-
+    
     # 确保 assets 目录存在
     assets_folder.mkdir(exist_ok=True)
-    logger.debug(f"[UPLOAD] After mkdir, exists: {assets_folder.exists()}")
-    logger.debug(f"[UPLOAD] CWD: {os.getcwd()}")
-
+ 
     # 生成简单的 image_X.ext 文件名（避免清理时被删除）
     existing_images = list(assets_folder.glob(f'image_*'))
     max_num = 0
@@ -1162,11 +1113,9 @@ async def upload_book_image(
             pass
     safe_filename = f"image_{max_num + 1}{file_ext}"
     target_path = assets_folder / safe_filename
-    logger.debug(f"[UPLOAD] target_path: {target_path}")
-
+  
     # 读取并保存文件
     content = await file.read()
-    logger.debug(f"[UPLOAD] file content length: {len(content)}")
     
     # 压缩并转换为WebP格式
     from app.utils.image_utils import compress_to_webp
@@ -1199,9 +1148,6 @@ async def upload_book_image(
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        
-        logger.debug(f"[UPLOAD] After write, file exists: {temp_path.exists()}")
-        logger.debug(f"[UPLOAD] File size on disk: {os.path.getsize(temp_path) if temp_path.exists() else 'N/A'}")
         
         file_size = len(content)
         relative_path = f"./assets/{safe_filename}"
@@ -1959,23 +1905,16 @@ async def get_sentence_preview(
     try:
         # 读取书籍内容进行断句
         book_path = Path(book.file_path)
-        logger.debug(f"[DEBUG] sentence-preview: book_path = {book_path}, exists = {book_path.exists()}")
+        
         with open(book_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        logger.debug(f"[DEBUG] sentence-preview: content length = {len(content)}")
-
         # 解析句子
         sentences = book_service.get_sentence_preview(content)
-        logger.debug(f"[DEBUG] sentence-preview: sentences count = {len(sentences)}")
-
         return SentencePreviewResponse(
             total_count=len(sentences),
             sentences=sentences
         )
     except Exception as e:
-        import traceback
-        logger.error(f"[ERROR] sentence-preview failed: {e}")
-        logger.error(f"[ERROR] traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取断句预览失败: {str(e)}"
@@ -1987,7 +1926,7 @@ async def get_book_sentences(
     book_id: str,
     page: int = Query(0, ge=0, description="页码（从0开始）"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    _current_user: User = Depends(get_current_user)
 ):
     """
     获取书籍指定页的句子列表

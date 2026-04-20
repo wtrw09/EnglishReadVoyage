@@ -46,6 +46,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/dictionary',
+    name: 'Dictionary',
+    component: () => import('@/views/Dictionary.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/admin/user-books/:userId',
     name: 'UserBookAssignment',
     component: () => import('@/components/UserBookAssignment.vue'),

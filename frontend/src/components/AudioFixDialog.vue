@@ -1,3 +1,18 @@
+/**
+ * AudioFixDialog.vue - 音频修复结果对话框
+ *
+ * 功能：显示语音配置检查结果，自动修复成功的项目（绿色）和需要手动处理的问题（红色）
+ *
+ * Props：
+ * - show: 控制显示
+ * - fixedList: 自动修复成功的列表
+ * - errorList: 需要手动处理的错误列表
+ * - bookId: 书籍ID
+ *
+ * Events：
+ * - update:show: 关闭对话框
+ * - edit-book: 点击书籍标题编辑
+ */
 <template>
   <van-dialog
     v-model:show="visible"
@@ -110,8 +125,6 @@ watch(() => props.fixedList, (val) => {
 
 watch(() => props.errorList, (val) => {
   audioErrorList.value = val
-  // 调试：打印 errorList 的详细信息
-  console.log('【AudioFixDialog】audioErrorList:', JSON.stringify(val, null, 2))
 }, { immediate: true })
 
 // 点击书籍标题，触发编辑事件
