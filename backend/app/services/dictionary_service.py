@@ -206,7 +206,7 @@ class DictionaryService:
             phrases.sort(key=lambda x: (x["_sort_score"], x["_len"]))
 
             # 返回结果，去掉排序辅助字段
-            return [{"phrase": p["phrase"], "translation": p["translation"]} for p in phrases[:5]]
+            return [{"phrase": p["phrase"], "translation": p["translation"]} for p in phrases]
 
         except Exception as e:
             print(f"查询相关词组失败: {e}")
@@ -409,7 +409,8 @@ class DictionaryService:
                     phonetic=main_phonetic,
                     phonetics=phonetics,
                     meanings=meanings,
-                    source="dictionaryapi.dev"
+                    source="dictionaryapi.dev",
+                    origin=entry.get("origin")
                 )
                 
             except Exception as e:
@@ -419,14 +420,16 @@ class DictionaryService:
     async def lookup(
         self,
         word: str,
-        source: str = "api"
+        source: str = "api",
+        merriam_webster_keys: tuple = None
     ) -> DictionaryResponse:
         """
         查询单词，根据source选择查询方式。
 
         Args:
             word: 要查询的英文单词
-            source: 词典来源，'local'、'api' 或 'baidu'
+            source: 词典来源，'local'、'api'、'baidu' 或 'merriam-webster'
+            merriam_webster_keys: 韦氏词典API keys tuple(learners_key, thesaurus_key)
 
         Returns:
             单词的详细信息
@@ -436,7 +439,35 @@ class DictionaryService:
         """
         word = word.lower().strip()
 
-        if source == "local":
+        if source == "merriam-webster":
+            # 使用韦氏词典
+            print(f"[DEBUG DS] 韦氏词典分支, keys: {merriam_webster_keys}")
+            if not merriam_webster_keys or not merriam_webster_keys[0]:
+                print(f"[DEBUG DS] 韦氏词典 API Key 未配置")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="韦氏词典API未配置，请联系管理员"
+                )
+
+            from app.services.merriam_webster_service import MerriamWebsterService
+            mw_service = MerriamWebsterService(
+                learners_key=merriam_webster_keys[0],
+                thesaurus_key=merriam_webster_keys[1]
+            )
+            print(f"[DEBUG DS] 调用 mw_service.lookup({word})")
+            result = await mw_service.lookup(word)
+            print(f"[DEBUG DS] mw_service.lookup 返回: {result}")
+            if result:
+                print(f"[DEBUG DS] 韦氏词典查询成功, word={result.word}, meanings={len(result.meanings) if result.meanings else 0}")
+                return result
+
+            print(f"[DEBUG DS] 韦氏词典查询返回 None")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"未找到单词 '{word}' 的释义"
+            )
+
+        elif source == "local":
             # 优先使用本地ECDICT
             result = await self.query_ecdict(word)
             if result:

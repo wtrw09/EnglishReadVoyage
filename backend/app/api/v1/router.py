@@ -1,7 +1,7 @@
 """API v1路由。"""
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import books, tts, auth, categories, dictionary, settings, vocabulary, audiobook, translation, pronunciation, admin_user_books
+from app.api.v1.endpoints import books, tts, auth, categories, dictionary, settings, vocabulary, audiobook, translation, pronunciation, admin_user_books, merriam_webster
 
 
 api_router = APIRouter()
@@ -18,3 +18,5 @@ api_router.include_router(audiobook.router, prefix="/audiobook", tags=["audioboo
 api_router.include_router(translation.router, prefix="/translation", tags=["translation"])
 api_router.include_router(pronunciation.router, prefix="/pronunciation", tags=["pronunciation"])
 api_router.include_router(admin_user_books.router, prefix="/admin", tags=["admin"])
+api_router.include_router(merriam_webster.router, prefix="/merriam-webster", tags=["merriam-webster"])
+

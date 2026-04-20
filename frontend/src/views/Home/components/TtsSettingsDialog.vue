@@ -1,3 +1,11 @@
+/**
+ * TtsSettingsDialog.vue - TTS朗读设置对话框
+ *
+ * 功能：快速朗读设置
+ * - 选择 TTS 服务（Kokoro、Azure、Edge 等）
+ * - 选择语音音色
+ * - 测试朗读功能
+ */
 <template>
   <!-- 朗读设置弹窗 -->
   <van-dialog

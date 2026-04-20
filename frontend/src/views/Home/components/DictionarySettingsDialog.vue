@@ -1,3 +1,10 @@
+/**
+ * DictionarySettingsDialog.vue - 词典设置对话框
+ *
+ * 功能：快速词典设置
+ * - 选择词典来源（在线API / 本地ECDICT）
+ * - 简化版设置面板
+ */
 <template>
   <!-- 词典设置弹窗 -->
   <van-dialog

@@ -1,3 +1,12 @@
+/**
+ * AdminToolsContent.vue - 管理员工具内容
+ *
+ * 功能：管理员专用工具
+ * - 修复书籍数据（同步数据库）
+ * - 压缩书籍图片
+ * - 预编译缓存
+ * - 查看 Docker 日志
+ */
 <template>
   <div class="admin-tools-content">
     <!-- 功能按钮列表 -->
@@ -116,6 +125,11 @@ import { showConfirmDialog, showNotify, showLoadingToast, closeToast } from 'van
 import { useAuthStore, api } from '@/store/auth'
 import AudioFixDialog from '@/components/AudioFixDialog.vue'
 import BookEditDialog from '@/components/BookEditDialog.vue'
+
+// 组件名称，用于在 Settings.vue 中识别组件
+defineOptions({
+  name: 'AdminToolsContent'
+})
 
 const authStore = useAuthStore()
 

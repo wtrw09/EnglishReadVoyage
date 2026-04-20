@@ -1,3 +1,14 @@
+/**
+ * Home.vue - 首页/书籍列表页面
+ *
+ * 功能：
+ * - 显示用户的书籍列表，支持按分组折叠
+ * - 搜索书籍
+ * - 导入书籍（管理员）
+ * - 跳转到阅读器、听书模式
+ * - 管理分组（创建、编辑、删除、排序）
+ * - 用户菜单（设置、退出登录等）
+ */
 <template>
   <div class="home">
     <!-- 顶部导航栏 -->
@@ -35,6 +46,28 @@
               </div>
             </template>
           </van-popover>
+          <!-- 拓展功能下拉菜单 -->
+          <van-popover
+            v-model:show="showExpandPopover"
+            placement="bottom-end"
+            :actions="expandActions"
+            close-on-click-outside
+            teleport="body"
+            @update:show="(show: boolean) => handlePopoverShow(show, 'expand')"
+            @select="onExpandSelect"
+          >
+            <template #reference>
+              <div class="nav-icon-btn">
+                <i class="fas fa-th-large"></i>
+              </div>
+            </template>
+            <template #action="{ action }">
+              <div class="settings-action-item">
+                <i :class="['fas', action.icon]"></i>
+                <span>{{ action.text }}</span>
+              </div>
+            </template>
+          </van-popover>
           <!-- 用户名下拉菜单 -->
           <van-popover
             v-model:show="showUserPopover"
@@ -49,28 +82,10 @@
               <span class="username-link">{{ authStore.user?.username || '用户' }}</span>
             </template>
           </van-popover>
-          <!-- 设置下拉菜单 -->
-          <van-popover
-            v-model:show="showSettingsPopover"
-            placement="bottom-end"
-            :actions="settingsActions"
-            close-on-click-outside
-            teleport="body"
-            @update:show="(show: boolean) => handlePopoverShow(show, 'settings')"
-            @select="onSettingsSelect"
-          >
-            <template #reference>
-              <div class="nav-icon-btn">
-                <i class="fas fa-gear"></i>
-              </div>
-            </template>
-            <template #action="{ action }">
-              <div class="settings-action-item">
-                <i :class="['fas', action.icon]"></i>
-                <span>{{ action.text }}</span>
-              </div>
-            </template>
-          </van-popover>
+          <!-- 设置按钮（直接跳转） -->
+          <div class="nav-icon-btn" @click="router.push('/settings')">
+            <i class="fas fa-gear"></i>
+          </div>
         </div>
       </template>
     </van-nav-bar>
@@ -442,8 +457,8 @@ const activeNames = ref<number>(0)
 
 // 导航栏状态
 const showBookPopover = ref(false)
-const showSettingsPopover = ref(false)
 const showUserPopover = ref(false)
+const showExpandPopover = ref(false)
 
 // 多选模式
 const isMultiSelect = ref(false)
@@ -507,12 +522,12 @@ const supplementLoading = ref(false)
 
 // ========== 计算属性 ==========
 
-// 设置菜单
-const settingsActions = computed<PopoverAction[]>(() => {
+// 拓展功能菜单
+const expandActions = computed<PopoverAction[]>(() => {
   const actions: PopoverAction[] = []
   actions.push({ text: '听书模式', icon: 'fa-music', key: 'audiobook' })
   actions.push({ text: '生词本', icon: 'fa-book', key: 'vocabulary' })
-  actions.push({ text: '高级设置', icon: 'fa-gear', key: 'settingsPage' })
+  actions.push({ text: '词典', icon: 'fa-search', key: 'dictionary' })
   return actions
 })
 
@@ -570,7 +585,7 @@ const handlePopoverShow = (show: boolean, current: string) => {
   if (show) {
     if (current !== 'book') showBookPopover.value = false
     if (current !== 'user') showUserPopover.value = false
-    if (current !== 'settings') showSettingsPopover.value = false
+    if (current !== 'expand') showExpandPopover.value = false
   }
 }
 
@@ -589,13 +604,14 @@ const onUserSelect = (action: PopoverAction) => {
   }
 }
 
-const onSettingsSelect = async (action: PopoverAction) => {
+// 拓展功能菜单
+const onExpandSelect = async (action: PopoverAction) => {
   if (action.key === 'audiobook') {
     router.push('/audiobook')
   } else if (action.key === 'vocabulary') {
     router.push('/vocabulary')
-  } else if (action.key === 'settingsPage') {
-    router.push('/settings')
+  } else if (action.key === 'dictionary') {
+    router.push('/dictionary')
   }
 }
 
@@ -1019,7 +1035,7 @@ const handleCloseNavMenus = (e: MouseEvent) => {
   if (!navActions && !inPopover) {
     showBookPopover.value = false
     showUserPopover.value = false
-    showSettingsPopover.value = false
+    showExpandPopover.value = false
   }
 }
 

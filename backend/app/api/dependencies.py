@@ -63,42 +63,32 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     
-    # 直接读取原始请求的 Authorization header
-    # 注意：这里只是为了调试，实际应该使用 Depends(oauth2_scheme)
-    logger.debug(f"[Auth] Token from oauth2_scheme: {_mask_token(token) if token else 'None'}")
-    
+   
     # 调试：打印所有请求头（脱敏）
     if request:
         auth_header = request.headers.get('authorization')
         masked_auth = f"{auth_header[:10]}...***" if auth_header and len(auth_header) > 10 else (auth_header or "None")
-        logger.debug(f"[Auth] Raw Authorization header: {masked_auth}")
-        logger.debug(f"[Auth] Request headers: {_mask_headers(dict(request.headers))}")
     
     if token is None:
-        logger.warning("[Auth] Token is None")
         raise credentials_exception
     
     payload = verify_token(token)
     if payload is None:
-        logger.warning("[Auth] Token verification failed")
+        
         raise credentials_exception
     
     user_id: int = payload.get("sub")
-    logger.info(f"[Auth] Token valid, user_id: {user_id}")
+
     
     if user_id is None:
-        logger.warning("[Auth] No user_id in token payload")
         raise credentials_exception
     
     # 从数据库获取用户
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalars().first()
     
-    if user is None:
-        logger.warning(f"[Auth] User not found in database: {user_id}")
+    if user is None: 
         raise credentials_exception
-    
-    logger.info(f"[Auth] User authenticated: {user.username}")
     return user
 
 

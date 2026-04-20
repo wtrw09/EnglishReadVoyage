@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
-        path = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data.db")
+        path = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data", "data.db")
         return f"sqlite+aiosqlite:///{path}"
 
     # Kokoro语音合成
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
         # 设置默认路径
         # BASE_DIR 是 /app，Books 目录在 /app/Books
         self.BOOKS_DIR = self.BOOKS_DIR or os.path.join(self.BASE_DIR, "Books")
-        self.DATABASE_PATH = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data.db")
+        self.DATABASE_PATH = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data", "data.db")
 
         # 处理 CORS_ORIGINS：从逗号分隔字符串转为列表
         if isinstance(self.CORS_ORIGINS, str):

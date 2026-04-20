@@ -1,3 +1,13 @@
+/**
+ * Playlist.vue - 播放列表组件
+ *
+ * 功能：管理播放队列中的书籍
+ * - 显示书籍封面和标题
+ * - 拖拽排序（长按拖动手柄）
+ * - 多种排序方式（默认、书名、添加时间）
+ * - 悬停显示播放按钮
+ * - 移除和清空操作
+ */
 <template>
   <div class="playlist-container">
     <div class="playlist-header">

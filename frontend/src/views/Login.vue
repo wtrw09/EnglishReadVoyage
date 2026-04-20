@@ -1,3 +1,11 @@
+/**
+ * Login.vue - 登录页面
+ *
+ * 功能：
+ * - 用户登录（用户名/密码）
+ * - 账户激活（通过邀请码）
+ * - 表单验证和错误提示
+ */
 <template>
   <div class="login-page">
     <van-nav-bar 

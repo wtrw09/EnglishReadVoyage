@@ -484,7 +484,6 @@ export const useTtsSettings = () => {
     minimaxUsageChecking.value = true
     try {
       const usage = await checkMinimaxUsage()
-      console.log('[DEBUG] MiniMax usage response:', JSON.stringify(usage, null, 2))
       if (usage && usage.model_remains) {
         const speechHdRemain = usage.model_remains.find((item: any) =>
           item.model_name && item.model_name.toLowerCase().includes('speech-hd')

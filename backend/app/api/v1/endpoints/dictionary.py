@@ -1,14 +1,15 @@
 """词典查询API端点。"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
-from app.models.database_models import User, UserSettings, TranslationAPI
-from app.schemas.dictionary import DictionaryResponse
+from app.models.database_models import User, UserSettings, TranslationAPI, DictionaryHistory
+from app.schemas.dictionary import DictionaryResponse, DictionaryHistoryResponse, DictionaryHistoryListResponse
 from app.services.dictionary_service import dictionary_service
 from app.services.translation_service import translation_service
+from app.services.merriam_webster_service import MerriamWebsterService
 
 
 router = APIRouter()
@@ -117,6 +118,7 @@ async def get_user_translation(
 async def lookup_word(
     word: str = Query(..., min_length=1, description="要查询的英文单词"),
     sentence: str = Query("", description="单词所在的句子"),
+    source: str = Query("", description="词典来源：'local' ECDICT，'api' FreeDictionaryAPI，'merriam-webster' 韦氏词典，为空则使用用户设置"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -126,6 +128,7 @@ async def lookup_word(
     根据用户的词典设置选择查询方式：
     - 本地ECDICT：使用本地词典数据库
     - FreeDictionaryAPI：使用在线API
+    - 韦氏词典：使用Merriam-Webster Learner's Dictionary + Thesaurus
 
     可选提供sentence参数获取句子翻译（需要配置百度翻译API）：
     - 翻译单词所在的句子为中文
@@ -135,9 +138,12 @@ async def lookup_word(
     - 词性分类的释义
     - 例句和同义词
     - 句子翻译（如果提供了sentence参数）
+    - 韦氏词典：额外提供同义词/反义词/习语
 
     Args:
         word: 要查询的英文单词
+        sentence: 单词所在的句子（可选）
+        source: 词典来源（可选，优先级高于用户设置）
 
     Returns:
         单词的详细信息
@@ -145,13 +151,20 @@ async def lookup_word(
     Raises:
         HTTPException: 如果单词未找到返回404，服务错误返回500
     """
-    # 获取用户的词典设置和音标偏好
-    source = await get_user_dictionary_source(db, current_user.id)
+    if source:
+        dict_source = source
+    else:
+        dict_source = await get_user_dictionary_source(db, current_user.id)
+      
+    # 获取用户的音标偏好
     accent = await get_user_phonetic_accent(db, current_user.id)
 
-    # 使用词典服务查询
-    result = await dictionary_service.lookup(word, source)
-
+    # 韦氏词典需要获取API keys
+    merriam_webster_keys = None
+    if dict_source == "merriam-webster":
+        merriam_webster_keys = await MerriamWebsterService.get_api_keys(db, current_user.id)
+    result = await dictionary_service.lookup(word, dict_source, merriam_webster_keys)
+    
     # 根据用户偏好选择主音标
     if result and result.phonetics:
         preferred_phonetic = None
@@ -201,3 +214,75 @@ async def get_dictionary_status():
         "ecdict_available": dictionary_service.ecdict_available,
         "ecdict_path": dictionary_service.ecdict_db_path
     }
+
+
+@router.get("/history", response_model=DictionaryHistoryListResponse)
+async def get_dictionary_history(
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取用户的词典查询历史。
+
+    返回最近的查询记录，最多100条。
+    """
+    result = await db.execute(
+        select(DictionaryHistory)
+        .where(DictionaryHistory.user_id == current_user.id)
+        .order_by(DictionaryHistory.created_at.desc())
+        .limit(limit)
+    )
+    history_list = result.scalars().all()
+
+    return DictionaryHistoryListResponse(
+        items=[DictionaryHistoryResponse.model_validate(h) for h in history_list],
+        total=len(history_list)
+    )
+
+
+@router.post("/history", response_model=DictionaryHistoryResponse)
+async def add_dictionary_history(
+    word: str = Query(..., min_length=1, description="查询的单词"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    添加词典查询历史记录。
+
+    如果单词已存在于历史中，则更新时间戳（删除旧记录，创建新记录）。
+    """
+    # 删除同一用户相同单词的旧记录
+    await db.execute(
+        delete(DictionaryHistory).where(
+            DictionaryHistory.user_id == current_user.id,
+            DictionaryHistory.word == word
+        )
+    )
+
+    # 创建新记录
+    history = DictionaryHistory(
+        user_id=current_user.id,
+        word=word
+    )
+    db.add(history)
+    await db.commit()
+    await db.refresh(history)
+
+    return history
+
+
+@router.delete("/history")
+async def clear_dictionary_history(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    清空用户的词典查询历史。
+    """
+    await db.execute(
+        delete(DictionaryHistory).where(DictionaryHistory.user_id == current_user.id)
+    )
+    await db.commit()
+
+    return {"success": True, "message": "历史记录已清空"}

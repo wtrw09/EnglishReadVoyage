@@ -7,16 +7,18 @@ import { showNotify, showToast, showConfirmDialog } from 'vant'
 import { api } from '@/store/auth'
 import type { TranslationApi } from '../types'
 
+// 全局响应式状态（模块级别，所有组件共享）
+const showDictionarySettingsDialog = ref(false)
+// 设置页面的词典来源（对应 database 的 dictionary_source 字段）
+const dictionarySource = ref('local')
+// 词典查询页面的词典来源（对应 database 的 dictionary_page_source 字段）
+// 这是独立的，与 dictionarySource 互不影响
+const dictionaryPageSource = ref('local')
+const ecdictAvailable = ref(false)
+const dictionarySettingsLoaded = ref(false)
+
 export const useDictionarySettings = () => {
   // ========== 词典设置弹窗 ==========
-
-  const showDictionarySettingsDialog = ref(false)
-
-  // 词典来源
-  const dictionarySource = ref('local')
-
-  // ECDICT是否可用
-  const ecdictAvailable = ref(false)
 
   // ========== 音标设置弹窗 ==========
 
@@ -31,9 +33,6 @@ export const useDictionarySettings = () => {
   const selectedTranslationApiId = ref<number | null>(null)
   const newBaiduAppId = ref('')
   const newBaiduAppKey = ref('')
-
-  // 设置是否已从数据库加载
-  const dictionarySettingsLoaded = ref(false)
 
   // ========== 方法 ==========
 
@@ -63,31 +62,104 @@ export const useDictionarySettings = () => {
 
   /**
    * 加载用户词典设置（轻量级）
+   * 同时加载 dictionary_source 和 dictionary_page_source
    */
   const loadDictionarySettings = async () => {
     try {
       const res = await api.get('/settings/dictionary')
+      // 设置页面的词典来源（dictionary_source）
       dictionarySource.value = res.data.dictionary_source || 'local'
+      // 词典查询页面的词典来源（dictionary_page_source）
+      dictionaryPageSource.value = res.data.dictionary_page_source || 'local'
     } catch (error) {
       console.error('loadDictionarySettings 失败:', error)
       // 使用默认值
       dictionarySource.value = 'local'
+      dictionaryPageSource.value = 'local'
     }
   }
 
   /**
-   * 保存词典设置
+   * 保存设置页面的词典设置（dictionary_source）
    */
   const saveDictionarySettings = async () => {
+    console.log('saveDictionarySettings 被调用，dictionarySource:', dictionarySource.value)
+
+    // 如果选择韦氏词典，需要检查是否已配置 API Key
+    if (dictionarySource.value === 'merriam-webster') {
+      try {
+        const res = await api.get('/merriam-webster/settings')
+        if (!res.data.configured) {
+          showNotify({
+            type: 'warning',
+            message: '韦氏词典需要管理员先配置 API Key',
+            duration: 2000
+          })
+          return
+        }
+      } catch (error: any) {
+        showNotify({
+          type: 'warning',
+          message: '韦氏词典需要管理员先配置 API Key',
+          duration: 2000
+        })
+        return
+      }
+    }
+
     try {
-      await api.put('/settings/dictionary', {
+      // 只保存 dictionary_source，不影响 dictionary_page_source
+      const payload: any = {
         dictionary_source: dictionarySource.value
-      })
+      }
+
+      const response = await api.put('/settings/dictionary', payload)
+      console.log('保存词典设置成功:', response.data)
       showNotify({ type: 'success', message: '词典设置已保存', duration: 1500 })
       showDictionarySettingsDialog.value = false
     } catch (error: any) {
       console.error('保存词典设置失败:', error)
       showNotify({ type: 'danger', message: error.response?.data?.detail || '保存失败' })
+    }
+  }
+
+  /**
+   * 保存词典查询页面的词典设置（dictionary_page_source）
+   */
+  const saveDictionaryPageSettings = async () => {
+    console.log('saveDictionaryPageSettings 被调用，dictionaryPageSource:', dictionaryPageSource.value)
+
+    // 如果选择韦氏词典，需要检查是否已配置 API Key
+    if (dictionaryPageSource.value === 'merriam-webster') {
+      try {
+        const res = await api.get('/merriam-webster/settings')
+        if (!res.data.configured) {
+          showNotify({
+            type: 'warning',
+            message: '韦氏词典需要管理员先配置 API Key',
+            duration: 2000
+          })
+          return
+        }
+      } catch (error: any) {
+        showNotify({
+          type: 'warning',
+          message: '韦氏词典需要管理员先配置 API Key',
+          duration: 2000
+        })
+        return
+      }
+    }
+
+    try {
+      const payload: any = {
+        dictionary_page_source: dictionaryPageSource.value
+      }
+
+      const response = await api.put('/settings/dictionary', payload)
+      console.log('保存词典页面设置成功:', response.data)
+    } catch (error: any) {
+      console.error('保存词典页面设置失败:', error)
     }
   }
 
@@ -215,13 +287,16 @@ export const useDictionarySettings = () => {
   }
 
   return {
-    // 词典设置
+    // 词典设置（设置页面用）
     showDictionarySettingsDialog,
     dictionarySource,
+    // 词典查询页面专用词典
+    dictionaryPageSource,
     ecdictAvailable,
     loadDictionaryStatus,
     loadDictionarySettings,
     saveDictionarySettings,
+    saveDictionaryPageSettings,
     openDictionarySettings,
 
     // 音标设置

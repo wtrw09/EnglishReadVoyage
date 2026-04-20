@@ -1,3 +1,14 @@
+/**
+ * UserBookAssignment.vue - 用户书籍分配管理
+ *
+ * 功能：管理员为用户分配书籍和管理分组
+ * - 查看用户的书籍列表和分组
+ * - 创建、编辑、删除分组
+ * - 拖拽排序分组
+ * - 单个或批量分配书籍到分组
+ * - 批量删除用户书籍
+ * - 长按/右键显示操作菜单
+ */
 <template>
   <div class="user-book-assignment">
     <van-nav-bar

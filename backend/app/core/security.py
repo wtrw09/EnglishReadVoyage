@@ -76,12 +76,10 @@ def verify_token(token: str) -> Optional[dict]:
         payload = jwt_decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         # 脱敏日志：只显示token前5字符
         masked_token = f"{token[:5]}...***" if len(token) > 5 else "***"
-        logger.info(f"[Token Verify] Success, token: {masked_token}")
         return payload
     except PyJWTError as e:
         # 脱敏日志
         masked_token = f"{token[:5]}...***" if len(token) > 5 else "***"
-        logger.warning(f"[Token Verify] Failed for token {masked_token}: {e}")
         return None
 
 

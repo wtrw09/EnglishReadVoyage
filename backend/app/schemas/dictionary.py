@@ -32,6 +32,7 @@ class UserTranslationSettings(BaseModel):
 class UserDictionarySettings(BaseModel):
     """用户词典设置"""
     dictionary_source: str = Field("local", description="词典来源：'local' 本地ECDICT，'api' FreeDictionaryAPI")
+    dictionary_page_source: str = Field("local", description="词典页面专用词典：'local' ECDICT，'api' FreeDictionaryAPI，'merriam-webster' 韦氏词典")
 
 
 class UserTtsSettings(BaseModel):
@@ -97,7 +98,8 @@ class UserSettingsResponse(BaseModel):
 
 class UpdateDictionarySettingsRequest(BaseModel):
     """更新词典设置请求"""
-    dictionary_source: str = Field(..., description="词典来源：'local' 或 'api'")
+    dictionary_source: Optional[str] = Field(None, description="词典来源：'local' 或 'api'")
+    dictionary_page_source: Optional[str] = Field(None, description="词典页面专用词典：'local'，'api' 或 'merriam-webster'")
 
 
 class UpdatePhoneticSettingsRequest(BaseModel):
@@ -148,12 +150,16 @@ class WordDefinition(BaseModel):
     definition: str = Field(..., description="英文定义")
     example: Optional[str] = Field(None, description="例句")
     synonyms: List[str] = Field(default_factory=list, description="同义词")
+    antonyms: List[str] = Field(default_factory=list, description="反义词")
 
 
 class WordMeaning(BaseModel):
     """单词释义模式（按词性分组）"""
     partOfSpeech: str = Field(..., description="词性（如 noun, verb）")
     definitions: List[WordDefinition] = Field(..., description="定义列表")
+    # 韦氏词典Thesaurus特有
+    synonyms: List[str] = Field(default_factory=list, description="同义词列表（Thesaurus来源）")
+    related_words: List[str] = Field(default_factory=list, description="相关词列表（Thesaurus来源）")
 
 
 class WordPhonetic(BaseModel):
@@ -179,8 +185,14 @@ class DictionaryResponse(BaseModel):
     baidu_translation: Optional[str] = Field(None, description="百度翻译中文结果")
     # 句子翻译结果
     sentence_translation: Optional[str] = Field(None, description="单词所在句子的中文翻译")
+    # 词源（仅 dictionaryapi.dev 有）
+    origin: Optional[str] = Field(None, description="词源")
     # 相关词组
     related_phrases: Optional[List[Dict[str, str]]] = Field(None, description="相关词组 [{phrase, translation}]")
+    # 韦氏词典Thesaurus特有
+    thesaurus_synonyms: List[str] = Field(default_factory=list, description="Thesaurus同义词列表")
+    thesaurus_antonyms: List[str] = Field(default_factory=list, description="Thesaurus反义词列表")
+    idioms: Optional[List[Dict[str, str]]] = Field(None, description="习语 [{phrase, definition}]")
     
     class Config:
         json_schema_extra = {
@@ -203,3 +215,32 @@ class DictionaryResponse(BaseModel):
                 "source": "dictionaryapi.dev"
             }
         }
+
+
+class DictionaryHistoryResponse(BaseModel):
+    """词典查询历史响应"""
+    id: int
+    word: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DictionaryHistoryListResponse(BaseModel):
+    """词典查询历史列表响应"""
+    items: List[DictionaryHistoryResponse]
+    total: int
+
+
+class MerriamWebsterSettings(BaseModel):
+    """韦氏词典API配置响应"""
+    configured: bool = Field(False, description="是否已配置API Key")
+    has_learners_key: bool = Field(False, description="是否有Learner's Dictionary Key")
+    has_thesaurus_key: bool = Field(False, description="是否有Thesaurus Key")
+
+
+class UpdateMerriamWebsterSettingsRequest(BaseModel):
+    """更新韦氏词典API配置请求"""
+    learners_key: str = Field(..., description="Learner's Dictionary API Key")
+    thesaurus_key: Optional[str] = Field(None, description="Collegiate Thesaurus API Key（可选）")

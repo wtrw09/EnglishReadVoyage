@@ -1,3 +1,11 @@
+/**
+ * BookList.vue - 书籍列表组件
+ *
+ * 功能：分组显示书籍列表
+ * - 可折叠分组（van-collapse）
+ * - 多选模式和全选支持
+ * - 分组右键菜单触发
+ */
 <template>
   <!-- 使用van-collapse实现可折叠分组 -->
   <van-collapse v-model="activeNames" accordion>
@@ -60,7 +68,7 @@
           @click="handleBookClick"
           @contextmenu="handleBookContextMenu"
           @checkbox-change="toggleBookSelect"
-          @cover-click="handleCoverClick"
+          @cover-click="(book) => handleCoverClick(book, group.id)"
           @swipe-open="handleSwipeOpen"
           @mark-read="handleMarkBookAsRead"
         />
@@ -254,8 +262,9 @@ const showGroupContextMenu = (event: MouseEvent, group: BookGroup) => {
   emit('group-contextmenu', event, group)
 }
 
-const handleCoverClick = (_book: Book) => {
-  // 封面点击处理
+// 封面点击也触发书籍打开
+const handleCoverClick = (book: Book, groupId: number) => {
+  emit('book-click', book.id, groupId)
 }
 
 const handleSwipeOpen = async (event: { position: 'left' | 'right' }, book: Book) => {

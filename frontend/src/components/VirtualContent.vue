@@ -1,3 +1,11 @@
+/**
+ * VirtualContent.vue - 虚拟内容渲染组件
+ *
+ * 功能：渲染 HTML 内容并提供交互支持
+ * - 图片懒加载（IntersectionObserver）
+ * - 事件代理（contextmenu、click、mousedown）
+ * - 内容更新监听
+ */
 <template>
   <div 
     ref="containerRef"

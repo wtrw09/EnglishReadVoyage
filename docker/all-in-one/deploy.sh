@@ -56,6 +56,7 @@ echo -e "${BLUE}[1/4] 创建目录结构...${NC}"
 
 mkdir -p "${DEPLOY_DIR}/backend/Books"
 mkdir -p "${DEPLOY_DIR}/backend/data"
+mkdir -p "${DEPLOY_DIR}/backend/data/word_audio"
 
 echo -e "${GREEN}✓ 目录创建完成${NC}"
 
@@ -67,6 +68,7 @@ echo -e "${BLUE}[2/4] 设置目录权限...${NC}"
 chmod 755 "${DEPLOY_DIR}/backend"
 chmod 755 "${DEPLOY_DIR}/backend/Books"
 chmod 755 "${DEPLOY_DIR}/backend/data"
+chmod 755 "${DEPLOY_DIR}/backend/data/word_audio"
 
 # 确保当前用户对挂载目录有完整读写权限
 # Docker 容器内通常以 root(uid=0) 运行，宿主机目录需对其可写
@@ -74,6 +76,7 @@ if [ "$EUID" -ne 0 ]; then
     # 非 root 用户：设置目录为组可写，并将当前用户加入 docker 组提示
     chmod 775 "${DEPLOY_DIR}/backend/Books"
     chmod 775 "${DEPLOY_DIR}/backend/data"
+    chmod 775 "${DEPLOY_DIR}/backend/data/word_audio"
     if ! groups "$USER" | grep -q docker; then
         echo -e "${YELLOW}⚠ 当前用户 '$USER' 不在 docker 组中${NC}"
         echo -e "  建议执行: ${YELLOW}sudo usermod -aG docker $USER${NC} 后重新登录"
@@ -85,40 +88,83 @@ echo -e "${GREEN}✓ 权限设置完成${NC}"
 # 复制数据库文件
 echo ""
 echo -e "${BLUE}[3/4] 复制数据库文件...${NC}"
+echo ""
 
-# 复制 data.db
+# 定义所需的数据库文件列表
+DB_DIR="${DEPLOY_DIR}/backend/data"
+REQUIRED_DBS=("data.db" "ecdict.db" "merriam_webster_cache.db")
+
+# 检查并处理主数据库 data.db
 if [ -f "${DEPLOY_DIR}/data.db" ]; then
-    if [ -f "${DEPLOY_DIR}/backend/data.db" ]; then
-        echo -e "${YELLOW}⚠ backend/data.db 已存在，跳过复制${NC}"
+    if [ -f "${DB_DIR}/data.db" ]; then
+        echo -e "${YELLOW}⚠ backend/data/data.db 已存在，跳过复制${NC}"
     else
-        cp "${DEPLOY_DIR}/data.db" "${DEPLOY_DIR}/backend/data.db"
-        chmod 644 "${DEPLOY_DIR}/backend/data.db"
-        echo -e "${GREEN}✓ data.db 已复制到 backend/data.db${NC}"
-    fi
-else
-    if [ ! -f "${DEPLOY_DIR}/backend/data.db" ]; then
-        echo -e "${YELLOW}⚠ 未找到 data.db，将创建新的数据库文件${NC}"
-        touch "${DEPLOY_DIR}/backend/data.db"
-        chmod 644 "${DEPLOY_DIR}/backend/data.db"
-    else
-        echo -e "${YELLOW}⚠ backend/data.db 已存在${NC}"
+        cp "${DEPLOY_DIR}/data.db" "${DB_DIR}/data.db"
+        chmod 644 "${DB_DIR}/data.db"
+        echo -e "${GREEN}✓ data.db 已复制到 backend/data/data.db${NC}"
     fi
 fi
 
 # 复制 ecdict.db
 if [ -f "${DEPLOY_DIR}/ecdict.db" ]; then
-    if [ -f "${DEPLOY_DIR}/backend/data/ecdict.db" ]; then
+    if [ -f "${DB_DIR}/ecdict.db" ]; then
         echo -e "${YELLOW}⚠ backend/data/ecdict.db 已存在，跳过复制${NC}"
     else
-        cp "${DEPLOY_DIR}/ecdict.db" "${DEPLOY_DIR}/backend/data/ecdict.db"
-        chmod 644 "${DEPLOY_DIR}/backend/data/ecdict.db"
+        cp "${DEPLOY_DIR}/ecdict.db" "${DB_DIR}/ecdict.db"
+        chmod 644 "${DB_DIR}/ecdict.db"
         echo -e "${GREEN}✓ ecdict.db 已复制到 backend/data/ecdict.db${NC}"
     fi
-else
-    echo -e "${YELLOW}⚠ 未找到 ecdict.db，词典功能可能无法使用${NC}"
 fi
 
-echo -e "${GREEN}✓ 数据库文件处理完成${NC}"
+# 复制 merriam_webster_cache.db
+if [ -f "${DEPLOY_DIR}/merriam_webster_cache.db" ]; then
+    if [ -f "${DB_DIR}/merriam_webster_cache.db" ]; then
+        echo -e "${YELLOW}⚠ backend/data/merriam_webster_cache.db 已存在，跳过复制${NC}"
+    else
+        cp "${DEPLOY_DIR}/merriam_webster_cache.db" "${DB_DIR}/merriam_webster_cache.db"
+        chmod 644 "${DB_DIR}/merriam_webster_cache.db"
+        echo -e "${GREEN}✓ merriam_webster_cache.db 已复制到 backend/data/merriam_webster_cache.db${NC}"
+    fi
+fi
+
+# 检查数据库文件完整性
+echo ""
+echo -e "${BLUE}检查数据库文件完整性...${NC}"
+
+MISSING_DBS=()
+for db in "${REQUIRED_DBS[@]}"; do
+    if [ ! -f "${DB_DIR}/${db}" ]; then
+        MISSING_DBS+=("$db")
+    fi
+done
+
+if [ ${#MISSING_DBS[@]} -gt 0 ]; then
+    echo -e "${YELLOW}⚠ 以下数据库文件缺失:${NC}"
+    for db in "${MISSING_DBS[@]}"; do
+        echo -e "  - ${db}"
+    done
+    echo -e "${BLUE}正在创建空的数据库文件...${NC}"
+    
+    for db in "${MISSING_DBS[@]}"; do
+        touch "${DB_DIR}/${db}"
+        chmod 644 "${DB_DIR}/${db}"
+        echo -e "  ${GREEN}✓${NC} 已创建 ${db}"
+    done
+    
+    echo -e "${YELLOW}注意: data.db 将在首次启动时自动初始化表结构${NC}"
+    echo -e "${YELLOW}注意: ecdict.db 需要从词典数据包获取，词典功能暂不可用${NC}"
+    echo -e "${YELLOW}注意: merriam_webster_cache.db 将在查询时自动创建表结构${NC}"
+else
+    echo -e "${GREEN}✓ 所有数据库文件齐全${NC}"
+    
+    # 显示数据库文件大小
+    echo ""
+    echo "数据库文件状态:"
+    for db in "${REQUIRED_DBS[@]}"; do
+        size=$(du -h "${DB_DIR}/${db}" | cut -f1)
+        echo -e "  - ${db}: ${size}"
+    done
+fi
 
 # 启动 Docker 容器
 echo ""
