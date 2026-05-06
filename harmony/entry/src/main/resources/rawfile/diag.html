@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>诊断</title></head>
+<body style="background:white;padding:20px;font-size:18px;">
+<h2>环境诊断</h2>
+<pre id="info" style="background:#f0f0f0;padding:16px;border-radius:8px;"></pre>
+<script>
+var info = document.getElementById('info');
+var lines = [];
+function add(k,v) { lines.push(k + ': ' + JSON.stringify(v)); }
+
+add('location.protocol', location.protocol);
+add('location.hostname', location.hostname);
+add('location.href', location.href);
+add('navigator.userAgent', navigator.userAgent);
+add('navigator.userAgent.includes("HarmonyOS")', navigator.userAgent.includes('HarmonyOS'));
+add('location.protocol === "resource:"', location.protocol === 'resource:');
+
+// Test localStorage
+try {
+  localStorage.setItem('_test_', 'ok');
+  add('localStorage', 'works: ' + localStorage.getItem('_test_'));
+  localStorage.removeItem('_test_');
+} catch(e) {
+  add('localStorage ERROR', e.message);
+}
+
+info.textContent = lines.join('\n');
+</script>
+</body></html>
