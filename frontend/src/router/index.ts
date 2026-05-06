@@ -1,6 +1,7 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
+import { hasServerBaseUrl, isNativeShell } from '@/utils/apiBase'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -14,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Reader',
     component: () => import('@/views/Reader.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/server-config',
+    name: 'ServerConfig',
+    component: () => import('@/views/ServerConfig.vue'),
+    meta: { guest: true }
   },
   {
     path: '/login',
@@ -60,7 +67,7 @@ const routes: RouteRecordRaw[] = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: isNativeShell() ? createWebHashHistory() : createWebHistory(),
   routes
 })
 
@@ -69,6 +76,12 @@ router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
   const isLoggedIn = authStore.isLoggedIn
   const isAdmin = authStore.isAdmin
+
+  // 原生壳（Android Capacitor / HarmonyOS）且未配置服务端地址：强制进 ServerConfig 页
+  if (isNativeShell() && !hasServerBaseUrl() && to.name !== 'ServerConfig') {
+    next({ name: 'ServerConfig' })
+    return
+  }
 
   // 需要登录的页面
   if (to.meta.requiresAuth && !isLoggedIn) {

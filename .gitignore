@@ -49,7 +49,17 @@ ENV/
 
 # Node
 node_modules/
+
+# HarmonyOS (don't exclude rawfile dist)
+!**/resources/rawfile/dist/
 dist/
+
+# HarmonyOS build artifacts
+/**/harmony/oh_modules/
+/**/harmony/.hvigor/
+/**/harmony/.appanalyzer/
+/**/harmony/node_modules/
+/**/harmony/local.properties
 
 # Logs
 *.log
