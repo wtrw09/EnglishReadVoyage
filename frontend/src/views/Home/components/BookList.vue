@@ -102,21 +102,52 @@
     </van-button>
   </div>
 
+  <!-- 加载状态（数据为空且正在加载时显示） -->
+  <div v-if="loading && filteredGroups.length === 0" class="loading-container">
+    <van-loading type="spinner" size="28px" vertical>
+      {{ props.networkStatus === 'online' ? '正在加载书籍列表...' : '正在尝试连接服务器...' }}
+    </van-loading>
+  </div>
+
+  <!-- 缓存数据 + 加载失败：顶部提示条 -->
+  <van-notice-bar
+    v-if="loadError && filteredGroups.length > 0"
+    color="#ee0a24"
+    background="#fff2f0"
+    left-icon="warning"
+    wrapable
+  >
+    加载失败，当前显示的可能不是最新数据
+  </van-notice-bar>
+
   <!-- 空状态 -->
   <van-empty
     v-if="filteredGroups.length === 0 && !loading"
-    description="暂无书籍"
-  />
+  >
+    <template #description>
+      <div v-if="loadError" class="empty-error">
+        <p>无法加载书籍列表</p>
+        <p class="empty-sub">{{ props.networkStatus === 'offline' ? '网络已断开，请检查网络连接' : '无法连接到服务器，请检查服务配置或与管理员联系' }}</p>
+        <van-button size="small" type="primary" plain @click="$emit('retry-load')">
+          重新加载
+        </van-button>
+      </div>
+      <span v-else>暂无书籍</span>
+    </template>
+  </van-empty>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import BookItem from './BookItem.vue'
 import type { Book, BookGroup } from '../types'
+import { buildStaticUrl } from '@/utils/apiBase'
 
 const props = defineProps<{
   groups: BookGroup[]
   loading: boolean
+  loadError: boolean
+  networkStatus: string
   searchText: string
   activeNames: number | string | null
   isMultiSelect: boolean
@@ -141,6 +172,7 @@ const emit = defineEmits<{
   (e: 'book-contextmenu', event: MouseEvent, book: Book, groupId: number): void
   (e: 'group-contextmenu', event: MouseEvent, group: BookGroup): void
   (e: 'mark-read', bookId: string, isRead: number): void
+  (e: 'retry-load'): void
 }>()
 
 // swipe-cell 组件引用
@@ -206,7 +238,8 @@ const getVisibleBooks = (group: BookGroup): Book[] => {
 const getBookCover = (book: Book): string => {
   if (book.cover_path) {
     const timestamp = Date.now()
-    return book.cover_path.includes('?') ? `${book.cover_path}&t=${timestamp}` : `${book.cover_path}?t=${timestamp}`
+    const url = buildStaticUrl(book.cover_path)
+    return url.includes('?') ? `${url}&t=${timestamp}` : `${url}?t=${timestamp}`
   }
   if (props.coverErrorMap[book.id]) {
     return ''
@@ -335,6 +368,31 @@ const handleMarkBookAsRead = (bookId: string, isRead: number) => {
   padding: 20px;
   color: #969799;
   font-size: 14px;
+}
+
+/* 空状态 - 加载失败 */
+.empty-error {
+  text-align: center;
+}
+
+.empty-error p {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #646566;
+}
+
+.empty-error .empty-sub {
+  font-size: 12px;
+  color: #969799;
+  margin-bottom: 16px;
+}
+
+/* 加载中状态 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 80px 0;
 }
 
 /* 批量操作栏 */

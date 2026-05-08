@@ -192,6 +192,7 @@ async function handleSave() {
   serverUrl.value = url
   verifiedUrls.value = getVerifiedUrls()
   showToast({ type: 'success', message: '已保存', duration: 1000 })
+  router.push({ name: 'Login' })
 }
 
 function handleClear() {

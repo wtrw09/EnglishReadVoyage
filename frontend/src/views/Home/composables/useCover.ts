@@ -5,6 +5,7 @@
 import { ref } from 'vue'
 import { showNotify } from 'vant'
 import { api } from '@/store/auth'
+import { buildApiUrl, buildStaticUrl } from '@/utils/apiBase'
 import type { Book } from '../types'
 
 export const useCover = () => {
@@ -94,7 +95,8 @@ export const useCover = () => {
   const getBookCover = (book: Book): string => {
     if (book.cover_path) {
       const timestamp = Date.now()
-      return book.cover_path.includes('?') ? `${book.cover_path}&t=${timestamp}` : `${book.cover_path}?t=${timestamp}`
+      const url = buildStaticUrl(book.cover_path)
+      return url.includes('?') ? `${url}&t=${timestamp}` : `${url}?t=${timestamp}`
     }
     return ''
   }
@@ -168,7 +170,7 @@ export const useCover = () => {
         const formData = new FormData()
         formData.append('file', blob, 'cover.webp')
 
-        const uploadRes = await fetch(`/api/v1/books/upload-cover?book_id=${currentCoverBook.value.id}`, {
+        const uploadRes = await fetch(buildApiUrl(`/books/upload-cover?book_id=${currentCoverBook.value.id}`), {
           method: 'POST',
           body: formData,
           headers: {

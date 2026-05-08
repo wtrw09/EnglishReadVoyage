@@ -1,17 +1,19 @@
 """TTS服务用于文本转语音操作"""
 import base64
 import os
-import hashlib
 import httpx
 import asyncio
 import json
 import logging
-import concurrent.futures
 from typing import Optional, List, Set
 
 from app.core.config import get_settings
 from app.schemas.tts import TTSResponse
-import uuid
+
+try:
+    import edge_tts  # type: ignore
+except ImportError:
+    edge_tts = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +389,7 @@ class TTSService:
     ) -> TTSResponse:
         """
         使用Edge-TTS (微软Edge在线TTS) 从文本生成语音
-        基于 edge-tts Python 库的实现原理，直接调用 Edge 语音合成服务
+        直接调用 edge_tts Python 库，format="mp3" 输出真正的 MPEG MP3。
 
         参数:
             text: 要转换为语音的文本
@@ -400,23 +402,25 @@ class TTSService:
         异常:
             Exception: 如果TTS API调用失败
         """
+        if edge_tts is None:
+            raise Exception("edge-tts 未安装，请运行: pip install edge-tts")
+
         # 使用默认值
         if voice is None or voice.strip() == "":
             voice = self.settings.EDGE_TTS_DEFAULT_VOICE
             logger.info(f"使用默认Edge-TTS语音: {voice}")
-        
+
         # 验证语音名称是否有效（无效时使用默认语音）
         voice = self._validate_edge_voice(voice, self.settings.EDGE_TTS_DEFAULT_VOICE)
-        
+
         if speed is None or speed <= 0:
             speed = 1.0
 
         # 将速度转换为百分比格式 (0.5 -> -50%, 1.0 -> 0%, 2.0 -> +100%)
         rate_percent = int((speed - 1.0) * 100)
-        # 确保 rate_str 始终有效
         rate_str = f"{rate_percent:+d}%"
 
-        logger.info(f"调用Edge-TTS API: voice={voice}, speed={speed}, rate={rate_str}")
+        logger.info(f"调用Edge-TTS Python API: voice={voice}, speed={speed}, rate={rate_str}")
         logger.debug(f"  text长度={len(text)}, text前100字符={text[:100]!r}")
 
         # Edge-TTS 限速控制：确保QPS<=1
@@ -429,216 +433,62 @@ class TTSService:
                 await asyncio.sleep(wait_time)
             self._edge_last_request_time = asyncio.get_event_loop().time()
 
-        # 重试配置 - 使用指数退避策略
-        max_retries = 5
-        base_retry_delay = 2  # 基础重试延迟（秒）
-        last_error = None
+            # 重试配置 - 使用指数退避策略
+            max_retries = 5
+            base_retry_delay = 2
+            last_error = None
 
-        for attempt in range(max_retries):
-            try:
-                import tempfile
-                import subprocess
-                import shutil
-                import sys
-                import os
-
-                # 首先尝试检测当前Python的虚拟环境路径
-                venv_path = None
-                # 检查是否存在 pyvenv.cfg 文件（虚拟环境标识）
-                base_dir = os.path.dirname(os.path.dirname(sys.executable))
-                pyvenv_cfg = os.path.join(base_dir, 'pyvenv.cfg')
-                if os.path.exists(pyvenv_cfg):
-                    # 当前在虚拟环境中，Scripts目录就在该目录下
-                    venv_scripts = os.path.join(base_dir, 'Scripts')
-                    if os.path.exists(venv_scripts):
-                        venv_path = venv_scripts
-                        logger.debug(f"检测到虚拟环境路径: {venv_path}")
-
-                # 根据操作系统选择不同的路径列表
-                if sys.platform == 'win32':
-                    # Windows 路径
-                    possible_paths = [
-                        r"F:\PyProject\EnglishReadVoyage\backend\.venv\Scripts\edge-tts.exe",
-                        r"C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts\edge-tts.exe",
-                        r"C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python312\Scripts\edge-tts.exe",
-                        r"C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python311\Scripts\edge-tts.exe",
-                    ]
-                    # 如果检测到虚拟环境，优先使用
-                    if venv_path:
-                        possible_paths.insert(0, os.path.join(venv_path, 'edge-tts.exe'))
-                else:
-                    # Linux 路径 (Docker 容器)
-                    possible_paths = [
-                        "/root/.local/bin/edge-tts",  # Docker 容器中 pip install --user 安装的路径
-                        "/usr/local/bin/edge-tts",
-                        "/usr/bin/edge-tts",
-                        "/app/.venv/bin/edge-tts",
-                        "/opt/python3.11/bin/edge-tts",
-                    ]
-
-                # 先尝试常见路径
-                edge_tts_path = None
-                for path in possible_paths:
-                    expanded_path = os.path.expandvars(path)
-                    if os.path.exists(expanded_path):
-                        edge_tts_path = expanded_path
-                        logger.debug(f"使用备用路径: {edge_tts_path}")
-                        break
-
-                # 如果找不到，尝试shutil.which (这个在Linux/Docker中最可靠)
-                if not edge_tts_path:
-                    edge_tts_path = shutil.which("edge-tts")
-                    logger.debug(f"edge-tts 路径查找结果: {edge_tts_path}")
-
-                # 如果还找不到，抛出错误
-                if not edge_tts_path:
-                    # 打印当前PATH环境变量，帮助调试
-                    logger.debug(f"当前PATH: {os.environ.get('PATH', '')[:200]}...")
-                    raise FileNotFoundError("edge-tts 命令未找到")
-
-                # 创建临时输出文件（使用系统临时目录）
-                import uuid
-                temp_dir = tempfile.gettempdir()
-                unique_id = uuid.uuid4().hex[:8]
-                output_file = os.path.join(temp_dir, f"edge_tts_{os.getpid()}_{unique_id}.mp3")
-
+            for attempt in range(max_retries):
                 try:
-                    # 将文本写入临时文件，避免命令行参数解析问题
-                    text_file = os.path.join(temp_dir, f"edge_tts_text_{os.getpid()}_{unique_id}.txt")
-                    with open(text_file, 'w', encoding='utf-8') as f:
-                        f.write(text)
+                    import tempfile
+                    import uuid as uuid_mod
 
-                    # 构建 edge-tts 命令 (使用 --file= 格式避免特殊字符问题)
-                    cmd = [
-                        edge_tts_path,
-                        "--voice", voice,
-                        f"--rate={rate_str}",
-                        f"--file={text_file}",
-                        "--write-media", output_file
-                    ]
+                    # edge_tts Python API，format="mp3" 输出真正的 MPEG MP3
+                    communicator = edge_tts.Communicate(text, voice, rate=rate_str)
 
-                    logger.info(f"执行Edge-TTS命令: path={edge_tts_path}, voice={voice}, rate={rate_str}")
-                    logger.debug(f"  text={text[:50]!r}..., output_file={output_file}")
+                    temp_dir = tempfile.gettempdir()
+                    unique_id = uuid_mod.uuid4().hex[:8]
+                    output_file = os.path.join(temp_dir, f"edge_tts_{os.getpid()}_{unique_id}.mp3")
 
-                    # 在Windows上使用线程池执行子进程，避免NotImplementedError
-                    import sys
-                    if sys.platform == 'win32':
-                        # Windows: 使用线程池运行同步subprocess
-                        from concurrent.futures import ThreadPoolExecutor
-                        import subprocess
-
-                        def run_edge_tts():
-                            try:
-                                # 不使用 text=True，避免编码问题
-                                result = subprocess.run(
-                                    cmd,
-                                    capture_output=True,
-                                    timeout=60
-                                )
-                                # 手动解码，处理可能的编码错误
-                                stdout_text = ""
-                                stderr_text = ""
-                                try:
-                                    stdout_text = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
-                                except Exception:
-                                    pass
-                                try:
-                                    stderr_text = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
-                                except Exception:
-                                    pass
-                                return result.returncode, stdout_text, stderr_text
-                            except subprocess.TimeoutExpired:
-                                return -1, "", "Timeout"
-                            except Exception as e:
-                                return -1, "", str(e)
-
-                        loop = asyncio.get_event_loop()
-                        with ThreadPoolExecutor() as pool:
-                            returncode, stdout_text, stderr_text = await loop.run_in_executor(pool, run_edge_tts)
-                    else:
-                        # Linux/Mac: 使用异步子进程
-                        process = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE
-                        )
-
-                        try:
-                            stdout, stderr = await asyncio.wait_for(
-                                process.communicate(),
-                                timeout=60
-                            )
-                            returncode = process.returncode
-                            stdout_text = stdout.decode('utf-8') if stdout else ""
-                            stderr_text = stderr.decode('utf-8') if stderr else ""
-                        except asyncio.TimeoutError:
-                            process.kill()
-                            await process.wait()
-                            raise Exception("Edge-TTS执行超时")
-
-                    # 检查是否是 503 错误
-                    if returncode != 0:
-                        error_msg = stderr_text
-                        # 检查是否是 503 服务不可用错误
-                        if "503" in error_msg or "WSServerHandshakeError" in error_msg:
-                            last_error = Exception(f"Edge-TTS服务暂时不可用 (503): {error_msg[:100]}")
-                            # 使用指数退避策略计算等待时间
-                            retry_delay = min(base_retry_delay * (2 ** attempt), 10)
-                            logger.warning(f"Edge-TTS 503错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
-                            # 等待后重试
-                            await asyncio.sleep(retry_delay)
-                            continue
-                        else:
-                            logger.error(f"Edge-TTS错误: stderr={stderr_text}, stdout={stdout_text}")
-                            raise Exception(f"Edge-TTS执行失败: {stderr_text}")
-
-                    # 读取生成的音频文件
-                    logger.debug(f"检查输出文件: {output_file}, exists={os.path.exists(output_file)}")
-                    with open(output_file, 'rb') as f:
-                        audio_data = f.read()
-
-                    if not audio_data or len(audio_data) == 0:
-                        logger.error(f"Edge-TTS错误: 文件为空, returncode={returncode}")
-                        raise Exception("Edge-TTS未生成音频数据")
-
-                    # 返回base64编码的音频数据
-                    audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                    logger.info(f"Edge-TTS生成成功, 大小: {len(audio_data)} bytes")
-
-                finally:
-                    # 清理临时文件
                     try:
-                        if os.path.exists(output_file):
-                            os.unlink(output_file)
-                            logger.debug(f"已清理临时文件: {output_file}")
-                        if os.path.exists(text_file):
-                            os.unlink(text_file)
-                            logger.debug(f"已清理临时文本文件: {text_file}")
-                    except Exception as e:
-                        logger.warning(f"清理临时文件失败: {e}")
+                        await communicator.save(output_file, format="mp3")
+                        logger.debug(f"检查输出文件: {output_file}, exists={os.path.exists(output_file)}")
+                        with open(output_file, 'rb') as f:
+                            audio_data = f.read()
 
-                # 成功，跳出重试循环
-                break
+                        if not audio_data or len(audio_data) == 0:
+                            raise Exception("Edge-TTS未生成音频数据")
 
-            except FileNotFoundError as e:
-                logger.error(f"Edge-TTS命令未找到: {e}")
-                raise Exception("Edge-TTS未安装，请运行: pip install edge-tts")
-            except Exception as e:
-                # 如果是 503 错误，已经在循环中处理了
-                if "503" in str(e) or "WSServerHandshakeError" in str(e):
-                    last_error = e
-                    continue
-                # 其他错误直接抛出
-                import traceback
-                error_detail = traceback.format_exc()
-                logger.error(f"Edge-TTS详细错误: {error_detail}")
-                raise Exception(f"Edge-TTS生成失败: {str(e)}")
+                        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                        logger.info(f"Edge-TTS生成成功, 大小: {len(audio_data)} bytes, 格式: MP3")
+                    finally:
+                        # 清理临时文件
+                        try:
+                            if os.path.exists(output_file):
+                                os.unlink(output_file)
+                                logger.debug(f"已清理临时文件: {output_file}")
+                        except Exception as e:
+                            logger.warning(f"清理临时文件失败: {e}")
 
-        # 如果所有重试都失败
-        if last_error:
-            raise Exception(f"Edge-TTS服务暂时不可用，已重试{max_retries}次，请稍后重试")
+                    return TTSResponse(audio_data=audio_base64)
 
-        return TTSResponse(audio_data=audio_base64)
+                except Exception as e:
+                    error_str = str(e)
+                    if "503" in error_str or "WSServerHandshakeError" in error_str:
+                        last_error = Exception(f"Edge-TTS服务暂时不可用 (503): {error_str[:100]}")
+                        retry_delay = min(base_retry_delay * (2 ** attempt), 10)
+                        logger.warning(f"Edge-TTS 503错误，第 {attempt + 1} 次尝试失败，{retry_delay}秒后重试...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    else:
+                        import traceback
+                        logger.error(f"Edge-TTS详细错误: {traceback.format_exc()}")
+                        raise Exception(f"Edge-TTS执行失败: {error_str}")
+
+            # 所有重试都失败
+            if last_error:
+                raise last_error
+            raise Exception("Edge-TTS生成失败")
 
     async def generate_minimax_speech(
         self,

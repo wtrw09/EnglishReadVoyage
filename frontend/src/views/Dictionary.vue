@@ -36,7 +36,7 @@
         <div v-else class="nav-dictionary-selector">
           <van-button size="small" @click="showDictionaryPicker = true">
             {{ getCurrentDictionaryLabel() }}
-            <van-icon name="arrow-down" style="margin-left: 4px;" />
+            <i class="fas fa-chevron-down" style="margin-left: 4px;"></i>
           </van-button>
         </div>
       </template>
@@ -60,11 +60,7 @@
             @click="selectDictionary(dict.value)"
           >
             <template #right-icon>
-              <van-icon
-                v-if="dictionaryPageSource === dict.value"
-                name="success"
-                color="#1989fa"
-              />
+              <i class="fas fa-check" style="color: #1989fa;"></i>
             </template>
           </van-cell>
         </van-cell-group>

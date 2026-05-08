@@ -4,15 +4,19 @@ import Components from 'unplugin-vue-components/vite'
 import { VantResolver } from 'unplugin-vue-components/resolvers'
 import { resolve } from 'path'
 
-// HarmonyOS $rawfile 协议兼容插件
+// HarmonyOS $rawfile 协议兼容插件：只在构建时生效
+// 开发模式下必须保留 type="module" 供浏览器正确加载 ES Module
 function harmonyCompat(): Plugin {
   return {
     name: 'harmony-compat',
     enforce: 'post',
-    transformIndexHtml(html: string) {
+    transformIndexHtml(html: string, ctx) {
+      // ctx.server 存在时说明是 dev server，跳过兼容转换
+      if (ctx?.server) return html
       return html
         .replace(/\scrossorigin(="[^"]*")?/g, '')
         .replace(/\stype="module"/g, '')
+        .replace(/(<script)(\s+src=)/g, '$1 defer$2')
     }
   }
 }

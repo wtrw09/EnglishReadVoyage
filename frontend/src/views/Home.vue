@@ -25,7 +25,6 @@
               @input="handleSearch"
             />
           </div>
-          <i class="fas fa-plus nav-icon" @click="openImportDialog(0)" v-if="authStore.isAdmin"></i>
         </div>
       </template>
       <template #right>
@@ -58,7 +57,7 @@
           >
             <template #reference>
               <div class="nav-icon-btn">
-                <i class="fas fa-th-large"></i>
+                <i class="fas fa-wrench"></i>
               </div>
             </template>
             <template #action="{ action }">
@@ -95,6 +94,8 @@
       <BookList
         :groups="bookGroups"
         :loading="loading"
+        :load-error="loadError"
+        :network-status="networkStatus"
         :search-text="searchText"
         v-model:active-names="activeNames"
         :is-multi-select="isMultiSelect"
@@ -115,6 +116,7 @@
         @book-contextmenu="showContextMenu"
         @group-contextmenu="showGroupContextMenu"
         @mark-read="markBookAsRead"
+        @retry-load="handleRetryLoad"
       />
     </div>
 
@@ -359,10 +361,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showNotify, showToast, showLoadingToast, closeToast } from 'vant'
 import { useAuthStore, api } from '@/store/auth'
+import axios from 'axios'
 import BookEditDialog from '@/components/BookEditDialog.vue'
 import AudioFixDialog from '@/components/AudioFixDialog.vue'
 import draggable from 'vuedraggable'
@@ -374,6 +377,7 @@ import GroupContextMenu from './Home/components/GroupContextMenu.vue'
 import ImportDialog from './Home/components/ImportDialog.vue'
 import CoverSettingsDialog from './Home/components/CoverSettingsDialog.vue'
 // Composables
+import { useNetworkStatus } from '@/utils/useNetworkStatus'
 import { useGroupManagement } from './Home/composables/useGroupManagement'
 import { useImport } from './Home/composables/useImport'
 import { useExport } from './Home/composables/useExport'
@@ -389,6 +393,10 @@ defineOptions({
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { status: networkStatus, checkConnection } = useNetworkStatus()
+
+// 加载分组请求序号，用于过滤过期响应（防止并发竞态）
+let loadGroupsSeq = 0
 
 // ========== 分组管理 Composable ==========
 const {
@@ -452,6 +460,7 @@ const {
 // ========== 基础状态 ==========
 const bookGroups = ref<BookGroup[]>([])
 const loading = ref(false)
+const loadError = ref(false)
 const searchText = ref('')
 const activeNames = ref<number>(0)
 
@@ -520,11 +529,34 @@ const supplementProgress = ref(0)
 const supplementMessage = ref('')
 const supplementLoading = ref(false)
 
+// 记录当前已加载数据所属的用户 id，用于 keep-alive 下检测账号切换
+const lastLoadedUserId = ref<number | null>(null)
+
+// 账号切换时重置首页本地状态，避免 keep-alive 保留前一个用户的数据
+const resetHomeState = () => {
+  bookGroups.value = []
+  activeNames.value = 0
+  loadError.value = false
+  selectedBooks.value = []
+  isMultiSelect.value = false
+  currentGroupId.value = 0
+  hideReadBooksMap.value = {}
+  coverErrorMap.value = {}
+  searchText.value = ''
+  showContextMenuPopup.value = false
+  contextMenuBook.value = null
+  showMoveDialog.value = false
+  showEditDialog.value = false
+}
+
 // ========== 计算属性 ==========
 
 // 拓展功能菜单
 const expandActions = computed<PopoverAction[]>(() => {
   const actions: PopoverAction[] = []
+  if (authStore.isAdmin) {
+    actions.push({ text: '导入书籍', icon: 'fa-plus', key: 'import' })
+  }
   actions.push({ text: '听书模式', icon: 'fa-music', key: 'audiobook' })
   actions.push({ text: '生词本', icon: 'fa-book', key: 'vocabulary' })
   actions.push({ text: '词典', icon: 'fa-search', key: 'dictionary' })
@@ -552,22 +584,44 @@ const userActions = computed<PopoverAction[]>(() => {
 
 // ========== 方法 ==========
 
-// 加载分组书籍数据
+// 加载分组书籍数据（带请求序号防并发竞态）
 const loadGroups = async () => {
+  const seq = ++loadGroupsSeq
   loading.value = true
+  loadError.value = false
   try {
     coverErrorMap.value = {}
     const res = await api.get<BookGroup[]>('/categories/books/grouped')
+    // 如果有更新的请求已经发出，跳过本次过期响应
+    if (seq !== loadGroupsSeq) return
     bookGroups.value = res.data
     if (bookGroups.value.length > 0 && activeNames.value === 0) {
       activeNames.value = bookGroups.value[0].id
     }
   } catch (error) {
+    // 跳过过期请求的错误
+    if (seq !== loadGroupsSeq) return
     console.error('加载分组失败:', error)
-    showNotify({ type: 'danger', message: '加载分组失败' })
+    loadError.value = true
+    // 网络相关错误由全局拦截器和网络状态栏处理，不再重复弹 toast
+    // 仅在正常在线但接口出错时才弹提示
+    if (axios.isAxiosError(error) && error.response) {
+      // 如果全局网络横幅已显示异常（serverUnreachable/offline），不再重复提示
+      if (networkStatus.value === 'online') {
+        showNotify({ type: 'danger', message: '加载分组失败，请稍后重试' })
+      }
+    }
   } finally {
     loading.value = false
   }
+}
+
+// 重新加载按钮的处理：直接发起真实 API 请求，不依赖 checkConnection 的状态检测
+// 因为 checkConnection 可能因 navigator.onLine 不准确或心跳竞态等原因报告离线状态错误，
+// 而用户明确点击重试意味着他们期望真正地去尝试连接服务器
+// 直接调用 loadGroups 发起真实 API 请求，跳过 checkConnection 的状态检测
+const handleRetryLoad = async () => {
+  await loadGroups()
 }
 
 const handleSearch = () => {}
@@ -606,7 +660,9 @@ const onUserSelect = (action: PopoverAction) => {
 
 // 拓展功能菜单
 const onExpandSelect = async (action: PopoverAction) => {
-  if (action.key === 'audiobook') {
+  if (action.key === 'import') {
+    openImportDialog(0)
+  } else if (action.key === 'audiobook') {
     router.push('/audiobook')
   } else if (action.key === 'vocabulary') {
     router.push('/vocabulary')
@@ -1047,9 +1103,33 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('click', handleCloseNavMenus)
   window.addEventListener('popstate', handleBrowserNavigation)
-  // 首页只需加载书籍分组数据
-  // TTS设置和词典设置延迟到用户打开设置对话框时按需加载
+
+  lastLoadedUserId.value = authStore.user?.id ?? null
+
+  // 检测服务器连接状态，用于更新全局网络横幅（不影响数据加载）
+  await checkConnection()
+
+  // 始终尝试加载书籍列表，不依赖 checkConnection 的结果
+  // 如果后端真的不可达，loadGroups 的 catch 会正确处理
   await loadGroups()
+})
+
+// keep-alive 复用时检测账号是否变更：变更则重置状态并重新拉取
+onActivated(async () => {
+  const currentId = authStore.user?.id ?? null
+  if (currentId !== lastLoadedUserId.value) {
+    lastLoadedUserId.value = currentId
+    resetHomeState()
+    // 递增序号，使所有正在飞行中的旧 loadGroups 请求立即失效
+    loadGroupsSeq++
+    if (currentId != null) {
+      // 切换账号后同样先检查连接（用于更新网络横幅），再加载列表
+      await checkConnection()
+      await loadGroups()
+    } else {
+      loading.value = false
+    }
+  }
 })
 
 onUnmounted(() => {
@@ -1072,6 +1152,13 @@ watch(() => importState.importCompleted.value, async (completed) => {
   if (completed) {
     importState.importCompleted.value = false
     await loadGroups()
+  }
+})
+
+// 网络状态从非online恢复到online时自动重新加载
+watch(networkStatus, (newStatus, oldStatus) => {
+  if (newStatus === 'online' && oldStatus !== 'online' && loadError.value) {
+    loadGroups()
   }
 })
 </script>

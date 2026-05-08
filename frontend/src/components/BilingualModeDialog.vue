@@ -12,6 +12,7 @@
  * - currentPresetId: 当前选中的预设ID
  * - currentSegments: 当前自定义朗读段配置
  * - missingZhCount: 缺失中文音频的句子数量
+ * - hasChineseAudio: 当前书籍是否有任何中文音频（false 时禁用含中文的选项并显示强提示）
  *
  * Events：
  * - update:show: 关闭对话框时触发
@@ -51,6 +52,12 @@
         </div>
       </div>
 
+      <!-- 整本书无中文音频的强提示 -->
+      <div v-if="!hasChineseAudio" class="no-chinese-info">
+        <i class="fas fa-circle-info info-icon" />
+        <span>当前书籍暂无中文音频，含中文的朗读选项已不可用；播放时将仅按英文段进行。</span>
+      </div>
+
       <!-- 预设模式选择 -->
       <div v-show="activeTab === 'preset'" class="preset-section">
         <div class="preset-grid">
@@ -58,7 +65,10 @@
             v-for="preset in presets"
             :key="preset.id"
             class="preset-item"
-            :class="{ 'active': selectedPresetId === preset.id && !isCustomMode }"
+            :class="{
+              'active': selectedPresetId === preset.id && !isCustomMode,
+              'disabled': !hasChineseAudio && presetHasChinese(preset)
+            }"
             @click="selectPreset(preset.id)"
           >
             <div class="preset-name">{{ preset.name }}</div>
@@ -112,6 +122,7 @@
             type="warning"
             plain
             size="small"
+            :disabled="!hasChineseAudio"
             @click="addSegment('zh')"
           >
             <i class="fas fa-plus" style="margin-right: 4px;"></i>
@@ -145,8 +156,8 @@
         </div>
       </div>
 
-      <!-- 音频可用性警告 -->
-      <div v-if="missingZhCount > 0" class="warning-section">
+      <!-- 音频可用性警告（仅在整体有中文但部分缺失时显示，避免与 no-chinese-info 重复） -->
+      <div v-if="hasChineseAudio && missingZhCount > 0" class="warning-section">
         <i class="fas fa-triangle-exclamation warning-icon" />
         <span>当前书籍有 <strong>{{ missingZhCount }}</strong> 个句子缺少中文音频，缺少中文时将自动跳过</span>
       </div>
@@ -162,6 +173,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { showToast } from 'vant'
 
 // 朗读段配置
 interface ReadSegment {
@@ -225,6 +237,8 @@ interface Props {
   currentSegments?: ReadSegment[]
   // 缺少中文音频的数量
   missingZhCount?: number
+  // 当前书籍是否存在中文音频（整本书维度）
+  hasChineseAudio?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -233,7 +247,8 @@ const props = withDefaults(defineProps<Props>(), {
     { lang: 'en', count: 1 },
     { lang: 'zh', count: 1 }
   ],
-  missingZhCount: 0
+  missingZhCount: 0,
+  hasChineseAudio: true
 })
 
 const emit = defineEmits<{
@@ -290,14 +305,30 @@ const currentSegments = computed(() => {
   return preset?.segments || []
 })
 
+// 判断预设是否包含中文段
+const presetHasChinese = (preset: ReadPreset): boolean => {
+  return preset.segments.some(s => s.lang === 'zh')
+}
+
 // 选择预设
 const selectPreset = (presetId: string) => {
+  const preset = presets.find(p => p.id === presetId)
+  if (!preset) return
+  // 本书无中文音频时，禁止选中含中文的预设
+  if (!props.hasChineseAudio && presetHasChinese(preset)) {
+    showToast('本书无中文音频，该模式不可用')
+    return
+  }
   selectedPresetId.value = presetId
   isCustomMode.value = false
 }
 
 // 添加朗读段
 const addSegment = (lang: 'en' | 'zh') => {
+  if (lang === 'zh' && !props.hasChineseAudio) {
+    showToast('本书无中文音频，无法添加中文段')
+    return
+  }
   customSegments.value.push({ lang, count: 1 })
 }
 
@@ -614,6 +645,44 @@ const handleConfirm = () => {
 
     strong {
       font-weight: 600;
+    }
+  }
+}
+
+// 整本书无中文音频提示（比 warning 更醒目）
+.no-chinese-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 8px;
+  margin-bottom: 16px;
+
+  .info-icon {
+    color: #cf1322;
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  span {
+    font-size: 13px;
+    color: #cf1322;
+    line-height: 1.5;
+  }
+}
+
+// 禁用的预设卡片
+.preset-section {
+  .preset-item.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #fafafa;
+
+    &:active {
+      background: #fafafa;
     }
   }
 }

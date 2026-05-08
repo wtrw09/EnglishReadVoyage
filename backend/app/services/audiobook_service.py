@@ -2,10 +2,23 @@
 import json
 import random
 import hashlib
+import logging
 from typing import List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pathlib import Path
+
+try:
+    from mutagen.mp3 import MP3  # type: ignore
+except Exception:  # pragma: no cover - mutagen 缺失时退化为不补 duration
+    MP3 = None  # type: ignore
+
+try:
+    import wave  # type: ignore
+except ImportError:
+    wave = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 from app.repositories.audiobook_repository import audiobook_repository
 from app.models.database_models import AudiobookPlaylist, AudiobookPlaylistItem, Book, Category, BookCategoryRel
@@ -342,14 +355,142 @@ class AudiobookService:
             else:
                 has_chinese = bool(has_chinese)
 
-        # 如果 total_duration 为 0，计算所有句子的 duration 总和
-        if total_duration == 0.0 and sentences:
-            total_duration = sum(s.get('duration', 0.0) for s in sentences if isinstance(s, dict))
-
         # 获取音频文件夹中所有mp3文件
         existing_audio_files = set()
         if audio_folder.exists():
             existing_audio_files = {f.name for f in audio_folder.glob('*.mp3')}
+
+        # 预扫描补齐 duration / duration_zh：
+        # 无中文音频且 sentences.json 未记录 duration 时，前端初始 timeline 总时长为 0，
+        # 只有每段 <audio> loadedmetadata 后才会逐段累加；此处一次性读取 MP3 真实时长并回写，
+        # 保证 /audiobook/books/{id}/audio 接口返回的 duration 准确，进度条一次加载到位。
+
+        def _is_missing(val) -> bool:
+            """判断 duration 类字段是否缺失，兼容 None / 0 / '0' / '' / 非数类型。"""
+            if val is None:
+                return True
+            try:
+                return float(val) <= 0.0
+            except (TypeError, ValueError):
+                return True
+
+        def _read_audio_duration_fallback(file_path: str) -> float:
+            """
+            兜底读取音频时长，支持真实 WAV 和其他浏览器可播格式。
+            当 MP3 mutagen 读取失败（文件扩展名.mp3但内容非标准MPEG帧）时调用。
+            """
+            if wave is not None:
+                try:
+                    with wave.open(file_path, 'rb') as w:
+                        frames = w.getnframes()
+                        rate = w.getframerate()
+                        if rate > 0:
+                            return frames / float(rate)
+                except Exception:
+                    pass
+            # 最次兜底：按固定码率估算（假设 128kbps MP3 等效）
+            try:
+                size = os.path.getsize(file_path)
+                return size / 16000
+            except Exception:
+                return 0.0
+
+        durations_patched = False
+        patched_count = 0
+        patched_zh_count = 0
+        missing_mp3_count = 0
+        if MP3 is not None or wave is not None:
+            for item in sentences:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get('text', '')
+                if not text:
+                    continue
+                text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+
+                # ① 英文 audio_file：无记录 或 记录了但文件不存在 → 尝试 MD5 回查
+                audio_file = item.get('audio_file') or ''
+                if not audio_file or audio_file not in existing_audio_files:
+                    candidate = f"{text_hash}.mp3"
+                    if candidate in existing_audio_files:
+                        if item.get('audio_file') != candidate:
+                            item['audio_file'] = candidate
+                            durations_patched = True
+                        audio_file = candidate
+
+                if audio_file and audio_file in existing_audio_files:
+                    if _is_missing(item.get('duration')):
+                        abs_path = str(audio_folder / audio_file)
+                        real = 0.0
+                        # 先尝试 mutagen MP3（MPEG 标准帧）
+                        if MP3 is not None:
+                            try:
+                                real = MP3(abs_path).info.length
+                            except Exception as e:
+                                logger.debug(f"mutagen 读取失败，降级到 fallback: {audio_file} - {e}")
+                                real = _read_audio_duration_fallback(abs_path)
+                        elif wave is not None:
+                            real = _read_audio_duration_fallback(abs_path)
+                        if real and real > 0:
+                            item['duration'] = round(real, 3)
+                            durations_patched = True
+                            patched_count += 1
+                else:
+                    missing_mp3_count += 1
+
+                # ② 中文 audio_file_zh：同样先修复指向错误的记录，再补 duration_zh
+                audio_file_zh = item.get('audio_file_zh') or ''
+                if not audio_file_zh or audio_file_zh not in existing_audio_files:
+                    candidate_zh = f"{text_hash}_zh.mp3"
+                    if candidate_zh in existing_audio_files:
+                        if item.get('audio_file_zh') != candidate_zh:
+                            item['audio_file_zh'] = candidate_zh
+                            durations_patched = True
+                        audio_file_zh = candidate_zh
+
+                if audio_file_zh and audio_file_zh in existing_audio_files:
+                    if _is_missing(item.get('duration_zh')):
+                        abs_path_zh = str(audio_folder / audio_file_zh)
+                        real_zh = 0.0
+                        if MP3 is not None:
+                            try:
+                                real_zh = MP3(abs_path_zh).info.length
+                            except Exception:
+                                real_zh = _read_audio_duration_fallback(abs_path_zh)
+                        elif wave is not None:
+                            real_zh = _read_audio_duration_fallback(abs_path_zh)
+                        if real_zh and real_zh > 0:
+                            item['duration_zh'] = round(real_zh, 3)
+                            durations_patched = True
+                            patched_zh_count += 1
+
+        logger.info(
+            f"🎧 get_book_audio_list[{book_id}]: 共{len(sentences)}句, "
+            f"补齐duration={patched_count}, 补齐duration_zh={patched_zh_count}, "
+            f"缺失英文MP3={missing_mp3_count}, has_chinese={has_chinese}"
+        )
+
+        # 如果补齐了任何 duration，则重算 total_duration 并回写 sentences.json
+        if durations_patched:
+            total_duration = sum(
+                s.get('duration', 0.0) for s in sentences if isinstance(s, dict)
+            )
+            try:
+                if isinstance(mapping_data, dict):
+                    mapping_data['sentences'] = sentences
+                    mapping_data['total_duration'] = total_duration
+                    payload = mapping_data
+                else:
+                    payload = sentences
+                with open(mapping_file, 'w', encoding='utf-8') as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                logger.info(f"🛠️ 已回写补齐的音频时长到 {mapping_file}")
+            except Exception as e:
+                logger.warning(f"回写 sentences.json 失败: {e}")
+
+        # 如果 total_duration 仍为 0，计算所有句子的 duration 总和
+        if total_duration == 0.0 and sentences:
+            total_duration = sum(s.get('duration', 0.0) for s in sentences if isinstance(s, dict))
 
         # 构建音频列表
         audio_list = []

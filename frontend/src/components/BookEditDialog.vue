@@ -213,6 +213,7 @@ import { ref, watch, computed } from 'vue'
 import { showToast } from 'vant'
 import { api, useAuthStore } from '@/store/auth'
 import { showErrorDialog, showWarningDialog } from '@/utils/message'
+import { buildApiUrl } from '@/utils/apiBase'
 import BookEditor from './BookEditor.vue'
 
 const authStore = useAuthStore()
@@ -672,7 +673,7 @@ const continueGenerateEnglishAudio = async (forceGenerate: boolean) => {
   audioAbortController = new AbortController()
 
   try {
-    const response = await fetch(`/api/v1/books/${bookId}/regenerate-audio${forceParam}`, {
+    const response = await fetch(buildApiUrl(`/books/${bookId}/regenerate-audio${forceParam}`), {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${authStore.token}`
@@ -1010,7 +1011,7 @@ const continueGenerateAll = async (forceGenerate: boolean) => {
   audioAbortController = new AbortController()
 
   try {
-    const response = await fetch(`/api/v1/books/${props.bookId}/regenerate-audio-bilingual${forceParam}`, {
+    const response = await fetch(buildApiUrl(`/books/${props.bookId}/regenerate-audio-bilingual${forceParam}`), {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${authStore.token}`
@@ -1263,7 +1264,7 @@ const continueGenerateTranslation = async (forceGenerate: boolean) => {
   audioAbortController = new AbortController()
 
   try {
-    const response = await fetch(`/api/v1/books/${bookId}/generate-translation${forceParam}`, {
+    const response = await fetch(buildApiUrl(`/books/${bookId}/generate-translation${forceParam}`), {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${authStore.token}`
@@ -1669,7 +1670,7 @@ const continueGenerateChineseAudio = async (forceRegenerate: boolean) => {
   try {
     // 传递 force 参数决定是否强制重新生成
     const forceParam = forceRegenerate ? '?force=true' : ''
-    const response = await fetch(`/api/v1/books/${bookId}/generate-chinese-audio${forceParam}`, {
+    const response = await fetch(buildApiUrl(`/books/${bookId}/generate-chinese-audio${forceParam}`), {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${authStore.token}`

@@ -145,12 +145,23 @@ class Settings(BaseSettings):
         """
         获取 CORS origins。
         生产环境下，如果未配置具体域名，给出警告。
+        Capacitor Android WebView 的来源固定为 https://localhost，需要显式放行（未使用通配 '*' 时）。
         """
         if self.IS_PRODUCTION and self._cors_origins_list == ["*"]:
             logger.warning(
                 "⚠️  生产环境 CORS_ORIGINS 设为 '*'，建议配置具体域名！"
             )
-        return self._cors_origins_list
+        origins = list(self._cors_origins_list)
+        # Capacitor WebView 来源固定，非通配模式下按需追加
+        if origins != ["*"]:
+            for extra in (
+                "capacitor://localhost",  # iOS Capacitor
+                "https://localhost",      # Android Capacitor (androidScheme=https)
+                "http://localhost",       # 后备：androidScheme=http 时
+            ):
+                if extra not in origins:
+                    origins.append(extra)
+        return origins
 
 
 @lru_cache()

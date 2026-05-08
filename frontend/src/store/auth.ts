@@ -1,6 +1,8 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios, { type AxiosInstance } from 'axios'
+import { getServerBaseUrl, isNativeShell } from '@/utils/apiBase'
+import { useNetworkStatus } from '@/utils/useNetworkStatus'
 
 // 类型定义
 export interface User {
@@ -33,6 +35,7 @@ export interface CreateUserResponse {
 export interface ApiError {
   success: false
   message: string
+  code?: 'network_error' | 'auth_error' | 'server_error'
 }
 
 export interface ApiSuccess<T> {
@@ -43,8 +46,8 @@ export interface ApiSuccess<T> {
 export type ApiResult<T> = ApiSuccess<T> | ApiError
 
 // 创建 axios 实例
+// baseURL 留空，改由请求拦截器根据 ServerConfig 动态拼接，使同一份前端在浏览器/Capacitor 下都能工作
 export const api: AxiosInstance = axios.create({
-  baseURL: '/api/v1',
   timeout: 600000,  // 压缩图片等耗时操作可能需要较长时间，增加到10分钟
   headers: {
     'Content-Type': 'application/json'
@@ -59,6 +62,9 @@ const RETRY_DELAY = 2000 // 2秒
 api.interceptors.response.use(
   (response) => {
     retryCount = 0 // 重置重试计数
+    // 502 重试成功后恢复 online 状态（拦截器先注册后执行，重试成功时网络状态拦截器的 serverUnreachable 仍残留）
+    const { setOnline } = useNetworkStatus()
+    setOnline()
     return response
   },
   async (error) => {
@@ -83,9 +89,46 @@ api.interceptors.response.use(
 
 // 不需要 token 的公开接口列表
 const publicEndpoints = ['/auth/login', '/auth/activate']
+const REMEMBER_CREDS_KEY = 'remember_creds'
 
-// 请求拦截器添加 token
+// ---- 记住我凭据管理 ----
+
+export function encodePassword(pwd: string): string {
+  return btoa(encodeURIComponent(pwd))
+}
+
+export function decodePassword(encoded: string): string {
+  return decodeURIComponent(atob(encoded))
+}
+
+export function saveRememberedCredentials(username: string, password: string): void {
+  localStorage.setItem(REMEMBER_CREDS_KEY, JSON.stringify({
+    username,
+    password: encodePassword(password)
+  }))
+}
+
+export function getRememberedCredentials(): { username: string; password: string } | null {
+  try {
+    const raw = localStorage.getItem(REMEMBER_CREDS_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (typeof data.username !== 'string' || typeof data.password !== 'string') return null
+    return { username: data.username, password: decodePassword(data.password) }
+  } catch {
+    return null
+  }
+}
+
+export function clearRememberedCredentials(): void {
+  localStorage.removeItem(REMEMBER_CREDS_KEY)
+}
+
+// 请求拦截器：动态 baseURL + 附加 token + 离线预检
 api.interceptors.request.use((config) => {
+  // 动态 baseURL：浏览器态同源（空串 + /api/v1 相对路径），Capacitor 原生态拼用户输入的服务端地址
+  config.baseURL = `${getServerBaseUrl()}/api/v1`
+
   const tokenValue = localStorage.getItem('token')
   const isPublicEndpoint = publicEndpoints.some(endpoint => config.url?.includes(endpoint))
 
@@ -95,13 +138,23 @@ api.interceptors.request.use((config) => {
     // 非公开接口且没有 token 时才打印警告
     console.warn('[API Request] No token found in localStorage for:', config.url)
   }
+
+  // 客户端离线预检：避免请求卡住超时
+  // 原生壳（Android/HarmonyOS WebView）中 navigator.onLine 可能不可靠，跳过预检
+  if (!navigator.onLine && !isPublicEndpoint && !isNativeShell()) {
+    const { setOffline } = useNetworkStatus()
+    setOffline()
+    // Axios v1.x 使用 CanceledError（取代了旧版的 Cancel）
+    return Promise.reject(new axios.CanceledError('网络已断开，请求已取消'))
+  }
+
   return config
 })
 
-// 响应拦截器处理认证错误
+// 响应拦截器处理认证错误 + 网络错误分类
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (axios.isAxiosError(error)) {
       // 打印详细错误信息
       console.error('[API Response Error]', {
@@ -112,21 +165,65 @@ api.interceptors.response.use(
         url: error.config?.url,
         method: error.config?.method,
       })
-      
-      // 401 Unauthorized - Token 过期或无效
-      // 但排除登录接口，登录失败返回 401 是正常的业务错误
+
       const url = error.config?.url || ''
       const isLoginRequest = url.includes('/auth/login') || url.includes('/auth/activate')
-      
+
+      // 共享状态引用
+      const { setServerUnreachable, setTokenExpired } = useNetworkStatus()
+
+      // ========== 场景 0: 预检取消（离线时请求拦截器主动取消的请求）==========
+      // 此时状态已经由请求拦截器设为 offline，不需要再处理
+      if (axios.isCancel(error)) {
+        return Promise.reject(error)
+      }
+
+      // ========== 场景 1: 网络不可达（无响应）==========
+      // !error.response 已覆盖：ERR_NETWORK、ECONNABORTED、超时等各种无响应情况
+      if (!error.response) {
+        if (!isLoginRequest) {
+          console.warn('[API Response] 网络不可达, code:', error.code)
+          setServerUnreachable()
+        }
+        return Promise.reject(error)
+      }
+
+      // ========== 场景 2: Token 失效 (401) ==========
+      // 但排除登录接口，登录失败返回 401 是正常的业务错误
       if (error.response?.status === 401 && !isLoginRequest) {
         console.warn('[API Response] 401 Unauthorized - Token expired or invalid')
+        setTokenExpired()
 
-        // 清除本地存储的 token 和用户信息
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
+        // 同步清理 Pinia store + localStorage，避免路由守卫读到"已登录"状态把用户踢回 Home
+        try {
+          useAuthStore().logout()
+        } catch (err) {
+          // 极端情况下 Pinia 未就绪时的兜底
+          console.error('[API Response] Failed to logout Pinia store on 401', err)
+          localStorage.removeItem('token')
+          localStorage.removeItem('user')
+        }
 
         // 跳转到登录页面
-        window.location.href = '/login'
+        import('@/router').then(({ default: router }) => {
+          if (router.currentRoute.value.name !== 'Login') {
+            router.replace({ name: 'Login' })
+          }
+        })
+        return Promise.reject(error)
+      }
+
+      // ========== 场景 3: 服务端异常 (5xx) ==========
+      // 仅网关/代理类错误 (502/503/504) 表示服务器不可达
+      // 500 是服务器内部错误，服务器本身是可达的
+      if (error.response && error.response.status >= 500) {
+        const status = error.response.status
+        console.warn('[API Response] 服务端异常, status:', status)
+        if (status >= 502 && status <= 504) {
+          setServerUnreachable()
+        }
+        // 500 不触发网络状态变化，仅 console 记录
+        return Promise.reject(error)
       }
     }
     return Promise.reject(error)
@@ -148,7 +245,7 @@ export const useAuthStore = defineStore('auth', () => {
   // Actions
   
   // 登录
-  async function login(username: string, password: string): Promise<ApiResult<void>> {
+  async function login(username: string, password: string, rememberMe: boolean = false): Promise<ApiResult<void>> {
     loading.value = true
     try {
       const formData = new URLSearchParams()
@@ -178,7 +275,16 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem('token', token.value)
       localStorage.setItem('user', JSON.stringify(user.value))
       
+      // 记住我：缓存凭据
+      if (rememberMe) {
+        saveRememberedCredentials(username, password)
+      }
+      
       console.log('[Login] Token saved to localStorage:', localStorage.getItem('token'))
+      
+      // 登录成功后重置网络状态（清除 tokenExpired 等标记）
+      const { setOnline } = useNetworkStatus()
+      setOnline()
       
       return { success: true }
     } catch (error) {
@@ -194,14 +300,21 @@ export const useAuthStore = defineStore('auth', () => {
         // 处理后端返回的错误消息，确保是字符串
         const detail = error.response?.data?.detail
         let errorMessage = '登录失败'
+        let errorCode: 'network_error' | 'auth_error' | 'server_error' | undefined
         if (detail) {
           errorMessage = Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ') : String(detail)
+          errorCode = error.response?.status === 401 ? 'auth_error' : undefined
         } else if (error.message) {
           errorMessage = error.message
+          // 无响应 → 网络错误
+          if (!error.response) {
+            errorCode = 'network_error'
+          }
         }
         return { 
           success: false, 
-          message: errorMessage
+          message: errorMessage,
+          code: errorCode
         }
       }
       return { success: false, message: '登录失败: ' + String(error) }
@@ -217,6 +330,7 @@ export const useAuthStore = defineStore('auth', () => {
     users.value = []
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    clearRememberedCredentials()
   }
 
   // 激活账户
@@ -243,6 +357,25 @@ export const useAuthStore = defineStore('auth', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  // 自动登录（使用缓存的凭据）
+  async function autoLogin(): Promise<ApiResult<void>> {
+    const creds = getRememberedCredentials()
+    if (!creds) {
+      return { success: false, message: '没有缓存的凭据' }
+    }
+    if (isLoggedIn.value) {
+      return { success: true }
+    }
+    const result = await login(creds.username, creds.password, false)
+    if (!result.success) {
+      // 仅在凭据被后端明确拒绝（auth_error）时清除，网络错误保留凭据
+      if (result.code === 'auth_error') {
+        clearRememberedCredentials()
+      }
+    }
+    return result
   }
 
   // 获取当前用户信息
@@ -415,6 +548,7 @@ export const useAuthStore = defineStore('auth', () => {
     // Actions
     login,
     logout,
+    autoLogin,
     fetchCurrentUser,
     updateCurrentUser,
     fetchUsers,
