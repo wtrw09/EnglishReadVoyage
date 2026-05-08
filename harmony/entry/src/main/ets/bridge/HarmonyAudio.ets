@@ -10,7 +10,11 @@
 import { media } from '@kit.MediaKit';
 import { type BusinessError } from '@kit.BasicServicesKit';
 import { webview } from '@kit.ArkWeb';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AVSessionMgr } from './AVSessionMgr';
+
+const LOG_DOMAIN: number = 0xA045;
+const LOG_TAG: string = 'HarmonyAudio';
 
 export interface TimelineTrack {
   startMs: number;
@@ -33,6 +37,7 @@ export class HarmonyAudio {
   private timerId_: number = -1;
   private isPlaying_: boolean = false;
   private pendingSeekMs_: number = 0;
+  private currentLoadId_: number = 0;
   private avSessionMgr_: AVSessionMgr;
 
   constructor(controller: webview.WebviewController, avSessionMgr: AVSessionMgr) {
@@ -136,6 +141,7 @@ export class HarmonyAudio {
       try {
         await this.player_.play();
         this.isPlaying_ = true;
+        this.startTimer_();
       } catch { /* ignore */ }
     }
   }
@@ -158,6 +164,7 @@ export class HarmonyAudio {
       try {
         await this.player_.play();
         this.isPlaying_ = true;
+        this.startTimer_();
       } catch { /* ignore */ }
     }
   }
@@ -210,6 +217,13 @@ export class HarmonyAudio {
       try {
         this.player_.stop();
       } catch { /* ignore */ }
+      // 移除事件回调，避免内存泄漏
+      try {
+        this.player_.off('stateChange');
+      } catch { /* ignore */ }
+      try {
+        this.player_.off('error');
+      } catch { /* ignore */ }
       try {
         this.player_.release();
       } catch { /* ignore */ }
@@ -219,6 +233,8 @@ export class HarmonyAudio {
 
   private async loadTrack_(index: number, offsetMs: number): Promise<void> {
     if (index < 0 || index >= this.timeline_.length) return;
+    // 递增 loadId，用于取消旧请求（快速切换音轨时避免竞争）
+    const loadId: number = ++this.currentLoadId_;
     this.currentIndex_ = index;
     this.pendingSeekMs_ = offsetMs;
     this.releasePlayer();
@@ -227,16 +243,72 @@ export class HarmonyAudio {
     try {
       // 先创建播放器，成功后赋值给 this.player_
       const avPlayer: media.AVPlayer = await media.createAVPlayer();
+
+      // 设置一个 Promise：等待 AVPlayer 状态变为 initialized（设置 url 后的合法状态）
+      // 必须等待 initialized 后才能调用 prepare()，否则会报
+      // "current state is not stopped or initialized, unsupport prepare operation"
+      let resolveInit: () => void = () => {};
+      let rejectInit: (err: Error) => void = (_err: Error): void => {};
+      const waitInitialized: Promise<void> = new Promise<void>((resolve, reject) => {
+        resolveInit = resolve;
+        rejectInit = reject;
+      });
+
+      // 30 秒超时保护，防止 Promise 永不 resolve
+      const timeoutMs: number = 30000;
+      let timeoutId: number = -1;
+      const timeoutPromise: Promise<void> = new Promise<void>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('loadTrack timeout after ' + timeoutMs + 'ms'));
+        }, timeoutMs);
+      });
+
       avPlayer.on('stateChange', (state: media.AVPlayerState, _reason: media.StateChangeReason) => {
+        hilog.info(LOG_DOMAIN, LOG_TAG, 'stateChange: %{public}s', state);
+        if (state === 'initialized') {
+          resolveInit();
+          return;
+        } else if (state === 'error') {
+          // AVPlayer 进入 error 状态，拒绝 Promise 避免死锁
+          rejectInit(new Error('AVPlayer entered error state before initialized'));
+          return;
+        }
         this.onPlayerStateChange_(state);
       });
       avPlayer.on('error', (err: BusinessError) => {
-        this.dispatchEvent_('error', this.buildErrorJson_(err.message || 'avplayer error'));
+        hilog.error(LOG_DOMAIN, LOG_TAG, 'avplayer error code=%{public}d msg=%{public}s', err.code, err.message);
+        this.dispatchEvent_('error', this.buildErrorJson_('[code=' + err.code + '] ' + (err.message || 'avplayer error')));
       });
 
-      // 配置并准备
+      // 设置 URL，等待状态变为 initialized
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'loadTrack: index=%{public}d url=%{public}s', index, track.url);
       avPlayer.url = track.url;
+
+      // 竞速等待：initialized || error || 超时
+      await Promise.race([waitInitialized, timeoutPromise]);
+      clearTimeout(timeoutId);
+
+      // 取消令牌检查：如果在此期间新的 loadTrack_ 已启动，放弃本次操作
+      if (loadId !== this.currentLoadId_) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, 'loadTrack cancelled: loadId=%{public}d current=%{public}d', loadId, this.currentLoadId_);
+        try { avPlayer.off('stateChange'); } catch { /* ignore */ }
+        try { avPlayer.off('error'); } catch { /* ignore */ }
+        try { avPlayer.release(); } catch { /* ignore */ }
+        return;
+      }
+
+      // 现在状态是 initialized，可以安全调用 prepare
       await avPlayer.prepare();
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'loadTrack: prepared index=%{public}d', index);
+
+      // 再次取消检查
+      if (loadId !== this.currentLoadId_) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, 'loadTrack cancelled after prepare: loadId=%{public}d', loadId);
+        try { avPlayer.off('stateChange'); } catch { /* ignore */ }
+        try { avPlayer.off('error'); } catch { /* ignore */ }
+        try { avPlayer.release(); } catch { /* ignore */ }
+        return;
+      }
 
       // seek 到指定位置
       if (this.pendingSeekMs_ > 0) {
@@ -249,9 +321,14 @@ export class HarmonyAudio {
 
       this.dispatchEvent_('trackchange', '{"trackIndex":' + index + '}');
       this.avSessionMgr_.setAudioDuration(this.totalMs_());
-    } catch {
+    } catch (e) {
       // 创建失败时 this.player_ 仍为 null，后续 play/pause 安全
-      this.dispatchEvent_('error', '{"message":"loadTrack failed for index ' + index + '"}');
+      // ArkTS 严格模式下不支持 in 运算符（arkts-no-in），通过类型断言安全访问
+      const errMsg: string = (e && typeof e === 'object')
+        ? String((e as Record<string, Object>).message || '')
+        : String(e || '');
+      const urlStr: string = track.url || '';
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'loadTrack catch: index=%{public}d url=%{public}s err=%{public}s', index, urlStr, errMsg);
     }
   }
 
@@ -275,6 +352,9 @@ export class HarmonyAudio {
         this.avSessionMgr_.setPlaybackState('paused');
       }
     } else if (state === 'error') {
+      this.isPlaying_ = false;
+      this.stopTimer_();
+      this.releasePlayer();
       this.dispatchEvent_('error', '{"message":"avplayer state=error"}');
     }
   }
@@ -282,9 +362,13 @@ export class HarmonyAudio {
   private startTimer_(): void {
     this.stopTimer_();
     // 使用 setTimeout 递归调用避免累积误差
+    // 注意：tick 始终调度下一次 setTimeout，避免音轨切换时 isPlaying_ 短暂变为 false
+    // 导致定时器链断裂、后续再无 progress 事件的问题。
+    // stopTimer_() 在 pause/stop 时由外部调用方主动停止计时器，因此这里无需依赖 isPlaying_ 做守卫。
     const tick = (): void => {
-      if (!this.isPlaying_) return;
-      this.fireProgress_();
+      if (this.isPlaying_) {
+        this.fireProgress_();
+      }
       this.timerId_ = setTimeout(tick, 200);
     };
     this.timerId_ = setTimeout(tick, 200);
@@ -310,7 +394,13 @@ export class HarmonyAudio {
   }
 
   private buildErrorJson_(msg: string): string {
-    return '{"message":"' + msg.replace(/"/g, '\\"') + '"}';
+    const safe: string = msg
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
+    return '{"message":"' + safe + '"}';
   }
 
   private dispatchEvent_(event: string, payload: string): void {
