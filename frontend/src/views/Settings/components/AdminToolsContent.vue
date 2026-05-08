@@ -123,6 +123,7 @@
 import { ref, onMounted } from 'vue'
 import { showConfirmDialog, showNotify, showLoadingToast, closeToast } from 'vant'
 import { useAuthStore, api } from '@/store/auth'
+import { buildApiUrl } from '@/utils/apiBase'
 import AudioFixDialog from '@/components/AudioFixDialog.vue'
 import BookEditDialog from '@/components/BookEditDialog.vue'
 
@@ -261,7 +262,7 @@ const handlePrecompile = async () => {
       precompileMessage.value = '正在准备...'
       precompileLoading.value = true
       try {
-        const response = await fetch('/api/v1/books/precompile', {
+        const response = await fetch(buildApiUrl('/books/precompile'), {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${authStore.token}` }
         })
@@ -314,7 +315,7 @@ const handleSupplementAll = async () => {
     supplementMessage.value = '正在准备...'
     supplementLoading.value = true
     try {
-      const response = await fetch('/api/v1/books/admin/books/supplement-all', {
+      const response = await fetch(buildApiUrl('/books/admin/books/supplement-all'), {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${authStore.token}` }
       })

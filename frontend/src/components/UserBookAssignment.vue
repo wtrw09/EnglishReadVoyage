@@ -90,7 +90,10 @@
                   :class="{ 'selected': selectedBooks.includes(book.id) }"
                   @click="handleBookClick(book.id, category.id)"
                   @contextmenu.prevent="showBookContextMenu($event, book, category.id)"
-                  @longpress="showBookContextMenu($event, book, category.id)"
+                  @touchstart="handleBookTouchStart($event, book, category.id)"
+                  @touchend="handleBookTouchEnd"
+                  @touchmove="handleBookTouchEnd"
+                  @touchcancel="handleBookTouchEnd"
                 >
                   <!-- 多选复选框 -->
                   <div v-if="isMultiSelect" class="book-checkbox" @click.stop>
@@ -156,7 +159,14 @@
 
           >
             <template #title>
-              <div class="category-title">
+              <div
+                class="category-title"
+                @contextmenu.prevent.stop="showUnaddedGroupContextMenu($event, group)"
+                @touchstart.stop="handleUnaddedGroupTouchStart($event, group)"
+                @touchend.stop="handleUnaddedGroupTouchEnd"
+                @touchmove.stop="handleUnaddedGroupTouchEnd"
+                @touchcancel.stop="handleUnaddedGroupTouchEnd"
+              >
                 <span>{{ group.name }}</span>
                 <span class="book-count">({{ group.books.length }} 本)</span>
               </div>
@@ -174,7 +184,10 @@
                   :class="{ 'selected': selectedBooks.includes(book.id) }"
                   @click="handleUnaddedBookClick(book.id)"
                   @contextmenu.prevent="showUnaddedBookContextMenu($event, book)"
-                  @longpress="showUnaddedBookContextMenu($event, book)"
+                  @touchstart="handleUnaddedBookTouchStart($event, book)"
+                  @touchend="handleBookTouchEnd"
+                  @touchmove="handleBookTouchEnd"
+                  @touchcancel="handleBookTouchEnd"
                 >
                   <!-- 多选复选框 -->
                   <div v-if="isMultiSelect" class="book-checkbox" @click.stop>
@@ -346,6 +359,23 @@
       </van-cell-group>
     </van-popup>
 
+    <!-- 未添加书籍分组右键菜单（针对分组标题） -->
+    <van-popup
+      v-model:show="showUnaddedGroupContextMenuPopup"
+      :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
+      round
+      class="book-context-menu"
+    >
+      <van-cell-group>
+        <van-cell
+          title="添加分组所有书籍"
+          clickable
+          :is-link="false"
+          @click="addAllBooksFromUnaddedGroup"
+        />
+      </van-cell-group>
+    </van-popup>
+
     <!-- 选择分组对话框（底部弹出） -->
     <van-popup v-model:show="showSelectCategoryPopup" position="bottom" round>
       <div class="select-category-dialog">
@@ -419,6 +449,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { showNotify, showConfirmDialog } from 'vant'
 import { api } from '@/store/auth'
+import { buildStaticUrl } from '@/utils/apiBase'
 import draggable from 'vuedraggable'
 
 interface Category {
@@ -468,6 +499,16 @@ const activeUnadded = ref<number | string | undefined>(undefined)
 
 // 未添加书籍右键菜单
 const showUnaddedBookContextMenuPopup = ref(false)
+// 未添加书籍分组右键菜单
+const showUnaddedGroupContextMenuPopup = ref(false)
+const contextMenuUnaddedGroup = ref<BookGroup | null>(null)
+const addingGroupBooks = ref(false)
+// 长按计时器
+let unaddedGroupLongPressTimer: ReturnType<typeof setTimeout> | null = null
+// 书籍长按计时器与标记
+let bookLongPressTimer: ReturnType<typeof setTimeout> | null = null
+let bookLongPressTriggered = false
+const LONG_PRESS_DURATION = 500
 
 // 分组表单
 const createCategoryDialogVisible = ref(false)
@@ -534,9 +575,7 @@ const getCategoryBooks = (categoryId: number): Book[] => {
 
 const getCoverUrl = (coverPath: string): string => {
   if (!coverPath) return ''
-  if (coverPath.startsWith('http')) return coverPath
-  // 直接使用 cover_path，后端已挂载 /books 静态目录
-  return coverPath
+  return buildStaticUrl(coverPath)
 }
 
 const handleCoverClick = (_book: Book) => {
@@ -702,6 +741,10 @@ const toggleBookSelect = (bookId: string) => {
 
 // 处理书籍点击（支持多选模式）
 const handleBookClick = (bookId: string, _categoryId: number) => {
+  if (bookLongPressTriggered) {
+    bookLongPressTriggered = false
+    return
+  }
   if (isMultiSelect.value) {
     toggleBookSelect(bookId)
   } else {
@@ -755,6 +798,10 @@ const selectAllUnaddedBooks = () => {
 
 // 处理未添加书籍点击
 const handleUnaddedBookClick = (bookId: string) => {
+  if (bookLongPressTriggered) {
+    bookLongPressTriggered = false
+    return
+  }
   if (isMultiSelect.value) {
     toggleBookSelect(bookId)
   } else {
@@ -762,8 +809,108 @@ const handleUnaddedBookClick = (bookId: string) => {
   }
 }
 
+// 显示未添加书籍分组右键菜单（针对分组标题）
+const showUnaddedGroupContextMenu = (event: MouseEvent | { clientX: number; clientY: number }, group: BookGroup) => {
+  contextMenuUnaddedGroup.value = group
+  const menuWidth = 180
+  const menuHeight = 60
+  let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
+  let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
+  x = Math.max(x, 10)
+  y = Math.max(y, 10)
+  contextMenuPos.value = { x, y }
+  showUnaddedGroupContextMenuPopup.value = true
+}
+
+// 长按启动（移动端触摸事件）
+const handleUnaddedGroupTouchStart = (event: TouchEvent, group: BookGroup) => {
+  const touch = event.touches[0]
+  if (!touch) return
+  // 使用 Touch 点作为定位依据
+  const touchPoint = { clientX: touch.clientX, clientY: touch.clientY } as Touch
+  if (unaddedGroupLongPressTimer) clearTimeout(unaddedGroupLongPressTimer)
+  unaddedGroupLongPressTimer = setTimeout(() => {
+    showUnaddedGroupContextMenu(touchPoint, group)
+    unaddedGroupLongPressTimer = null
+  }, LONG_PRESS_DURATION)
+}
+// 取消长按
+const handleUnaddedGroupTouchEnd = () => {
+  if (unaddedGroupLongPressTimer) {
+    clearTimeout(unaddedGroupLongPressTimer)
+    unaddedGroupLongPressTimer = null
+  }
+}
+
+// 添加未添加书籍分组下的所有书籍到普通用户的同名分组
+// 若用户不存在同名分组，则先创建再添加
+const addAllBooksFromUnaddedGroup = async () => {
+  if (addingGroupBooks.value) return
+  const group = contextMenuUnaddedGroup.value
+  showUnaddedGroupContextMenuPopup.value = false
+  if (!group) return
+
+  if (!group.books || group.books.length === 0) {
+    showNotify({ type: 'warning', message: '该分组暂无可添加的书籍' })
+    return
+  }
+
+  addingGroupBooks.value = true
+  try {
+    // 查找用户已有同名分组
+    let targetCategoryId: number | null = null
+    const existing = categories.value.find(c => c.name === group.name)
+    if (existing) {
+      targetCategoryId = existing.id
+    } else {
+      // 创建同名分组
+      const createRes = await api.post(`/admin/users/${userId.value}/categories`, {
+        name: group.name
+      })
+      targetCategoryId = createRes.data?.id ?? null
+    }
+
+    if (targetCategoryId === null) {
+      throw new Error('目标分组ID获取失败')
+    }
+
+    // 批量将书籍分配到目标分组
+    let successCount = 0
+    const failedBooks: string[] = []
+    for (const book of group.books) {
+      try {
+        await api.post(`/admin/users/${userId.value}/categories/books`, {
+          book_id: book.id,
+          category_id: targetCategoryId
+        })
+        successCount++
+      } catch (e) {
+        failedBooks.push(book.title)
+      }
+    }
+
+    if (failedBooks.length === 0) {
+      showNotify({ type: 'success', message: `成功添加 ${successCount} 本书籍到分组「${group.name}」` })
+    } else {
+      showNotify({
+        type: 'warning',
+        message: `成功 ${successCount} 本，失败 ${failedBooks.length} 本`
+      })
+    }
+    await loadData()
+  } catch (error: any) {
+    showNotify({
+      type: 'danger',
+      message: error.response?.data?.detail || error.message || '添加分组所有书籍失败'
+    })
+  } finally {
+    addingGroupBooks.value = false
+    contextMenuUnaddedGroup.value = null
+  }
+}
+
 // 显示未添加书籍右键菜单
-const showUnaddedBookContextMenu = (event: MouseEvent, book: Book) => {
+const showUnaddedBookContextMenu = (event: MouseEvent | { clientX: number; clientY: number }, book: Book) => {
   contextMenuBook.value = { id: book.id, categoryId: -1 } // -1 表示未添加
   // 计算菜单位置
   const menuWidth = 150
@@ -774,6 +921,57 @@ const showUnaddedBookContextMenu = (event: MouseEvent, book: Book) => {
   y = Math.max(y, 10)
   contextMenuPos.value = { x, y }
   showUnaddedBookContextMenuPopup.value = true
+}
+
+// 显示书籍右键菜单
+const showBookContextMenu = (event: MouseEvent | { clientX: number; clientY: number }, book: Book, categoryId: number) => {
+  contextMenuBook.value = { id: book.id, categoryId }
+  // 计算菜单位置，确保不超出屏幕
+  const menuWidth = 150
+  const menuHeight = 100
+  let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
+  let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
+  // 确保菜单位置不小于0
+  x = Math.max(x, 10)
+  y = Math.max(y, 10)
+  contextMenuPos.value = { x, y }
+  showBookContextMenuPopup.value = true
+}
+
+// 书籍长按（用户已有分组）
+const handleBookTouchStart = (event: TouchEvent, book: Book, categoryId: number) => {
+  const touch = event.touches[0]
+  if (!touch) return
+  bookLongPressTriggered = false
+  const touchPoint = { clientX: touch.clientX, clientY: touch.clientY }
+  if (bookLongPressTimer) clearTimeout(bookLongPressTimer)
+  bookLongPressTimer = setTimeout(() => {
+    bookLongPressTriggered = true
+    showBookContextMenu(touchPoint, book, categoryId)
+    bookLongPressTimer = null
+  }, LONG_PRESS_DURATION)
+}
+
+// 未添加书籍长按
+const handleUnaddedBookTouchStart = (event: TouchEvent, book: Book) => {
+  const touch = event.touches[0]
+  if (!touch) return
+  bookLongPressTriggered = false
+  const touchPoint = { clientX: touch.clientX, clientY: touch.clientY }
+  if (bookLongPressTimer) clearTimeout(bookLongPressTimer)
+  bookLongPressTimer = setTimeout(() => {
+    bookLongPressTriggered = true
+    showUnaddedBookContextMenu(touchPoint, book)
+    bookLongPressTimer = null
+  }, LONG_PRESS_DURATION)
+}
+
+// 取消书籍长按（移动 / 抬起 / 取消）
+const handleBookTouchEnd = () => {
+  if (bookLongPressTimer) {
+    clearTimeout(bookLongPressTimer)
+    bookLongPressTimer = null
+  }
 }
 
 // 为未添加书籍启用多选
@@ -823,21 +1021,6 @@ const removeBookFromCategory = async (bookId: string, categoryId: number) => {
       message: error.response?.data?.detail || '移除失败'
     })
   }
-}
-
-// 显示书籍右键菜单
-const showBookContextMenu = (event: MouseEvent, book: Book, categoryId: number) => {
-  contextMenuBook.value = { id: book.id, categoryId }
-  // 计算菜单位置，确保不超出屏幕
-  const menuWidth = 150
-  const menuHeight = 100
-  let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
-  let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
-  // 确保菜单位置不小于0
-  x = Math.max(x, 10)
-  y = Math.max(y, 10)
-  contextMenuPos.value = { x, y }
-  showBookContextMenuPopup.value = true
 }
 
 // 打开分配到分组对话框

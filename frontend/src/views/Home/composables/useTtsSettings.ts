@@ -7,6 +7,7 @@
 import { ref, computed, watch } from 'vue'
 import { showNotify, showToast } from 'vant'
 import { api } from '@/store/auth'
+import { buildApiUrl } from '@/utils/apiBase'
 import type { DefaultTtsConfig, VoiceItem } from '../types'
 
 // ========== 模块级共享状态 ==========
@@ -622,7 +623,7 @@ export const useTtsSettings = () => {
         requestBody.azure_region = ttsAzureRegion.value || null
       }
 
-      const response = await fetch('/api/v1/tts/', {
+      const response = await fetch(buildApiUrl('/tts/'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -716,7 +717,7 @@ export const useTtsSettings = () => {
         requestBody.azure_region = ttsAzureRegion.value || null
       }
 
-      const response = await fetch('/api/v1/tts/', {
+      const response = await fetch(buildApiUrl('/tts/'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

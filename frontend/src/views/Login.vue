@@ -23,6 +23,23 @@
         <p>{{ isActivateMode ? '请输入邀请码激活账户' : '请登录以继续' }}</p>
       </div>
 
+      <!-- 自动登录状态（所有平台） -->
+      <div v-if="autoLoggingIn" class="server-status checking">
+        <van-loading type="spinner" size="18" /> 自动登录中...
+      </div>
+
+      <!-- 服务端状态提示（仅原生壳） -->
+      <template v-if="nativeShell && !autoLoggingIn">
+        <div v-if="serverStatus === 'checking'" class="server-status checking">
+          <van-loading type="spinner" size="18" /> 正在检查服务端连接...
+        </div>
+        <div v-else-if="serverStatus === 'unreachable'" class="server-status unreachable">
+          <i class="fas fa-exclamation-triangle"></i>
+          <span>无法连接到服务端，请修改服务端地址</span>
+          <van-button size="mini" plain type="primary" :disabled="isHealthChecking" @click="retryCheck">重试连接</van-button>
+        </div>
+      </template>
+
       <!-- 登录表单 -->
       <van-form v-if="!isActivateMode" @submit="onSubmit" class="login-form">
         <van-cell-group inset>
@@ -33,6 +50,7 @@
             placeholder="请输入用户名"
             :rules="[{ required: true, message: '请填写用户名' }]"
             left-icon="fa-user"
+            :disabled="nativeShell && serverStatus === 'unreachable'"
           />
           <van-field
             v-model="form.password"
@@ -42,23 +60,33 @@
             placeholder="请输入密码"
             :rules="[{ required: true, message: '请填写密码' }]"
             left-icon="fa-lock"
+            :disabled="nativeShell && serverStatus === 'unreachable'"
           />
         </van-cell-group>
+
+        <div class="checkbox-area">
+          <van-checkbox v-model="rememberMe" shape="square" size="18">
+            记住我
+          </van-checkbox>
+        </div>
 
         <div class="submit-area">
           <van-button
             round
             block
-            type="primary"
+            :type="nativeShell && serverStatus === 'unreachable' ? 'default' : 'primary'"
             native-type="submit"
             :loading="authStore.loading"
+            :disabled="nativeShell && serverStatus === 'unreachable'"
           >
-            登录
+            {{ nativeShell && serverStatus === 'unreachable' ? '服务端不可用' : '登录' }}
           </van-button>
         </div>
 
         <div class="switch-mode">
           <span class="text-link" @click="switchToActivate">激活账户</span>
+          <span class="text-link divider">|</span>
+          <span class="text-link" @click="goServerConfig">修改服务端地址</span>
         </div>
       </van-form>
 
@@ -114,10 +142,12 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { showNotify } from 'vant'
-import { useAuthStore } from '@/store/auth'
+import { useAuthStore, getRememberedCredentials } from '@/store/auth'
+import { isNativeShell, getServerBaseUrl } from '@/utils/apiBase'
+import { useNetworkStatus } from '@/utils/useNetworkStatus'
 
 interface LoginForm {
   username: string
@@ -137,6 +167,14 @@ const authStore = useAuthStore()
 // 是否为激活模式
 const isActivateMode = ref(false)
 
+// 服务端连接状态（仅原生壳）
+const serverStatus = ref<'checking' | 'reachable' | 'unreachable'>('reachable')
+const isHealthChecking = ref(false)
+const nativeShell = computed(() => isNativeShell())
+const { checkConnection, status: networkStatus } = useNetworkStatus()
+const rememberMe = ref(false)
+const autoLoggingIn = ref(false)
+
 // 登录表单
 const form = reactive<LoginForm>({
   username: '',
@@ -155,6 +193,11 @@ const switchToActivate = () => {
   isActivateMode.value = true
 }
 
+// 跳转服务端配置页
+const goServerConfig = () => {
+  router.push({ name: 'ServerConfig' })
+}
+
 // 切换到登录模式
 const switchToLogin = () => {
   isActivateMode.value = false
@@ -165,9 +208,62 @@ const validateConfirmPassword = (value: string) => {
   return value === activateForm.password
 }
 
+// 加载完成后检查服务端状态
+onMounted(() => {
+  if (isNativeShell()) {
+    checkServerHealth()
+  } else {
+    // Web 浏览器：无需健康检查，直接尝试自动登录
+    tryAutoLogin()
+  }
+})
+
+// ========== 健康检查 ==========
+
+let healthCheckSeq = 0
+
+async function checkServerHealth() {
+  if (!getServerBaseUrl()) {
+    serverStatus.value = 'unreachable'
+    return
+  }
+  const seq = ++healthCheckSeq
+  isHealthChecking.value = true
+  serverStatus.value = 'checking'
+  await checkConnection()
+  // 过期响应忽略，防止快速多次重试时状态被旧结果覆盖
+  if (seq !== healthCheckSeq) return
+  serverStatus.value = networkStatus.value === 'online' ? 'reachable' : 'unreachable'
+  isHealthChecking.value = false
+  if (networkStatus.value === 'online') await tryAutoLogin()
+}
+
+async function tryAutoLogin() {
+  if (!authStore.isLoggedIn) {
+    autoLoggingIn.value = true
+    const result = await authStore.autoLogin()
+    autoLoggingIn.value = false
+    if (result.success) {
+      const redirect = route.query.redirect as string
+      router.replace(redirect || '/')
+    } else {
+      console.log('[AutoLogin] Failed:', result.message)
+      // 自动登录失败，预填用户名减少输入
+      const creds = getRememberedCredentials()
+      if (creds) {
+        form.username = creds.username
+      }
+    }
+  }
+}
+
+function retryCheck() {
+  checkServerHealth()
+}
+
 // 登录提交
 const onSubmit = async () => {
-  const result = await authStore.login(form.username, form.password)
+  const result = await authStore.login(form.username, form.password, rememberMe.value)
   
   if (result.success) {
     showNotify({ type: 'success', message: '登录成功', duration: 1500 })
@@ -243,6 +339,10 @@ const onActivateSubmit = async () => {
   margin-top: 20px;
 }
 
+.checkbox-area {
+  margin: 12px 16px;
+}
+
 .submit-area {
   margin: 24px 16px;
 }
@@ -260,6 +360,12 @@ const onActivateSubmit = async () => {
 .switch-mode {
   text-align: center;
   margin-top: 16px;
+
+  .divider {
+    margin: 0 8px;
+    color: #dcdee0;
+    cursor: default;
+  }
 }
 
 .text-link {
@@ -269,6 +375,35 @@ const onActivateSubmit = async () => {
 
   &:active {
     opacity: 0.7;
+  }
+}
+
+.server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin: 0 4px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+
+  &.checking {
+    background: #f0f9ff;
+    color: #1989fa;
+  }
+
+  &.unreachable {
+    background: #fff2f0;
+    color: #ee0a24;
+    border: 1px solid #ffccc7;
+
+    i {
+      font-size: 16px;
+    }
+
+    span {
+      flex: 1;
+    }
   }
 }
 </style>

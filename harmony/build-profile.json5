@@ -13,6 +13,19 @@
           "storeFile": "C:\\Users\\黄芸芸\\.ohos\\config\\default_harmony_PBK0U0YxkLOuxlv1pnJqy09qChY7q5GKfAlnXXx_v30=.p12",
           "storePassword": "0000001BDBF1EE4E635560A98181F506644990879FE321A5B3B334B18721219DCA33B4607F8AAD57DCE72F"
         }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "",
+          "keyAlias": "",
+          "keyPassword": "",
+          "profile": "",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "",
+          "storePassword": ""
+        }
       }
     ],
     "products": [

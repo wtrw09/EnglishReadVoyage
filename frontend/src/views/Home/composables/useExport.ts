@@ -5,6 +5,7 @@
 import { ref } from 'vue'
 import { showNotify } from 'vant'
 import { useAuthStore } from '@/store/auth'
+import { buildApiUrl } from '@/utils/apiBase'
 
 export const useExport = () => {
   const authStore = useAuthStore()
@@ -59,7 +60,7 @@ export const useExport = () => {
 
       return new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
-        xhr.open('POST', '/api/v1/books/export')
+        xhr.open('POST', buildApiUrl('/books/export'))
         xhr.setRequestHeader('Content-Type', 'application/json')
         xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
         xhr.responseType = 'blob'

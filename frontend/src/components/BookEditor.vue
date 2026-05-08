@@ -111,6 +111,7 @@ import { indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { showToast, showNotify } from 'vant'
+import { buildApiUrl } from '@/utils/apiBase'
 
 interface Props {
   modelValue: string
@@ -260,7 +261,7 @@ const previewImage = async (imagePath: string) => {
     // 调用后端 API 获取图片
     const token = localStorage.getItem('token')
     const response = await fetch(
-      `/api/v1/books/${props.bookId}/preview-image?filename=${encodeURIComponent(imagePath)}`,
+      buildApiUrl(`/books/${props.bookId}/preview-image?filename=${encodeURIComponent(imagePath)}`),
       {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       }
@@ -766,7 +767,7 @@ const onImageFileSelected = async (event: Event) => {
 
     // 调用后端 API 上传图片
     const response = await fetch(
-      `/api/v1/books/${props.bookId}/upload-image`,
+      buildApiUrl(`/books/${props.bookId}/upload-image`),
       {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},

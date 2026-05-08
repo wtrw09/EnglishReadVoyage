@@ -36,7 +36,7 @@
           <div class="cover-container">
             <img
               v-if="currentBook?.book_cover"
-              :src="currentBook.book_cover"
+              :src="buildStaticUrl(currentBook.book_cover)"
               class="book-cover"
               alt="书籍封面"
               loading="lazy"
@@ -56,7 +56,7 @@
               </span>
               <span v-else-if="sleepTimerType === 'episode'">还剩{{ episodesToPlay }}集</span>
             </p>
-            <p v-if="isBilingualMode && currentBookTotalDuration > 0" class="read-mode-display">
+            <p v-if="isBilingualMode && hasChineseAudio && currentBookTotalDuration > 0" class="read-mode-display">
               <i class="fas fa-volume-up"></i>
               <span>{{ getCurrentModeDisplay() }}</span>
             </p>
@@ -109,11 +109,10 @@
             <div class="control-btn" @click="nextBook">
               <i class="fas fa-chevron-right"></i>
             </div>
-            <!-- 中英文对照模式按钮 -->
+            <!-- 中英文对照模式按钮：始终可见（无中文音频时点击仍可打开对话框查看提示） -->
             <div
-              v-if="hasChineseAudio"
               class="control-btn"
-              :class="{ 'active': isBilingualMode }"
+              :class="{ 'active': isBilingualMode && hasChineseAudio }"
               @click="toggleBilingualMode"
               title="中英文对照"
             >
@@ -303,7 +302,7 @@
                 />
                 <img
                   v-if="book.cover_path"
-                  :src="book.cover_path"
+                  :src="buildStaticUrl(book.cover_path)"
                   class="book-thumb"
                   loading="lazy"
                   decoding="async"
@@ -329,6 +328,7 @@
       :current-preset-id="userReadConfig.presetId"
       :current-segments="userReadConfig.segments"
       :missing-zh-count="missingZhCount"
+      :has-chinese-audio="hasChineseAudio"
       @confirm="handleBilingualModeConfirm"
     />
 
@@ -408,14 +408,6 @@
         </div>
       </div>
     </van-popup>
-
-    <!-- 音频元素 -->
-    <audio
-      ref="audioPlayer"
-      @ended="handleAudioEnded"
-      @error="handleAudioError"
-      @timeupdate="handleTimeUpdate"
-    ></audio>
   </div>
 </template>
 
@@ -426,8 +418,15 @@ import {
   showToast,
   showConfirmDialog
 } from 'vant'
-import { showErrorDialog, showWarningDialog } from '@/utils/message'
+import { showErrorDialog } from '@/utils/message'
 import { api } from '@/store/auth'
+import { buildStaticUrl } from '@/utils/apiBase'
+import {
+  createPlaylistPlayer,
+  buildBilingualPlaylist,
+  type PlaylistPlayer,
+  type BilingualSegmentConfig
+} from '@/utils/nativeAudio'
 import Playlist from '@/components/Playlist.vue'
 import BilingualModeDialog from '@/components/BilingualModeDialog.vue'
 
@@ -531,6 +530,9 @@ const currentSegmentIndex = ref(0)
 // 当前段的重复计数
 const currentSegmentRepeat = ref(0)
 
+// 标记是否正在切换书籍（用于 prev/next/playBookAtIndex 切书时屏蔽瞬时 error toast）
+const isSwitchingBook = ref(false)
+
 // 定时器设置
 const lastTimerMinutes = ref(30) // 上次定时分钟数
 const lastTimerEnabled = ref(false)
@@ -567,8 +569,11 @@ const filteredAvailableBooks = computed(() => {
   })).filter(group => group.books.length > 0)
 })
 
-// 音频播放器引用
-const audioPlayer = ref<HTMLAudioElement | null>(null)
+// 音频播放器（PlaylistPlayer 实例，跨端：Web / Capacitor / 鸿蒙桥均适配）
+// manageMediaSession=false：外层自己接管锁屏控件（需要切 prev/nextBook）
+const player: PlaylistPlayer = createPlaylistPlayer({ manageMediaSession: false })
+// 记录当前 player 加载的书籍Id，避免重复 setTracks
+let tracksLoadedForBookId = ''
 
 // 按时间定时选项
 const timeTimerOptions = [
@@ -695,54 +700,11 @@ const formatTime = (seconds: number): string => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 }
 
-// 当前书籍整体进度（已播放音频时长 + 当前音频进度）
-const bookProgressTime = computed(() => {
-  let played = 0
+// 当前播放进度（由 PlaylistPlayer 回调驱动，毫秒）
+const currentGlobalMs = ref(0)
 
-  // 双语模式：使用配置计算时长
-  if (isBilingualMode.value && hasChineseAudio.value) {
-    const config = userReadConfig.value
-    // 累加已播放完的音频时长
-    for (let i = 0; i < currentAudioIndex.value; i++) {
-      played += calculateBilingualDuration(currentBookAudioList.value[i], config)
-    }
-    // 加上当前音频在双语模式下的进度
-    // 需要考虑当前段和重复次数
-    const currentAudioInfo = currentBookAudioList.value[currentAudioIndex.value]
-    if (currentAudioInfo) {
-      // 计算当前段之前的时长
-      let segmentTime = 0
-      for (let segIdx = 0; segIdx < currentSegmentIndex.value; segIdx++) {
-        const segment = config.segments[segIdx]
-        const segDuration = segment.lang === 'en'
-          ? (currentAudioInfo.duration || 0)
-          : (currentAudioInfo.duration_zh || 0)
-        if (segDuration > 0) {
-          segmentTime += segDuration * segment.count
-        }
-      }
-      // 加上当前段的已完成重复的时长
-      const currentSegment = config.segments[currentSegmentIndex.value]
-      if (currentSegment) {
-        const currentSegDuration = currentSegment.lang === 'en'
-          ? (currentAudioInfo.duration || 0)
-          : (currentAudioInfo.duration_zh || 0)
-        segmentTime += currentSegDuration * currentSegmentRepeat.value
-      }
-      // 加上当前播放位置的进度
-      played += segmentTime + currentTime.value
-    }
-  } else {
-    // 普通模式：只使用英文音频时长
-    for (let i = 0; i < currentAudioIndex.value; i++) {
-      played += currentBookAudioList.value[i]?.duration || 0
-    }
-    // 加上当前音频的进度
-    played += currentTime.value
-  }
-
-  return played
-})
+// 当前书籍整体进度（秒，供 slider/时间显示使用）
+const bookProgressTime = computed(() => currentGlobalMs.value / 1000)
 
 // 当前书籍整体进度百分比
 const bookProgressPercent = computed(() => {
@@ -751,35 +713,6 @@ const bookProgressPercent = computed(() => {
   const progressTime = isDragging.value ? seekProgressTime.value : bookProgressTime.value
   return Math.min(100, Math.round((progressTime / currentBookTotalDuration.value) * 100))
 })
-
-// 计算单个音频在双语模式下的时长
-const calculateBilingualDuration = (audioInfo: AudioInfo, config: { segments: ReadSegment[] }): number => {
-  let totalSeconds = 0
-
-  for (const segment of config.segments) {
-    const duration = segment.lang === 'en'
-      ? (audioInfo.duration || 0)
-      : (audioInfo.duration_zh || 0)
-
-    if (duration > 0) {
-      totalSeconds += duration * segment.count
-    }
-  }
-
-  return totalSeconds
-}
-
-// 计算整本书在双语模式下的总时长
-const calculateTotalBilingualDuration = (): number => {
-  const config = userReadConfig.value
-  let totalSeconds = 0
-
-  for (const audioInfo of currentBookAudioList.value) {
-    totalSeconds += calculateBilingualDuration(audioInfo, config)
-  }
-
-  return totalSeconds
-}
 
 // 方法
 const checkOrientation = () => {
@@ -821,6 +754,101 @@ const duration = ref(0) // 当前音频总时长（秒）
 const isDragging = ref(false) // 是否正在拖动进度条
 const seekProgressTime = ref(0) // 拖动时的临时进度时间（秒）
 
+// 根据当前书籍音频列表与双语配置重建 playlist tracks
+const rebuildTracksForCurrentBook = (): boolean => {
+  const book = currentBook.value
+  if (!book || currentBookAudioList.value.length === 0) {
+    player.setTracks([])
+    tracksLoadedForBookId = ''
+    return false
+  }
+
+  const items = currentBookAudioList.value.map(a => ({
+    audio_url: buildStaticUrl(a.audio_url),
+    audio_url_zh: a.audio_url_zh ? buildStaticUrl(a.audio_url_zh) : undefined,
+    duration: a.duration,
+    duration_zh: a.duration_zh,
+    text_hash: a.text_hash,
+    bookId: book.book_id
+  }))
+
+  // 统一走 buildBilingualPlaylist，保证时长累加口径一致：
+  //   - 未启用双语：config=undefined -> 默认每句英文×1
+  //   - 启用双语 + 有中文：按用户原配置
+  //   - 启用双语 + 无中文：将中文段 count 置 0（buildBilingualPlaylist 会跳过），
+  //     英文段保持用户配置的重复次数 -> 总时长 = 英文时长 × 英文count × 句数
+  let effectiveConfig: BilingualSegmentConfig | undefined
+  if (isBilingualMode.value) {
+    if (hasChineseAudio.value) {
+      effectiveConfig = userReadConfig.value
+    } else {
+      effectiveConfig = {
+        segments: userReadConfig.value.segments.map(s =>
+          s.lang === 'zh' ? { ...s, count: 0 } : { ...s }
+        )
+      }
+    }
+  }
+
+  const tracks = buildBilingualPlaylist(items, effectiveConfig)
+
+  player.setTracks(tracks)
+  tracksLoadedForBookId = book.book_id
+  return tracks.length > 0
+}
+
+// 前端兜底：若后端返回的 duration 有缺失，先并发探测每段音频的真实时长再 rebuild，
+// 避免 rebuildTracksForCurrentBook 用 0 构造 timeline 导致"总时长=0、播一句涨一点"。
+const probeAudioDuration = (url: string, timeoutMs = 3000): Promise<number> => {
+  return new Promise((resolve) => {
+    if (!url) { resolve(0); return }
+    const el = document.createElement('audio')
+    el.preload = 'metadata'
+    let done = false
+    const finish = (d: number) => {
+      if (done) return
+      done = true
+      el.src = ''
+      try { el.remove() } catch { /* ignore */ }
+      resolve(Number.isFinite(d) && d > 0 ? d : 0)
+    }
+    el.addEventListener('loadedmetadata', () => finish(el.duration))
+    el.addEventListener('error', () => finish(0))
+    el.src = url
+    setTimeout(() => finish(0), timeoutMs)
+  })
+}
+
+const fillMissingDurationsFallback = async (list: AudioInfo[]): Promise<boolean> => {
+  // 最多并发 6 个探测请求，避免小书一次性发太多
+  const tasks: Array<() => Promise<void>> = []
+  let patched = false
+  for (const a of list) {
+    if ((!a.duration || a.duration <= 0) && a.audio_url) {
+      tasks.push(async () => {
+        const sec = await probeAudioDuration(buildStaticUrl(a.audio_url))
+        if (sec > 0) { a.duration = sec; patched = true }
+      })
+    }
+    if ((!a.duration_zh || a.duration_zh <= 0) && a.audio_url_zh) {
+      tasks.push(async () => {
+        const sec = await probeAudioDuration(buildStaticUrl(a.audio_url_zh))
+        if (sec > 0) { a.duration_zh = sec; patched = true }
+      })
+    }
+  }
+  const CONCURRENCY = 6
+  let idx = 0
+  const workers = Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, async () => {
+    while (idx < tasks.length) {
+      const i = idx++
+      try { await tasks[i]() } catch { /* ignore */ }
+    }
+  })
+  await Promise.all(workers)
+  return patched
+}
+
 // 加载书籍音频信息
 const loadBookAudioInfo = async (bookId: string) => {
   try {
@@ -828,15 +856,6 @@ const loadBookAudioInfo = async (bookId: string) => {
     currentBookAudioList.value = res.data.audio_list
     totalAudioFiles.value = res.data.total
     hasChineseAudio.value = res.data.has_chinese || false
-
-    // 根据是否启用双语模式计算总时长
-    if (isBilingualMode.value && hasChineseAudio.value) {
-      currentBookTotalDuration.value = calculateTotalBilingualDuration()
-    } else {
-      // 普通模式：优先使用中文时长，如果没有则用后端返回的总时长
-      // 后端返回的 total_duration 已经是优先使用中文时长的值
-      currentBookTotalDuration.value = res.data.total_duration || 0
-    }
 
     // 检查缺少中文音频的数量
     if (res.data.audio_list && res.data.audio_list.length > 0) {
@@ -848,18 +867,30 @@ const loadBookAudioInfo = async (bookId: string) => {
     }
 
     // 如果没有中文音频且用户没有主动启用双语模式，则关闭双语模式
-    // 用户主动启用后，保留设置，即使切换到没有中文音频的书
     if (!hasChineseAudio.value && !userEnabledBilingual.value) {
       isBilingualMode.value = false
     }
+
     currentAudioIndex.value = 0
     currentTime.value = 0
     duration.value = 0
-    seekProgressTime.value = 0  // 重置进度条位置
-
-    // 重置朗读段索引
+    seekProgressTime.value = 0
+    currentGlobalMs.value = 0
     currentSegmentIndex.value = 0
     currentSegmentRepeat.value = 0
+
+    // 兜底：如果后端返回了 duration 缺失的句子，先并发探测真实时长补齐，再 rebuild
+    const needFallback = currentBookAudioList.value.some(
+      a => (a.audio_url && (!a.duration || a.duration <= 0)) ||
+           (a.audio_url_zh && (!a.duration_zh || a.duration_zh <= 0))
+    )
+    if (needFallback) {
+      await fillMissingDurationsFallback(currentBookAudioList.value)
+    }
+
+    // 重建 tracks（setTracks 同步 emit timelineupdate → 回调会立即更新 currentBookTotalDuration，
+    // 后端 total_duration 不考虑用户朗读配置（英文×n），不要拿来做备胎，否则会覆盖正确值）
+    rebuildTracksForCurrentBook()
   } catch (error) {
     console.error('加载音频信息失败:', error)
     currentBookAudioList.value = []
@@ -868,6 +899,8 @@ const loadBookAudioInfo = async (bookId: string) => {
     currentTime.value = 0
     duration.value = 0
     missingZhCount.value = 0
+    player.setTracks([])
+    tracksLoadedForBookId = ''
   }
 }
 
@@ -934,7 +967,7 @@ const closeAudioCheck = () => {
 }
 
 const playAudio = async () => {
-  if (!audioPlayer.value || !currentBook.value) return
+  if (!currentBook.value) return
 
   // 检查是否有音频文件
   if (currentBookAudioList.value.length === 0) {
@@ -943,144 +976,26 @@ const playAudio = async () => {
   }
 
   try {
-    // 获取当前音频信息
-    const audioInfo = currentBookAudioList.value[currentAudioIndex.value]
-    if (!audioInfo) return
+    // 无中文音频降级由 rebuildTracksForCurrentBook 统一处理（中文段 count 置 0 跳过，
+    // 保留英文段重复次数），playAudio 不再干预 isBilingualMode 状态。
 
-    // 中英文对照模式：根据配置播放
-    if (isBilingualMode.value) {
-      // 检查配置中是否有需要中文的段
-      const config = userReadConfig.value
-      const needsChinese = config.segments.some(s => s.lang === 'zh')
-
-      // 如果需要中文但没有中文音频，提醒用户并切换到仅英文
-      if (needsChinese && !hasChineseAudio.value) {
-        showWarningDialog('当前书籍没有中文音频，已切换到仅英文模式')
-        isBilingualMode.value = false
-        // 使用普通模式播放
-        audioPlayer.value.src = audioInfo.audio_url
-        audioPlayer.value.onended = null
-        await audioPlayer.value.play()
-        isPlaying.value = true
-        return
-      }
-
-      // 重置段索引，确保从第一个段开始
-      currentSegmentIndex.value = 0
-      currentSegmentRepeat.value = 0
-      // 清除之前的 onended 回调
-      audioPlayer.value.onended = null
-      // 设置播放状态
-      isPlaying.value = true
-      await playBilingualAudio(audioInfo)
-    } else {
-      // 普通模式：只播放英文
-      audioPlayer.value.src = audioInfo.audio_url
-      audioPlayer.value.onended = null // 清除之前的onended
-      await audioPlayer.value.play()
-      isPlaying.value = true
+    // 如果当前 player 的 tracks 不是本书，重建
+    if (tracksLoadedForBookId !== currentBook.value.book_id) {
+      rebuildTracksForCurrentBook()
     }
+
+    isPlaying.value = true
+    await player.play()
   } catch (error) {
     console.error('播放失败:', error)
     showErrorDialog('播放失败')
-  }
-}
-
-// 根据朗读模式配置播放音频
-const playBilingualAudio = async (audioInfo: AudioInfo) => {
-  // 如果当前不在播放状态，直接返回
-  if (!isPlaying.value) return
-
-  const config = userReadConfig.value
-
-  // 如果是第一次播放或重新开始一个新句子，重置段索引
-  if (currentSegmentIndex.value === 0 && currentSegmentRepeat.value === 0) {
-    // 查找第一个有音频的段
-    while (currentSegmentIndex.value < config.segments.length) {
-      const segment = config.segments[currentSegmentIndex.value]
-      const hasAudio = segment.lang === 'en' ? audioInfo.audio_url : audioInfo.audio_url_zh
-      if (hasAudio) {
-        break // 找到有音频的段
-      }
-      currentSegmentIndex.value++ // 跳过没有音频的段
-    }
-  }
-
-  // 检查是否还有段需要播放
-  if (currentSegmentIndex.value >= config.segments.length) {
-    // 当前句子播放完毕，移动到下一句
-    handleAudioEnded()
-    return
-  }
-
-  const segment = config.segments[currentSegmentIndex.value]
-  // 获取对应语言的音频URL
-  const audioUrl = segment.lang === 'en' ? audioInfo.audio_url : audioInfo.audio_url_zh
-
-  // 如果该语言音频不存在，跳过
-  if (!audioUrl) {
-    // 移动到下一个段
-    currentSegmentIndex.value++
-    currentSegmentRepeat.value = 0
-    // 继续播放下一段
-    await playBilingualAudio(audioInfo)
-    return
-  }
-
-  // 播放当前段
-  if (!audioPlayer.value) return
-
-  // 清除之前的 onended 和 onloadedmetadata 回调，防止冲突
-  audioPlayer.value.onended = null
-  audioPlayer.value.onloadedmetadata = null
-
-  // 重置播放时间，防止切换音频源时从之前的位置开始播放
-  audioPlayer.value.currentTime = 0
-  audioPlayer.value.src = audioUrl
-  isPlaying.value = true
-
-  try {
-    await audioPlayer.value.play()
-  } catch (playError: unknown) {
-    // 忽略 AbortError（播放被中断）和常见的播放错误
-    const error = playError as Error
-    if (error.name === 'AbortError') {
-      return
-    }
-    console.error('播放失败:', playError)
-    // 播放失败时继续下一段
-    currentSegmentIndex.value++
-    currentSegmentRepeat.value = 0
-    await playBilingualAudio(audioInfo)
-    return
-  }
-
-  // 设置播放结束后的处理
-  audioPlayer.value.onended = async () => {
-    // 再次检查播放状态
-    if (!isPlaying.value) return
-
-    currentSegmentRepeat.value++
-
-    // 检查当前段是否还需要重复
-    if (currentSegmentRepeat.value < segment.count) {
-      // 继续播放当前段的重复
-      await playBilingualAudio(audioInfo)
-    } else {
-      // 当前段播放完毕，移动到下一个段
-      currentSegmentIndex.value++
-      currentSegmentRepeat.value = 0
-      // 继续播放下一段
-      await playBilingualAudio(audioInfo)
-    }
+    isPlaying.value = false
   }
 }
 
 const pauseAudio = () => {
-  if (audioPlayer.value) {
-    audioPlayer.value.pause()
-    isPlaying.value = false
-  }
+  player.pause()
+  isPlaying.value = false
 }
 
 // 切换书籍
@@ -1092,11 +1007,8 @@ const prevBook = async () => {
       const wasPlaying = isPlaying.value
       // 标记正在切换书籍，避免显示错误提示
       isSwitchingBook.value = true
-      // 先停止当前播放
-      if (audioPlayer.value) {
-        audioPlayer.value.pause()
-        audioPlayer.value.src = ''
-      }
+      // 先停止当前播放（player 会在 setTracks 时清理旧 track）
+      player.pause()
       isPlaying.value = false
 
       currentBookIndex.value = res.data.index
@@ -1126,11 +1038,8 @@ const nextBook = async () => {
       const wasPlaying = isPlaying.value
       // 标记正在切换书籍，避免显示错误提示
       isSwitchingBook.value = true
-      // 先停止当前播放
-      if (audioPlayer.value) {
-        audioPlayer.value.pause()
-        audioPlayer.value.src = ''
-      }
+      // 先停止当前播放（player 会在 setTracks 时清理旧 track）
+      player.pause()
       isPlaying.value = false
 
       currentBookIndex.value = res.data.index
@@ -1171,11 +1080,8 @@ const playBookAtIndex = async (index: number) => {
 
   // 标记正在切换书籍，避免显示错误提示
   isSwitchingBook.value = true
-  // 先停止当前播放
-  if (audioPlayer.value) {
-    audioPlayer.value.pause()
-    audioPlayer.value.src = ''
-  }
+  // 先停止当前播放（player 会在 setTracks 时清理旧 track）
+  player.pause()
   isPlaying.value = false
 
   currentBookIndex.value = index
@@ -1236,20 +1142,19 @@ const handleBilingualModeConfirm = (presetId: string, segments: ReadSegment[]) =
   saveReadConfig()
   
   // 重置播放状态，从头开始
-  if (audioPlayer.value) {
-    audioPlayer.value.pause()
-  }
+  player.pause()
   isPlaying.value = false
   currentAudioIndex.value = 0
   currentTime.value = 0
+  currentGlobalMs.value = 0
   currentSegmentIndex.value = 0
   currentSegmentRepeat.value = 0
-  
-  // 重新计算总时长
+
+  // 朗读模式变更 → 重建 tracks（timelineupdate 事件会同步更新总时长）
   if (currentBookAudioList.value.length > 0) {
-    currentBookTotalDuration.value = calculateTotalBilingualDuration()
+    rebuildTracksForCurrentBook()
   }
-  
+
   showToast(`已启用朗读模式: ${getPresetName(presetId)}`)
 }
 
@@ -1400,23 +1305,10 @@ watch(showCustomTimer, (show) => {
   }
 })
 
-// 监听双语模式或朗读配置变化，重新计算总时长
-// 注意：handleBilingualModeConfirm 已经处理了重置逻辑，这里只处理配置变化的情况
+// 监听双语模式或朗读配置变化 → 重建 tracks，时长由 timelineupdate 事件自动同步
 watch([isBilingualMode, userReadConfig], () => {
   if (currentBookAudioList.value.length > 0) {
-    if (isBilingualMode.value && hasChineseAudio.value) {
-      currentBookTotalDuration.value = calculateTotalBilingualDuration()
-    } else {
-      // 恢复到普通模式时长：优先使用中文时长，如果没有则用英文时长
-      currentBookTotalDuration.value = currentBookAudioList.value.reduce(
-        (sum, audio) => {
-          const durationZh = audio.duration_zh || 0
-          const durationEn = audio.duration || 0
-          return sum + (durationZh > 0 ? durationZh : durationEn)
-        }, 0
-      )
-    }
-    // 注意：不在这里重置播放状态，由调用方负责重置
+    rebuildTracksForCurrentBook()
   }
 }, { deep: true })
 
@@ -1553,274 +1445,81 @@ const addSelectedBooks = async () => {
   }
 }
 
-// 音频事件处理
+// 音频事件处理（响应 player 的 ended 事件 → 整本书 playlist 播完）
 const handleAudioEnded = () => {
-  // 双语模式下，段切换由 playBilingualAudio 内部的 onended 回调处理
-  // 模板的 @ended 事件也会触发这个函数，这里需要区分处理
-  if (isBilingualMode.value) {
-    // 检查是否所有段都已播放完毕
-    const config = userReadConfig.value
-    if (currentSegmentIndex.value >= config.segments.length) {
-      // 所有段播放完毕，重置索引，准备播放下一句
-      currentSegmentIndex.value = 0
-      currentSegmentRepeat.value = 0
-      currentTime.value = 0
-      duration.value = 0
-
-      // 继续播放下一个音频
-      if (currentAudioIndex.value < currentBookAudioList.value.length - 1) {
-        currentAudioIndex.value++
-        playAudio()
-      } else {
-        // 当前书籍播放完毕
-        if (playlist.value.play_mode === 'single') {
-          currentAudioIndex.value = 0
-          playAudio()
-        } else {
-          nextBook()
-        }
-      }
-    }
-    // 如果还有段没播放完，不做任何处理（由 onended 回调处理）
-    return
-  }
-
-  // 重置当前音频进度
+  // 重置本书内局部索引
   currentTime.value = 0
   duration.value = 0
-
-  // 重置朗读段索引（双语模式）
+  currentAudioIndex.value = 0
   currentSegmentIndex.value = 0
   currentSegmentRepeat.value = 0
+  currentGlobalMs.value = 0
 
-  // 检查按集数定时 - 播完整本书籍才算一集
+  // 按集数定时：播完整本书算一集
   if (sleepTimerType.value === 'episode' && episodesToPlay.value > 0) {
-    // 如果当前书籍还有未播放的音频，继续播放
-    if (currentAudioIndex.value < currentBookAudioList.value.length - 1) {
-      currentAudioIndex.value++
-      playAudio()
-      return
-    }
-    // 当前书籍播放完毕，集数减一
     episodesToPlay.value--
     if (episodesToPlay.value <= 0) {
       executeSleepTimer()
       return
     }
-    // 还有剩余集数，切换到下一本书继续播放
     nextBook()
     return
   }
 
-  // 检查按时间定时 + 播完整集选项
+  // 按时间定时 + 播完整集：到点后等本集结束再停
   if (sleepTimerType.value === 'time' && finishCurrentEnabled.value && sleepTimerInterval.value === null) {
-    // 定时时间已到，且播完整集选项开启，现在停止
     executeSleepTimer()
     return
   }
 
-  // 当前音频播放完毕，播放下一个音频或书籍
-  if (currentAudioIndex.value < currentBookAudioList.value.length - 1) {
-    currentAudioIndex.value++
-    playAudio()
+  // 本书播完：单曲循环 → 重播本书；否则下一本
+  if (playlist.value.play_mode === 'single') {
+    // 本书已播到末尾，player.currentIndex 停在最后一个 track
+    // 必须先 seekToTrack(0, 0) 回到头部再 play()，否则 audio.play() 将从 duration 处启动会立即再次 ended
+    void (async () => {
+      try {
+        await player.seekToTrack(0, 0)
+        await player.play()
+      } catch (e) {
+        console.error('单曲循环重播失败:', e)
+      }
+    })()
   } else {
-    // 当前书籍的所有音频播放完毕
-    if (playlist.value.play_mode === 'single') {
-      // 单曲循环：从头重播当前书籍
-      currentAudioIndex.value = 0
-      playAudio()
-    } else {
-      // 顺序/随机模式：切换到下一本书
-      nextBook()
-    }
+    nextBook()
   }
 }
 
-// 标记是否正在切换书籍（用于避免显示切换时的错误提示）
-const isSwitchingBook = ref(false)
+// 已在文件顶部声明了 isSwitchingBook（用于 prev/next/playBookAtIndex 切书时屏蔽 error toast）
 
-const handleAudioError = (e: Event) => {
-  // 如果正在切换书籍，不显示错误（src被重置会触发error）
-  if (isSwitchingBook.value) {
-    return
-  }
-  // 检查是否真的加载失败（有src且不是当前页面URL）
-  const target = e.target as HTMLAudioElement
-  if (target.src && !target.src.includes(window.location.host)) {
-    showErrorDialog('音频加载失败')
-    isPlaying.value = false
-  }
-}
-
-const handleTimeUpdate = () => {
-  if (audioPlayer.value && !isDragging.value) {
-    currentTime.value = audioPlayer.value.currentTime || 0
-    duration.value = audioPlayer.value.duration || 0
-  }
-}
-
-// 拖动开始 - 暂停播放和时间更新，初始化拖动位置
+// 拖动开始 - 进入拖动状态，初始化拖动位置
+// 拖动期间允许 player 继续播放，由 progress 事件的 isDragging 分支避免覆盖 seekProgressTime
 const onSeekStart = () => {
-  // 防止重复触发
   if (isDragging.value) return
-  
   isDragging.value = true
   seekProgressTime.value = bookProgressTime.value
-  // 暂停当前播放
-  if (audioPlayer.value && isPlaying.value) {
-    audioPlayer.value.pause()
-    // 注意：不设置 isPlaying.value = false，保持 wasPlaying 的正确性
-  }
 }
 
 // 滑块值更新时触发（拖动过程中或点击轨道时）
 const onSliderUpdate = (value: number) => {
-  // 如果还没进入拖动状态，先进入拖动状态（处理事件顺序问题）
   if (!isDragging.value) {
     isDragging.value = true
     seekProgressTime.value = bookProgressTime.value
-    // 暂停当前播放
-    if (audioPlayer.value && isPlaying.value) {
-      audioPlayer.value.pause()
-    }
   }
-  // 更新进度值
   seekProgressTime.value = value
 }
 
 // 根据书籍进度时间跳转到对应位置
+// 由 PlaylistPlayer 内部统一按全局毫秒时间轴定位，自动跨 track 定位
 const seekToBookPosition = async (targetTime: number) => {
-  if (!currentBookAudioList.value.length || !audioPlayer.value) return
-
-  const config = userReadConfig.value
-  const isBilingual = isBilingualMode.value && hasChineseAudio.value
-
-  // 记录是否之前在播放
-  const wasPlaying = isPlaying.value
-
-  // 计算每个句子的累计时长，找到目标位置
-  let accumulatedTime = 0
-  let targetAudioIndex = 0
-  let targetTimeInAudio = 0
-
-  for (let i = 0; i < currentBookAudioList.value.length; i++) {
-    const audioInfo = currentBookAudioList.value[i]
-    const audioDuration = isBilingual
-      ? calculateBilingualDuration(audioInfo, config)
-      : (audioInfo.duration || 0)
-
-    if (accumulatedTime + audioDuration > targetTime) {
-      // 目标位置在这个音频内
-      targetAudioIndex = i
-      targetTimeInAudio = targetTime - accumulatedTime
-      break
-    }
-    accumulatedTime += audioDuration
-
-    // 如果循环结束还没找到，说明目标是最后一首
-    if (i === currentBookAudioList.value.length - 1) {
-      targetAudioIndex = i
-      targetTimeInAudio = audioDuration
-    }
-  }
-
-  // 检查是否需要切换到其他音频
-  if (targetAudioIndex !== currentAudioIndex.value) {
-    // 暂停当前播放
-    audioPlayer.value.pause()
-    isPlaying.value = false
-
-    // 切换到目标音频
-    currentAudioIndex.value = targetAudioIndex
-    const targetAudioInfo = currentBookAudioList.value[targetAudioIndex]
-
-    // 重置双语模式状态
-    currentSegmentIndex.value = 0
-    currentSegmentRepeat.value = 0
-
-    // 设置新的音频源并跳转
-    if (isBilingual) {
-      // 双语模式：需要计算目标时间落在哪个段
-      let segmentAccumulatedTime = 0
-      let targetSegmentIndex = 0
-      let targetTimeInSegment = 0
-
-      for (let segIdx = 0; segIdx < config.segments.length; segIdx++) {
-        const segment = config.segments[segIdx]
-        const segDuration = segment.lang === 'en'
-          ? (targetAudioInfo.duration || 0)
-          : (targetAudioInfo.duration_zh || 0)
-        const segTotalTime = segDuration * segment.count
-
-        if (segmentAccumulatedTime + segTotalTime > targetTimeInAudio) {
-          // 目标时间在这个段内
-          targetSegmentIndex = segIdx
-          targetTimeInSegment = targetTimeInAudio - segmentAccumulatedTime
-          // 计算是该段的第几次重复
-          const repeatIndex = Math.floor(targetTimeInSegment / segDuration)
-          targetTimeInSegment = targetTimeInSegment % segDuration
-          currentSegmentRepeat.value = repeatIndex
-          break
-        }
-        segmentAccumulatedTime += segTotalTime
-      }
-
-      currentSegmentIndex.value = targetSegmentIndex
-      const segment = config.segments[targetSegmentIndex]
-      const audioUrl = segment.lang === 'en' ? targetAudioInfo.audio_url : targetAudioInfo.audio_url_zh
-
-      if (audioUrl) {
-        // 重置 currentTime 防止从之前位置播放
-        audioPlayer.value.currentTime = 0
-        audioPlayer.value.src = audioUrl
-        // 等待加载后跳转并播放
-        const handleLoaded = () => {
-          if (audioPlayer.value) {
-            audioPlayer.value.currentTime = Math.min(targetTimeInSegment, audioPlayer.value.duration || 0)
-            if (wasPlaying) {
-              audioPlayer.value.play()
-              isPlaying.value = true
-            }
-          }
-        }
-        // 如果已经加载过，直接执行
-        if (audioPlayer.value.readyState >= 1) {
-          handleLoaded()
-        } else {
-          audioPlayer.value.onloadedmetadata = handleLoaded
-        }
-      }
-    } else {
-      // 普通模式
-      // 重置 currentTime 防止从之前位置播放
-      audioPlayer.value.currentTime = 0
-      audioPlayer.value.src = targetAudioInfo.audio_url
-      // 等待加载后跳转并播放
-      const handleLoaded = () => {
-        if (audioPlayer.value) {
-          audioPlayer.value.currentTime = Math.min(targetTimeInAudio, audioPlayer.value.duration)
-          if (wasPlaying) {
-            audioPlayer.value.play()
-            isPlaying.value = true
-          }
-        }
-      }
-      // 如果已经加载过，直接执行
-      if (audioPlayer.value.readyState >= 1) {
-        handleLoaded()
-      } else {
-        audioPlayer.value.onloadedmetadata = handleLoaded
-      }
-    }
-  } else {
-    // 在同一音频内跳转
-    if (audioPlayer.value.duration && targetTimeInAudio <= audioPlayer.value.duration) {
-      audioPlayer.value.currentTime = targetTimeInAudio
-      // 如果之前在播放，继续播放
-      if (wasPlaying) {
-        audioPlayer.value.play()
-      }
-    }
+  if (!currentBookAudioList.value.length) return
+  const safeTime = Math.max(0, targetTime)
+  const totalMs = player.getTotalDurationMs()
+  const targetMs = totalMs > 0 ? Math.min(Math.round(safeTime * 1000), totalMs) : Math.round(safeTime * 1000)
+  currentGlobalMs.value = targetMs
+  try {
+    await player.seekGlobal(targetMs)
+  } catch (err) {
+    console.error('seek 失败:', err)
   }
 }
 
@@ -1856,17 +1555,99 @@ watch(currentBook, async (newBook: PlaylistItem | null) => {
 onMounted(() => {
   checkOrientation()
   window.addEventListener('resize', checkOrientation)
-  // 先加载播放列表，再恢复双语模式设置
-  loadPlaylist().then(() => {
-    loadSavedReadConfig()
+  setupMediaSession()
+  // 绑定 PlaylistPlayer 事件
+  player.on('progress', ({ globalMs }) => {
+    if (!isDragging.value) currentGlobalMs.value = globalMs
   })
+  player.on('timelineupdate', ({ totalMs }) => {
+    currentBookTotalDuration.value = Math.max(0, totalMs / 1000)
+  })
+  player.on('trackchange', ({ index }) => {
+    // 保留 currentAudioIndex 跟随底层 track 变化（仅在非双语模式下高度一致，双语模式下有序推进也合理）
+    currentAudioIndex.value = Math.max(0, index)
+  })
+  player.on('ended', ({ completed }) => {
+    if (completed) handleAudioEnded()
+  })
+  player.on('state', (state) => {
+    if (state === 'playing') isPlaying.value = true
+    else if (state === 'paused' || state === 'stopped') isPlaying.value = false
+  })
+  player.on('error', ({ message }) => {
+    if (isSwitchingBook.value) return
+    console.error('播放器错误:', message)
+    showErrorDialog('音频加载失败: ' + (message || '未知错误'))
+    isPlaying.value = false
+  })
+  // 先恢复用户双语配置（仅读 localStorage + 改 ref，此时 currentBookAudioList 为空，watch 被守卫拦住），
+  // 再加载播放列表 → loadBookAudioInfo 里的 rebuildTracksForCurrentBook 将从第一次就用正确配置，避免重复 rebuild
+  loadSavedReadConfig()
+  loadPlaylist()
   loadAvailableBooks()
+})
+
+// MediaSession API：在 Android Capacitor WebView 中提供锁屏/通知栏控件
+function setupMediaSession() {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+  try {
+    const mediaSession = (navigator as any).mediaSession
+    mediaSession.setActionHandler('play', () => {
+      if (!isPlaying.value) togglePlay()
+    })
+    mediaSession.setActionHandler('pause', () => {
+      if (isPlaying.value) togglePlay()
+    })
+    mediaSession.setActionHandler('previoustrack', () => { prevBook() })
+    mediaSession.setActionHandler('nexttrack', () => { nextBook() })
+  } catch (e) {
+    // 不支持时静默忽略
+  }
+}
+
+// 更新锁屏/通知栏展示的元数据
+function updateMediaMetadata() {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+  const MediaMetadataCtor = (window as any).MediaMetadata
+  if (!MediaMetadataCtor) return
+  const book = currentBook.value
+  if (!book) return
+  try {
+    const cover = book.book_cover ? buildStaticUrl(book.book_cover) : ''
+    ;(navigator as any).mediaSession.metadata = new MediaMetadataCtor({
+      title: book.book_title || '',
+      artist: 'EnglishReadVoyage',
+      album: book.book_title || '',
+      artwork: cover ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : []
+    })
+  } catch (e) {
+    // 忽略
+  }
+}
+
+// 当当前书籍变化时同步元数据
+watch(currentBook, () => {
+  updateMediaMetadata()
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', checkOrientation)
   clearSleepTimer()
-  pauseAudio()
+  // 清理 MediaSession 全局 handler，避免组件卸载后锁屏键还能回调到旧实例
+  if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    try {
+      const ms: any = (navigator as any).mediaSession
+      ;['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekbackward', 'seekforward'].forEach(action => {
+        try { ms.setActionHandler(action, null) } catch { /* 部分 action 不支持时忽略 */ }
+      })
+      try { ms.metadata = null } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  }
+  try {
+    player.destroy()
+  } catch (e) {
+    // 忽略
+  }
 })
 </script>
 
@@ -1970,7 +1751,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start; // 改为顶部对齐，避免内容过多时挤压下方
+  justify-content: center;
   padding: 12px 16px;
   overflow-y: auto; // 允许垂直滚动
   min-height: 0;

@@ -25,6 +25,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '@/store/auth'
+import { buildStaticUrl } from '@/utils/apiBase'
 
 interface Props {
   word: string
@@ -99,7 +100,7 @@ const fetchPronunciation = async () => {
 // 播放音频
 const playAudio = () => {
   if (!audioUrl.value) return
-  const audio = new Audio(audioUrl.value)
+  const audio = new Audio(buildStaticUrl(audioUrl.value))
   isPlaying.value = true
 
   audio.addEventListener('ended', () => {

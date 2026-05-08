@@ -158,14 +158,14 @@
       <template v-else>
         <van-cell title="Learner's Dictionary">
           <template #value>
-            <van-icon name="success" color="#07c160" />
+            <i class="fas fa-check" style="color: #07c160;"></i>
             <span style="margin-left: 4px; color: #07c160;">已配置</span>
           </template>
         </van-cell>
         <van-cell title="Thesaurus">
           <template #value>
             <span v-if="merriamWebsterHasThesaurus">
-              <van-icon name="success" color="#07c160" />
+              <i class="fas fa-check" style="color: #07c160;"></i>
               <span style="margin-left: 4px; color: #07c160;">已配置</span>
             </span>
             <span v-else style="color: #969799;">未配置</span>

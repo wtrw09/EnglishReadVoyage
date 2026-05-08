@@ -403,6 +403,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { api } from '@/store/auth'
+import { buildStaticUrl } from '@/utils/apiBase'
 
 interface VocabularyItem {
   id: number
@@ -516,7 +517,7 @@ const speakWord = async () => {
     const res = await api.get<{ audio_url: string | null }>(`/pronunciation/${encodeURIComponent(selectedWord.value.word)}?accent=${accent}`)
     
     if (res.data.audio_url) {
-      currentWordAudio = new Audio(res.data.audio_url)
+      currentWordAudio = new Audio(buildStaticUrl(res.data.audio_url))
       currentWordAudio.play()
       currentWordAudio.onended = () => {
         isSpeaking.value = false

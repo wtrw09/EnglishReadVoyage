@@ -605,7 +605,10 @@ function createHarmonyPlaylistPlayer(): PlaylistPlayer {
   function setTracks(tracks: PlaylistTrack[]): void {
     timeline = buildTimeline(tracks)
     currentIndex = -1
-    try { H.setPlaylist && H.setPlaylist(timeline) } catch { /* ignore */ }
+    if (timeline.length > 0) {
+      console.log('[HarmonyAudio] setTracks first url:', timeline[0].url)
+    }
+    try { H.setPlaylist && H.setPlaylist(JSON.stringify(timeline)) } catch { /* ignore */ }
     emit('timelineupdate', { timeline: timeline.slice(), totalMs: totalMs() })
   }
 
@@ -627,12 +630,12 @@ function createHarmonyPlaylistPlayer(): PlaylistPlayer {
     pause: () => { call('pause') },
     resume: () => call('resume'),
     stop: () => { call('stop') },
-    seekGlobal: (ms: number) => call('seekGlobal', Math.max(0, Math.round(ms))),
-    seekLocal: (ms: number) => call('seekLocal', Math.max(0, Math.round(ms))),
+    seekGlobal: (ms: number) => call('seekGlobal', JSON.stringify(Math.max(0, Math.round(ms)))),
+    seekLocal: (ms: number) => call('seekLocal', JSON.stringify(Math.max(0, Math.round(ms)))),
     seekToTrack: (index: number, offsetMs: number = 0) =>
-      call('seekToTrack', index, Math.max(0, Math.round(offsetMs))),
-    setRate: (rate: number) => { try { H.setRate && H.setRate(rate) } catch { /* ignore */ } },
-    setMeta: (meta: MediaMeta) => { try { H.setMeta && H.setMeta(meta) } catch { /* ignore */ } },
+      call('seekToTrack', JSON.stringify(index), JSON.stringify(Math.max(0, Math.round(offsetMs)))),
+    setRate: (rate: number) => { try { H.setRate && H.setRate(JSON.stringify(rate)) } catch { /* ignore */ } },
+    setMeta: (meta: MediaMeta) => { try { H.setMeta && H.setMeta(JSON.stringify(meta)) } catch { /* ignore */ } },
     on,
     getTimeline: () => timeline.slice(),
     getTotalDurationMs: totalMs,

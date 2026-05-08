@@ -16,7 +16,7 @@
       left-arrow
       fixed
       placeholder
-            @click-left="!loading && goBack()"
+            @click-left="goBack()"
     >
       <template #right>
         <!-- 播放按钮：始终显示 -->
@@ -216,6 +216,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { showToast, showDialog } from 'vant'
 import md5 from 'blueimp-md5'
 import { api, useAuthStore } from '@/store/auth'
+import { buildStaticUrl } from '@/utils/apiBase'
 import VirtualContent from '@/components/VirtualContent.vue'
 import WordPronunciation from '@/components/WordPronunciation.vue'
 import DictResultPopup from '@/components/DictResultPopup.vue'
@@ -376,6 +377,8 @@ const pages = ref<(string | null)[]>([])  // 页面缓存数组，null表示未�
 const pageLoadStatus = ref<Record<number, 'loading' | 'loaded' | 'error'>>({})
 const totalPages = ref(0)
 const isInitialLoading = ref(true)
+const loadingError = ref(false)
+const bookLoadController = ref<AbortController | null>(null)
 
 // 音频检查相关状态
 const showAudioFixDialog = ref(false)
@@ -394,6 +397,13 @@ const currentPageContent = computed(() => {
   const pageIndex = currentPage.value
   if (pageIndex < pages.value.length && pages.value[pageIndex]) {
     return pages.value[pageIndex]
+  }
+  // 加载出错时显示错误提示
+  if (loadingError.value && !pages.value[pageIndex]) {
+    return '<div class="page-loading"><div style="padding: 40px; text-align: center;">'
+      + '<p style="color: #ee0a24; margin-bottom: 16px;">加载失败</p>'
+      + '<p style="color: #969799; font-size: 13px; margin-bottom: 20px;">无法连接到服务器，请检查服务配置或与管理员联系</p>'
+      + '</div></div>'
   }
   // 如果页面未加载，返回加载占位
   return '<div class="page-loading"><div style="padding: 40px; text-align: center; color: #999;"><span>加载中...</span></div></div>'
@@ -427,7 +437,7 @@ const goBack = () => {
 }
 
 // 加载指定范围的页面
-const loadPages = async (startPage: number, endPage: number) => {
+const loadPages = async (startPage: number, endPage: number, signal?: AbortSignal) => {
   // 过滤掉已加载或正在加载的页面
   const pagesToLoad: number[] = []
   for (let i = startPage; i < endPage; i++) {
@@ -457,7 +467,8 @@ const loadPages = async (startPage: number, endPage: number) => {
         console.log(`Chunk ${i} to ${chunkEnd}`)
         promises.push(
           api.get(`/books/${bookId.value}/pages`, {
-            params: { start_page: i, end_page: chunkEnd, chunk_size: MAX_CHUNK_SIZE }
+            params: { start_page: i, end_page: chunkEnd, chunk_size: MAX_CHUNK_SIZE },
+            signal,
           })
         )
       }
@@ -476,7 +487,7 @@ const loadPages = async (startPage: number, endPage: number) => {
         }
         
         // 修复图片路径并缓存页面
-        const baseUrl = `/books/${data.book_path}`
+        const baseUrl = buildStaticUrl(`/books/${data.book_path}`)
         const newPages = [...pages.value]
         data.pages.forEach((page: string, pageIndex: number) => {
           const actualIndex = data.start_page + pageIndex
@@ -488,7 +499,8 @@ const loadPages = async (startPage: number, endPage: number) => {
     } else {
       // 小范围直接请求
       const res = await api.get(`/books/${bookId.value}/pages`, {
-        params: { start_page: minPage, end_page: maxPage, chunk_size: MAX_CHUNK_SIZE }
+        params: { start_page: minPage, end_page: maxPage, chunk_size: MAX_CHUNK_SIZE },
+        signal,
       })
 
       const data = res.data
@@ -496,7 +508,7 @@ const loadPages = async (startPage: number, endPage: number) => {
       bookTitle.value = data.title
 
       // 修复图片路径并缓存页面
-      const baseUrl = `/books/${data.book_path}`
+      const baseUrl = buildStaticUrl(`/books/${data.book_path}`)
       const newPages = [...pages.value]
       data.pages.forEach((page: string, idx: number) => {
         const pageIndex = data.start_page + idx
@@ -534,6 +546,7 @@ const preloadPages = () => {
 // 跳转到指定页面
 const jumpToPage = async (pageIndex: number) => {
   if (pageIndex < 0 || pageIndex >= totalPages.value) return
+  loadingError.value = false  // 用户主动导航时重置错误状态
 
   // 切换页面时清除恢复播放位置
   lastPlayedSentence.value = null
@@ -640,7 +653,7 @@ const checkBookAudio = async () => {
     // 如果有修复，重新加载句子映射
     if (result.audio_fixed?.length > 0) {
       if (bookPath.value) {
-        await loadSentencesMap(`/books/${bookPath.value}`)
+        await loadSentencesMap(buildStaticUrl(`/books/${bookPath.value}`))
       }
     }
   } catch (error: any) {
@@ -674,7 +687,7 @@ const loadBookContent = async () => {
     await loadPages(current, current + 1)
     // 重新加载句子映射
     if (bookPath.value) {
-      await loadSentencesMap(`/books/${bookPath.value}`)
+      await loadSentencesMap(buildStaticUrl(`/books/${bookPath.value}`))
     }
     // 预加载相邻页面
     preloadPages()
@@ -692,34 +705,68 @@ const loadBook = async () => {
   lastPlayedSentence.value = null
   isInitialLoading.value = true
   loading.value = true
+  loadingError.value = false
+
+  // 创建 AbortController，超时或组件卸载时取消 HTTP 请求
+  // 先取消上一次未完成的请求，防止并发时泄漏
+  if (bookLoadController.value) {
+    bookLoadController.value.abort()
+  }
+  const controller = new AbortController()
+  bookLoadController.value = controller
 
   try {
-    // 先加载第1页和基本信息
-    await loadPages(0, 1)
+    // 对首次加载设置 20 秒超时，防止断线时永久卡住
+    const timeout = 20000
+    const timeoutId = setTimeout(() => {
+      controller.abort()
+    }, timeout)
+
+    try {
+      await loadPages(0, 1, controller.signal)
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    // 检查是否成功加载了书籍（bookPath 会在 loadPages 成功时设置）
+    if (!bookPath.value) {
+      loadingError.value = true
+      if (controller.signal.aborted) {
+        console.error('加载书籍超时或被取消')
+        showToast('加载超时，无法连接到服务器')
+      } else {
+        console.error('加载书籍失败：loadPages 未设置 bookPath')
+        showToast('加载失败，无法连接到服务器')
+      }
+      return
+    }
 
     // 后台预加载第2、3页
     preloadPages()
 
     // 加载句子映射
     if (bookPath.value) {
-      await loadSentencesMap(`/books/${bookPath.value}`)
+      await loadSentencesMap(buildStaticUrl(`/books/${bookPath.value}`), controller.signal)
     }
 
   } catch (error) {
-    showToast('加载失败')
-    console.error(error)
+    // 兜底处理：捕获 loadSentencesMap 等未预料的错误
+    console.error('加载书籍失败:', error)
+    loadingError.value = true
+    showToast('加载失败，无法连接到服务器')
   } finally {
+    bookLoadController.value = null
     isInitialLoading.value = false
     loading.value = false
   }
 }
 
 // 加载句子映射文件
-const loadSentencesMap = async (baseUrl: string) => {
+const loadSentencesMap = async (baseUrl: string, signal?: AbortSignal) => {
   try {
     // 添加时间戳防止缓存
     const timestamp = Date.now()
-    const res = await fetch(`${baseUrl}/audio/sentences.json?t=${timestamp}`)
+    const res = await fetch(`${baseUrl}/audio/sentences.json?t=${timestamp}`, { signal })
     if (res.ok) {
       const data = await res.json()
       // 支持两种格式：直接数组或 { sentences: [...], total_duration: ... }
@@ -739,6 +786,8 @@ const loadSentencesMap = async (baseUrl: string) => {
       console.log('sentences.json 不存在，音频可能尚未生成')
     }
   } catch (e) {
+    // 忽略取消请求的 AbortError
+    if (e instanceof DOMException && e.name === 'AbortError') return
     console.log('没有预生成的句子映射')
   }
 }
@@ -764,7 +813,7 @@ const playSentence = async (el: HTMLElement) => {
       audioPlayer.value.pause()
       // 添加时间戳防止音频缓存
       const timestamp = Date.now()
-      audioPlayer.value.src = `/books/${bookPath.value}/audio/${mapping.audio_file}?t=${timestamp}`
+      audioPlayer.value.src = buildStaticUrl(`/books/${bookPath.value}/audio/${mapping.audio_file}`) + `?t=${timestamp}`
       // 使用 Promise 处理播放，避免中断错误
       const playPromise = audioPlayer.value.play()
       if (playPromise !== undefined) {
@@ -1591,6 +1640,11 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 组件卸载时取消仍在进行的书籍加载请求
+  if (bookLoadController.value) {
+    bookLoadController.value.abort()
+    bookLoadController.value = null
+  }
   // 清理工作
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('resize', handleResize)

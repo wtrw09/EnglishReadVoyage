@@ -70,7 +70,7 @@
             <div class="playlist-item-content">
               <img
                 v-if="element.book_cover"
-                :src="element.book_cover"
+                :src="buildStaticUrl(element.book_cover)"
                 class="playlist-item-cover"
                 loading="lazy"
                 decoding="async"
@@ -100,7 +100,7 @@
           <div class="playlist-item-content">
             <img
               v-if="item.book_cover"
-              :src="item.book_cover"
+              :src="buildStaticUrl(item.book_cover)"
               class="playlist-item-cover"
               loading="lazy"
               decoding="async"
@@ -138,6 +138,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import draggable from 'vuedraggable'
+import { buildStaticUrl } from '@/utils/apiBase'
 
 interface PlaylistItem {
   id: number

@@ -5,6 +5,7 @@
 import { ref, computed } from 'vue'
 import { showNotify, showToast, showConfirmDialog } from 'vant'
 import { useAuthStore } from '@/store/auth'
+import { buildApiUrl } from '@/utils/apiBase'
 import type { DuplicateCheckResult } from '../types'
 
 export const useImport = () => {
@@ -329,7 +330,7 @@ export const useImport = () => {
 
     try {
       const result = await uploadWithProgress(
-        '/api/v1/books/check-zip-duplicates',
+        buildApiUrl('/books/check-zip-duplicates'),
         formData,
         '正在上传ZIP检查重复'
       )
@@ -359,7 +360,7 @@ export const useImport = () => {
 
     try {
       const result = await uploadWithProgress(
-        '/api/v1/books/check-zip-integrity',
+        buildApiUrl('/books/check-zip-integrity'),
         formData,
         '正在检查ZIP完整性'
       )
@@ -390,7 +391,7 @@ export const useImport = () => {
 
     try {
       const result = await uploadWithProgress(
-        '/api/v1/books/check-zip-all',
+        buildApiUrl('/books/check-zip-all'),
         formData,
         '正在检查ZIP文件'
       )
@@ -414,7 +415,7 @@ export const useImport = () => {
 
     return new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', '/api/v1/books/cleanup-failed-import')
+      xhr.open('POST', buildApiUrl('/books/cleanup-failed-import'))
       xhr.setRequestHeader('Content-Type', 'application/json')
       if (authStore.token) {
         xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
@@ -449,7 +450,7 @@ export const useImport = () => {
 
     try {
       const result = await uploadWithProgress(
-        '/api/v1/books/check-md-duplicates',
+        buildApiUrl('/books/check-md-duplicates'),
         formData,
         '正在上传文件检查重复'
       )
@@ -693,7 +694,7 @@ export const useImport = () => {
         formData.append('file', file)
 
         const categoryId = importCategoryId.value
-        let apiPath = '/api/v1/books/import'
+        let apiPath = buildApiUrl('/books/import')
         const params = new URLSearchParams()
 
         if (categoryId) {
@@ -748,7 +749,7 @@ export const useImport = () => {
       formData.append('file', selectedFile.value)
 
       const categoryId = importCategoryId.value
-      let apiPath = '/api/v1/books/import'
+      let apiPath = buildApiUrl('/books/import')
       const params = new URLSearchParams()
 
       if (skipDuplicates) {
@@ -795,7 +796,7 @@ export const useImport = () => {
       formData.append('file', selectedFile.value!)
 
       const categoryId = importCategoryId.value
-      let apiPath = overwrite ? '/api/v1/books/import/overwrite' : '/api/v1/books/import'
+      let apiPath = overwrite ? buildApiUrl('/books/import/overwrite') : buildApiUrl('/books/import')
       const params = new URLSearchParams()
 
       if (overwrite && existingBookId) {
@@ -924,7 +925,7 @@ export const useImport = () => {
         formData.append('file', file)
 
         const categoryId = importCategoryId.value
-        let apiPath = '/api/v1/books/import'
+        let apiPath = buildApiUrl('/books/import')
         const params = new URLSearchParams()
 
         if (categoryId) {

@@ -44,6 +44,11 @@ backend/data/
 backend/Books/
 backend/voices/
 
+# 平台无关文件和测试数据
+harmony/
+test/
+frontend/android/
+
 # 缓存文件
 .cache/
 *.log
