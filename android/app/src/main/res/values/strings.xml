@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EnglishReadVoyage</string>
+    <string name="title_activity_main">EnglishReadVoyage</string>
+    <string name="package_name">com.englishreadvoyage.app</string>
+    <string name="custom_url_scheme">com.englishreadvoyage.app</string>
+</resources>

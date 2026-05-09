@@ -1,24 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <defs>
-    <linearGradient id="bookGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4CAF50"/>
-      <stop offset="100%" stop-color="#2E7D32"/>
-    </linearGradient>
-  </defs>
-  <!-- 书本底部 -->
-  <path fill="url(#bookGrad)" d="M20 200 L128 230 L236 200 L236 220 L128 250 L20 220 Z"/>
-  <!-- 左页 -->
-  <path fill="#E8F5E9" stroke="#4CAF50" stroke-width="3" d="M20 60 Q70 50 128 70 L128 230 Q70 210 20 200 Z"/>
-  <!-- 右页 -->
-  <path fill="#E8F5E9" stroke="#4CAF50" stroke-width="3" d="M236 60 Q186 50 128 70 L128 230 Q186 210 236 200 Z"/>
-  <!-- 书脊 -->
-  <path fill="#2E7D32" d="M118 70 L138 70 L138 230 L118 230 Z"/>
-  <!-- 左页文字行 -->
-  <line x1="40" y1="90" x2="100" y2="95" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
-  <line x1="40" y1="110" x2="100" y2="115" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
-  <line x1="40" y1="130" x2="100" y2="135" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
-  <!-- 右页文字行 -->
-  <line x1="156" y1="95" x2="216" y2="90" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
-  <line x1="156" y1="115" x2="216" y2="110" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
-  <line x1="156" y1="135" x2="216" y2="130" stroke="#81C784" stroke-width="4" stroke-linecap="round"/>
+  <!-- 莫兰迪暖灰背景 -->
+  <rect width="256" height="256" rx="48" ry="48" fill="#B5A89A"/>
+  <!-- E 书脊（竖笔） -->
+  <rect x="86.4" y="70.4" width="25.6" height="115.2" rx="8" ry="8" fill="#F2EBE0"/>
+  <!-- 上臂 -->
+  <rect x="116" y="71.2" width="57.6" height="18.4" rx="9.2" ry="9.2" fill="#F2EBE0"/>
+  <!-- 金线点缀 -->
+  <rect x="116" y="108.72" width="54.4" height="4.48" rx="2.24" ry="2.24" fill="#C9A876"/>
+  <!-- 中臂 -->
+  <rect x="116" y="118.8" width="46.4" height="18.4" rx="9.2" ry="9.2" fill="#F2EBE0"/>
+  <!-- 下臂 -->
+  <rect x="116" y="166.4" width="64" height="18.4" rx="9.2" ry="9.2" fill="#F2EBE0"/>
 </svg>
