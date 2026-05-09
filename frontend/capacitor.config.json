@@ -1,0 +1,21 @@
+{
+  "appId": "com.englishreadvoyage.app",
+  "appName": "EnglishReadVoyage",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "rootPath": "../android"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "launchAutoHide": true,
+      "backgroundColor": "#ffffffff",
+      "showSpinner": false
+    }
+  }
+}
