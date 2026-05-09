@@ -1,5 +1,6 @@
 <template>
-  <div id="app-root">
+  <!-- 原生壳标识class，用于CSS安全区域适配 -->
+  <div id="app-root" :class="{ 'is-native-shell': isNativeShell() }">
     <!-- 全局网络状态通知栏（可关闭，点击可手动重连） -->
     <div
       v-if="networkStatus !== 'online' && !dismissed"
@@ -267,6 +268,11 @@ body {
   opacity: 0;
 }
 
+/* 原生壳安全区域适配 - 确保导航栏不被状态栏遮挡 */
+.is-native-shell .van-nav-bar--fixed {
+  padding-top: var(--safe-area-top, 24px) !important;
+}
+
 /* 全局网络状态栏 */
 .network-banner {
   display: flex;
@@ -278,6 +284,11 @@ body {
   cursor: pointer;
   z-index: 2001;
   position: relative;
+}
+
+/* 原生壳环境下网络横幅也需要安全区域适配 */
+.is-native-shell .network-banner {
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
 }
 
 .network-banner i {

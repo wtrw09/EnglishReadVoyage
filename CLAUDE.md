@@ -13,7 +13,7 @@ EnglishReadVoyage is a full-stack English graded reading application with:
 ## Running the Application
 
 ### Backend
-
+运行前需要激活虚拟环境，不要全局安装
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -72,6 +72,13 @@ docker exec <容器名> cat /var/log/supervisor/backend.log
 # 实时查看日志
 docker exec -it <容器名> tail -f /var/log/supervisor/backend.log
 ```
+
+**5. ecdict.db 离线词典（可选）**
+- 如需本地词典查询功能（速度更快、无需联网），需自行下载 ecdict.db
+- 下载地址：https://github.com/skywind3000/ECDICT/releases （搜索 ecdict 文件）
+- 下载后重命名为 `ecdict.db`，放置到 `docker/all-in-one/backend/data/ecdict.db`
+- 若未放置该文件，词典查询会自动回退到在线 FreeDictionaryAPI，不影响其他功能
+- 放置后重启容器：`docker compose restart`
 
 ## 部署问题排查总结
 
@@ -154,3 +161,5 @@ Exclude from TTS: `<!-- ignore -->...<!-- /ignore -->`
 # 使用 edge_tts的QPS（每秒请求量）不能超过 1
 
 # 使用 百度翻译api的QPS（每秒请求量）不能超过10
+
+# 编程过程中产生的辅助脚本和文件要在使用后及时删除

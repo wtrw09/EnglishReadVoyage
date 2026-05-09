@@ -443,7 +443,7 @@ class TTSService:
                     import tempfile
                     import uuid as uuid_mod
 
-                    # edge_tts Python API，format="mp3" 输出真正的 MPEG MP3
+                    # edge_tts Python API，输出 MP3 格式
                     communicator = edge_tts.Communicate(text, voice, rate=rate_str)
 
                     temp_dir = tempfile.gettempdir()
@@ -451,7 +451,7 @@ class TTSService:
                     output_file = os.path.join(temp_dir, f"edge_tts_{os.getpid()}_{unique_id}.mp3")
 
                     try:
-                        await communicator.save(output_file, format="mp3")
+                        await communicator.save(output_file)
                         logger.debug(f"检查输出文件: {output_file}, exists={os.path.exists(output_file)}")
                         with open(output_file, 'rb') as f:
                             audio_data = f.read()
@@ -668,15 +668,23 @@ class TTSService:
                 await asyncio.sleep(wait_time)
             self._azure_last_request_time = asyncio.get_event_loop().time()
 
+        # XML 转义函数
+        def _xml_escape(s: str) -> str:
+            """对字符串进行 XML 转义，防止特殊字符破坏 SSML 结构"""
+            return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
+
         try:
             # 构建 SSML（统一使用 SSML 以支持语速控制）
             rate_percent = int((speed - 1.0) * 100)
             rate_str = f"{rate_percent:+d}%"
             voice_lang = '-'.join(voice.split('-')[:2]) if voice else 'en-US'
 
+            # 对 text 进行 XML 转义，防止 & < > 等字符破坏 SSML 结构
+            escaped_text = _xml_escape(text)
+
             ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{voice_lang}'>
     <voice name='{voice}'>
-        <prosody rate='{rate_str}'>{text}</prosody>
+        <prosody rate='{rate_str}'>{escaped_text}</prosody>
     </voice>
 </speak>"""
 
@@ -695,6 +703,7 @@ class TTSService:
                 if response.status_code != 200:
                     error_text = response.text
                     logger.error(f"Azure TTS REST API 错误: HTTP {response.status_code}, {error_text[:200]}")
+                    logger.error(f"  SSML前200字符: {ssml[:200]}")
                     raise Exception(f"Azure TTS API返回 {response.status_code}: {error_text[:200]}")
 
                 audio_data = response.content

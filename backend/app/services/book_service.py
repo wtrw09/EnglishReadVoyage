@@ -475,8 +475,8 @@ class BookService:
                     actual_new_file_path = new_file_path
                     logger.info(f"MD文件已重命名: {old_md_filename} -> {safe_new_name}.md")
 
-            # 3. 计算新的书籍ID（基于新文件路径的MD5）
-            new_book_id = hashlib.md5(str(actual_new_file_path).encode()).hexdigest()
+            # 3. 计算新的书籍ID（基于新书名）
+            new_book_id = hashlib.md5(safe_new_name.encode()).hexdigest()
 
             # 检查新ID是否已存在（且不是当前书籍）
             if new_book_id != book_id:
@@ -485,7 +485,7 @@ class BookService:
                 if result_check.scalar_one_or_none():
                     return BookRenameResponse(
                         success=False,
-                        message=f"无法重命名：目标路径对应的书籍已存在"
+                        message=f"无法重命名：目标名称对应的书籍已存在"
                     )
 
             # 4. 更新封面路径（如果存在）
@@ -808,8 +808,8 @@ class BookService:
         # 4. 计算页数
         page_count = len(re.split(r'\n---\n', content))
 
-        # 5. 生成书籍ID（文件路径的MD5哈希）
-        book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+        # 5. 生成书籍ID（基于书名）
+        book_id = hashlib.md5(safe_name.encode()).hexdigest()
 
         # 6. 提取第一张图片作为封面
         cover_path = None
@@ -835,7 +835,7 @@ class BookService:
         book_data = {
             "id": book_id,
             "title": safe_name,
-            "file_path": str(md_file_path),
+            "file_path": str(md_file_path).replace('\\', '/'),
             "page_count": page_count,
             "cover_path": cover_path
         }
@@ -1236,7 +1236,7 @@ class BookService:
         if overwrite and existing_book_id:
             book_id = existing_book_id
         else:
-            book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+            book_id = hashlib.md5(safe_name.encode()).hexdigest()
 
         existing_book = await self.repository.get(db, book_id)
 
@@ -1250,7 +1250,7 @@ class BookService:
 
         if existing_book and overwrite:
             # 更新现有书籍（使用相对路径存储）
-            rel_md_path = str(md_file_path)
+            rel_md_path = str(md_file_path).replace('\\', '/')
             existing_book.page_count = page_count
             existing_book.file_path = rel_md_path
             existing_book.cover_path = cover_path
@@ -1269,7 +1269,7 @@ class BookService:
             book_data = {
                 "id": book_id,
                 "title": safe_name,
-                "file_path": str(md_file_path),
+                "file_path": str(md_file_path).replace('\\', '/'),
                 "page_count": page_count,
                 "cover_path": cover_path
             }
@@ -1472,20 +1472,8 @@ class BookService:
 
                     safe_name = book_title.replace(" ", "_")
 
-                    # 计算book_id（与导入时相同的逻辑）
-                    if '/' in md_file:
-                        # 多本格式，需要构建完整路径来计算ID
-                        book_folder_name = safe_name
-                        md_file_name = f"{book_folder_name}.md"
-                        book_folder_path = Path("Books") / book_folder_name
-                        md_file_path = book_folder_path / md_file_name
-                    else:
-                        # 单本格式
-                        book_folder_name = safe_name
-                        book_folder_path = Path("Books") / book_folder_name
-                        md_file_path = book_folder_path / f"{book_folder_name}.md"
-
-                    book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+                    # 计算book_id（基于书名）
+                    book_id = hashlib.md5(safe_name.encode()).hexdigest()
 
                     # 查询数据库
                     stmt = select(Book).where(Book.id == book_id)
@@ -1536,8 +1524,7 @@ class BookService:
                 safe_name = book_title.replace(" ", "_")
                 book_folder_name = safe_name
                 book_folder_path = Path("Books") / book_folder_name
-                md_file_path = book_folder_path / f"{book_folder_name}.md"
-                book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+                book_id = hashlib.md5(safe_name.encode()).hexdigest()
 
                 stmt = select(Book).where(Book.id == book_id)
                 query_result = await db.execute(stmt)
@@ -1936,7 +1923,7 @@ class BookService:
                 if overwrite and existing_book_id:
                     book_id = existing_book_id
                 else:
-                    book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+                    book_id = hashlib.md5(safe_name.encode()).hexdigest()
 
                 # 检查是否已存在
                 existing_book = await self.repository.get(db, book_id)
@@ -2023,7 +2010,7 @@ class BookService:
                             raise FileNotFoundError(f"找不到MD文件: {md_file_path}")
 
                     # 更新数据库记录（使用相对路径存储）
-                    rel_md_path = str(md_file_path)
+                    rel_md_path = str(md_file_path).replace('\\', '/')
                     existing_book.page_count = page_count
                     existing_book.file_path = rel_md_path
                     existing_book.cover_path = cover_path
@@ -2036,7 +2023,7 @@ class BookService:
                     book_data = {
                         "id": book_id,
                         "title": safe_name,
-                        "file_path": str(md_file_path),
+                        "file_path": str(md_file_path).replace('\\', '/'),
                         "page_count": page_count,
                         "cover_path": cover_path
                     }
@@ -2288,8 +2275,8 @@ class BookService:
                     with open(mapping_path, 'w', encoding='utf-8') as f:
                         json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
                 
-                # 计算book_id
-                book_id = hashlib.md5(str(md_file_path).encode()).hexdigest()
+                # 计算book_id（基于书名）
+                book_id = hashlib.md5(safe_name.encode()).hexdigest()
                 
                 # 检查是否已存在
                 existing_book = await self.repository.get(db, book_id)
@@ -2316,7 +2303,7 @@ class BookService:
                 
                 if existing_book and should_overwrite:
                     # 更新现有书籍（使用相对路径存储）
-                    rel_md_path = str(md_file_path)
+                    rel_md_path = str(md_file_path).replace('\\', '/')
                     existing_book.page_count = page_count
                     existing_book.file_path = rel_md_path
                     existing_book.cover_path = cover_path
@@ -2327,7 +2314,7 @@ class BookService:
                     })
                 else:
                     # 创建新书籍（使用相对路径存储）
-                    rel_md_path = str(md_file_path)
+                    rel_md_path = str(md_file_path).replace('\\', '/')
                     book_data = {
                         "id": book_id,
                         "title": safe_name,
@@ -2982,64 +2969,18 @@ class BookService:
                 expected_md_path = actual_info["md_file"]
                 
                 # 检查文件路径是否需要更新
-                if str(book.file_path) != str(expected_md_path):
-                    # 路径需要更新
-                    old_id = book.id
-                    new_id = hashlib.md5(str(expected_md_path).encode()).hexdigest()
-                    
-                    # 保存关联数据
-                    stmt_rel = select(BookCategoryRel).where(BookCategoryRel.book_id == old_id)
-                    rel_result = await db.execute(stmt_rel)
-                    old_relations = rel_result.scalars().all()
-                    
-                    stmt_prog = select(ReadingProgress).where(ReadingProgress.book_id == old_id)
-                    prog_result = await db.execute(stmt_prog)
-                    old_progresses = prog_result.scalars().all()
-                    
-                    # 删除旧记录
-                    await db.delete(book)
+                # 注: book_id 基于书名，路径变化不影响 book_id
+                rel_md_path = f"Books/{expected_folder_name}/{expected_folder_name}.md"
+                if str(book.file_path) != rel_md_path:
+                    # 只更新 file_path，book_id 保持不变
+                    book.file_path = rel_md_path
                     await db.flush()
-                    
-                    # 创建新记录（使用相对路径存储）
-                    rel_md_path = str(expected_md_path)
-                    new_book = Book(
-                        id=new_id,
-                        title=expected_folder_name,
-                        author=book.author,
-                        cover_path=f"/books/{expected_folder_name}/cover.jpg" if (actual_info["folder_path"] / "cover.jpg").exists() else book.cover_path,
-                        file_path=rel_md_path,
-                        page_count=book.page_count,
-                        sync_hash=book.sync_hash
-                    )
-                    db.add(new_book)
-                    await db.flush()
-                    
-                    # 恢复关联
-                    for rel in old_relations:
-                        new_rel = BookCategoryRel(
-                            book_id=new_id,
-                            category_id=rel.category_id,
-                            user_id=rel.user_id
-                        )
-                        db.add(new_rel)
-                    
-                    # 恢复阅读进度
-                    for prog in old_progresses:
-                        new_prog = ReadingProgress(
-                            user_id=prog.user_id,
-                            book_id=new_id,
-                            current_page=prog.current_page,
-                            last_read_at=prog.last_read_at,
-                            is_completed=prog.is_completed,
-                            is_read=prog.is_read
-                        )
-                        db.add(new_prog)
                     
                     result["fixed"].append({
                         "old_title": book.title,
                         "new_title": expected_folder_name,
-                        "old_id": old_id,
-                        "new_id": new_id
+                        "old_id": book.id,
+                        "new_id": book.id
                     })
                     
                     # 从 actual_folders 中移除，剩下的就是新书籍
@@ -3104,8 +3045,8 @@ class BookService:
                     folder_name = md_stem
                     md_file = new_folder_path / info["md_filename"]
                 
-                # 计算书籍ID（基于新的文件路径）
-                book_id = hashlib.md5(str(md_file).encode()).hexdigest()
+                # 计算书籍ID（基于书名）
+                book_id = hashlib.md5(md_stem.encode()).hexdigest()
                 
                 # 解析内容获取页数
                 pages = self.parser.parse_file(str(md_file))
@@ -3118,7 +3059,7 @@ class BookService:
                     cover_path = f"/books/{folder_name}/cover.jpg"
                 
                 # 创建新书籍记录（使用相对路径存储）
-                rel_md_path = str(md_file)
+                rel_md_path = f"Books/{folder_name}/{folder_name}.md"
                 new_book = Book(
                     id=book_id,
                     title=folder_name,

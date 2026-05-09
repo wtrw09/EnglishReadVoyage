@@ -146,15 +146,13 @@ if ($Architecture -eq "amd64") {
     $useBuildx = $true
     Write-Host ""
     Write-Host "[1/2] ARM64 构建 - 使用 docker buildx" -ForegroundColor Green
-    docker buildx use default 2>&1 | Out-Null
-    Write-Host "使用 default 构建器（支持本地镜像缓存）" -ForegroundColor Gray
+    Write-Host "使用 desktop-linux 构建器" -ForegroundColor Gray
 } elseif ($Architecture -eq "all") {
     $platforms = "linux/amd64,linux/arm64"
     $useBuildx = $true
     Write-Host ""
     Write-Host "[1/2] 多架构构建 - 使用 docker buildx" -ForegroundColor Green
-    docker buildx use default 2>&1 | Out-Null
-    Write-Host "使用 default 构建器（支持本地镜像缓存）" -ForegroundColor Gray
+    Write-Host "使用 desktop-linux 构建器" -ForegroundColor Gray
 }
 
 Write-Host "目标平台: $platforms" -ForegroundColor Gray
@@ -164,6 +162,25 @@ function Test-LocalImageExists {
     param([string]$ImageName)
     $result = docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -Pattern "^$([regex]::Escape($ImageName))$"
     return $null -ne $result
+}
+
+# 导出镜像功能
+function Export-Image {
+    param(
+        [string]$ImageTag,
+        [string]$OutputFile
+    )
+    Write-Host ""
+    Write-Host "导出镜像: $ImageTag" -ForegroundColor Yellow
+    docker save $ImageTag -o $OutputFile
+    if ($LASTEXITCODE -eq 0) {
+        $fileSize = (Get-Item $OutputFile).Length / 1MB
+        Write-Host "✓ 导出成功！文件: $OutputFile, 大小: $([math]::Round($fileSize, 2)) MB" -ForegroundColor Green
+        return $true
+    } else {
+        Write-Host "✗ 导出失败" -ForegroundColor Red
+        return $false
+    }
 }
 
 # 根据架构获取本地镜像名称
@@ -220,6 +237,79 @@ $localImages = Get-LocalImages -Arch $Architecture
 # 构建镜像
 Write-Host ""
 Write-Host "[2/2] 构建合并镜像..." -ForegroundColor Green
+
+# 处理 "all" 架构：先后台构建再前台，构建两个单独的镜像
+if ($Architecture -eq "all") {
+    Write-Host "多架构模式：先构建 AMD64，再构建 ARM64" -ForegroundColor Cyan
+    
+    # 先构建 AMD64
+    Write-Host ""
+    Write-Host "=== 构建 AMD64 镜像 ===" -ForegroundColor Yellow
+    $amd64Args = @(
+        "buildx", "build",
+        "--platform", "linux/amd64",
+        "--tag", "${ImageName}:${Tag}-amd64",
+        "--file", "docker/all-in-one/Dockerfile",
+        "--pull=false",
+        "--load",
+        "."
+    )
+    
+    # 添加 build-arg
+    if ($localImages.Python) { $amd64Args += "--build-arg"; $amd64Args += "PYTHON_IMAGE=$($localImages.Python)" }
+    if ($localImages.Node) { $amd64Args += "--build-arg"; $amd64Args += "NODE_IMAGE=$($localImages.Node)" }
+    if ($localImages.Nginx) { $amd64Args += "--build-arg"; $amd64Args += "NGINX_IMAGE=$($localImages.Nginx)" }
+    
+    Write-Host "执行: docker $($amd64Args -join ' ')" -ForegroundColor DarkGray
+    & docker @amd64Args
+    if ($LASTEXITCODE -ne 0) { Write-Error "AMD64 构建失败"; exit 1 }
+    Write-Host "✓ AMD64 镜像构建成功: ${ImageName}:${Tag}-amd64" -ForegroundColor Green
+    
+    # 再构建 ARM64
+    Write-Host ""
+    Write-Host "=== 构建 ARM64 镜像 ===" -ForegroundColor Yellow
+    $arm64Args = @(
+        "buildx", "build",
+        "--platform", "linux/arm64",
+        "--tag", "${ImageName}:${Tag}-arm64",
+        "--file", "docker/all-in-one/Dockerfile",
+        "--pull=false",
+        "--load",
+        "."
+    )
+    
+    # 添加 build-arg（ARM64 镜像）
+    $arm64Args += "--build-arg"; $arm64Args += "PYTHON_IMAGE=python:3.13-slim-arm64"
+    $arm64Args += "--build-arg"; $arm64Args += "NODE_IMAGE=node:22-alpine-arm64"
+    $arm64Args += "--build-arg"; $arm64Args += "NGINX_IMAGE=nginx:alpine-arm64"
+    
+    Write-Host "执行: docker $($arm64Args -join ' ')" -ForegroundColor DarkGray
+    & docker @arm64Args
+    if ($LASTEXITCODE -ne 0) { Write-Error "ARM64 构建失败"; exit 1 }
+    Write-Host "✓ ARM64 镜像构建成功: ${ImageName}:${Tag}-arm64" -ForegroundColor Green
+    
+    # 输出结果
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "构建完成！" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "镜像列表:" -ForegroundColor Yellow
+    docker images $ImageName --format "table {{.Repository}}:{{.Tag}}`t{{.Size}}"
+    
+    # 询问是否导出
+    Write-Host ""
+    $exportChoice = Read-Host "是否导出镜像? [1] AMD64 [2] ARM64 [3] 两者 [N] 跳过"
+    if ($exportChoice -eq "1" -or $exportChoice -eq "3") {
+        Export-Image -ImageTag "${ImageName}:${Tag}-amd64" -OutputFile "${ImageName}-amd64-${Tag}.tar"
+    }
+    if ($exportChoice -eq "2" -or $exportChoice -eq "3") {
+        Export-Image -ImageTag "${ImageName}:${Tag}-arm64" -OutputFile "${ImageName}-arm64-${Tag}.tar"
+    }
+    
+    exit 0
+}
+
+# 单架构构建
 Write-Host "镜像: $ImageTag" -ForegroundColor Green
 Write-Host "Dockerfile: docker/all-in-one/Dockerfile" -ForegroundColor Gray
 Write-Host "构建上下文: 项目根目录" -ForegroundColor Gray
@@ -229,14 +319,18 @@ $buildArgs = @()
 
 if ($useBuildx) {
     # ARM64/多架构构建 - 使用 buildx
+    # 注意: 多架构构建时不能使用 --load（docker exporter 不支持 manifest list）
     $buildArgs = @(
         "buildx", "build",
         "--platform", $platforms,
         "--tag", $ImageTag,
         "--file", "docker/all-in-one/Dockerfile",
-        "--pull=false",
-        "--load"
+        "--pull=false"
     )
+    # 仅在单架构时使用 --load
+    if ($Architecture -ne "all") {
+        $buildArgs += "--load"
+    }
     Write-Host "使用 buildx 构建" -ForegroundColor Gray
 } else {
     # AMD64 构建 - 使用传统 docker build
@@ -294,28 +388,6 @@ if ($Push) {
     }
 }
 
-# 导出镜像功能
-function Export-Image {
-    param(
-        [string]$ImageTag,
-        [string]$OutputFile
-    )
-
-    Write-Host ""
-    Write-Host "导出镜像: $ImageTag" -ForegroundColor Yellow
-
-    docker save $ImageTag -o $OutputFile
-
-    if ($LASTEXITCODE -eq 0) {
-        $fileSize = (Get-Item $OutputFile).Length / 1MB
-        Write-Host "✓ 导出成功！文件: $OutputFile, 大小: $([math]::Round($fileSize, 2)) MB" -ForegroundColor Green
-        return $true
-    } else {
-        Write-Host "✗ 导出失败" -ForegroundColor Red
-        return $false
-    }
-}
-
 # 构建完成信息
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -346,15 +418,16 @@ Write-Host "使用说明" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "1. 使用 docker-compose 运行:" -ForegroundColor Green
-Write-Host "   docker-compose -f docker/all-in-one/docker-compose.yml up -d" -ForegroundColor Gray
+Write-Host "   cd docker/all-in-one" -ForegroundColor Gray
+Write-Host "   docker compose up -d" -ForegroundColor Gray
 Write-Host ""
 Write-Host "2. 直接使用 docker 运行:" -ForegroundColor Green
-Write-Host "   docker run -d `"" -ForegroundColor Gray
+Write-Host '   docker run -d `' -ForegroundColor Gray
 Write-Host '     -p 8888:80 `' -ForegroundColor Gray
-Write-Host '     -v ${PWD}/backend/data.db:/app/data.db `' -ForegroundColor Gray
-Write-Host '     -v ${PWD}/backend/data:/app/data `' -ForegroundColor Gray
-Write-Host '     -v ${PWD}/backend/Books:/app/Books `' -ForegroundColor Gray
+Write-Host '     -v ${PWD}/docker/all-in-one/backend/data:/app/data `' -ForegroundColor Gray
+Write-Host '     -v ${PWD}/docker/all-in-one/backend/Books:/app/Books `' -ForegroundColor Gray
 Write-Host '     --name englishread `' -ForegroundColor Gray
+Write-Host '     -e IS_PRODUCTION=True `' -ForegroundColor Gray
 Write-Host "     $ImageTag" -ForegroundColor Gray
 Write-Host ""
 Write-Host "3. 访问应用:" -ForegroundColor Green
