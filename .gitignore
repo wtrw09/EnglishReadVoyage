@@ -65,6 +65,7 @@ dist/
 *.log
 
 # Claude Code
+.claude/
 .qoder/
 
 # Model directories
@@ -88,4 +89,4 @@ cache/
 backend/Books/
 
 # Test data
-test/backend/Books/
+test/

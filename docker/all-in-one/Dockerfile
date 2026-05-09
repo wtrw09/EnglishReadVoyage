@@ -104,6 +104,12 @@ COPY docker/all-in-one/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # 创建必要的目录
 RUN mkdir -p /app/voices /app/Books /app/data /var/log/supervisor
 
+# 复制 entrypoint 脚本
+COPY docker/all-in-one/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+
 # 暴露端口（只暴露 Nginx 端口）
 EXPOSE 80
 

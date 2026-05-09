@@ -1200,11 +1200,12 @@ async def export_books(
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for book in books:
-            # 获取书籍文件夹路径
-            book_path = Path(book.file_path)
+            # 获取书籍文件夹路径（使用 PROJECT_ROOT 确保路径一致）
+            book_path = PROJECT_ROOT / book.file_path
             book_folder = book_path.parent
 
             if not book_folder.exists():
+                logger.warning(f"导出跳过: 书籍文件夹不存在 {book_folder}")
                 continue
 
             # 每本书都放在自己的文件夹中，与批量导出格式保持一致
@@ -1214,8 +1215,9 @@ async def export_books(
             for root, dirs, files in os.walk(book_folder):
                 for file in files:
                     file_path = Path(root) / file
-                    # 计算在ZIP中的相对路径
-                    arc_name = prefix + str(file_path.relative_to(book_folder))
+                    # 计算在ZIP中的相对路径（用正斜杠确保跨平台兼容）
+                    rel = file_path.relative_to(book_folder).as_posix()
+                    arc_name = prefix + rel
                     try:
                         zf.write(file_path, arc_name)
                     except Exception as e:
@@ -1244,12 +1246,12 @@ async def export_books(
                 break
             yield chunk
 
+    # 不使用 Content-Length 头（GZipMiddleware 会压缩响应，设置长度会导致不匹配）
     return StreamingResponse(
         iter_bytes(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "Content-Length": str(zip_buffer.getbuffer().nbytes)
         }
     )
 
