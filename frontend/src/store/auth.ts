@@ -91,7 +91,13 @@ api.interceptors.response.use(
 const publicEndpoints = ['/auth/login', '/auth/activate']
 const REMEMBER_CREDS_KEY = 'remember_creds'
 
-// ---- 记住我凭据管理 ----
+// ---- 记住我凭据管理（多账户支持）----
+// 存储结构：{ lastUsedUsername: string, accounts: { [username]: 编码后的密码 } }
+
+interface CredentialsStore {
+  lastUsedUsername: string
+  accounts: Record<string, string> // username -> encoded password
+}
 
 export function encodePassword(pwd: string): string {
   return btoa(encodeURIComponent(pwd))
@@ -101,27 +107,73 @@ export function decodePassword(encoded: string): string {
   return decodeURIComponent(atob(encoded))
 }
 
-export function saveRememberedCredentials(username: string, password: string): void {
-  localStorage.setItem(REMEMBER_CREDS_KEY, JSON.stringify({
-    username,
-    password: encodePassword(password)
-  }))
-}
-
-export function getRememberedCredentials(): { username: string; password: string } | null {
+function getCredentialsStore(): CredentialsStore | null {
   try {
     const raw = localStorage.getItem(REMEMBER_CREDS_KEY)
     if (!raw) return null
     const data = JSON.parse(raw)
-    if (typeof data.username !== 'string' || typeof data.password !== 'string') return null
-    return { username: data.username, password: decodePassword(data.password) }
+    if (typeof data !== 'object' || data === null) return null
+    // 检查新格式 { lastUsedUsername, accounts }
+    if (typeof data.accounts === 'object' && data.accounts !== null) {
+      return data as CredentialsStore
+    }
+    // 旧格式 { username, password } — 忽略，重新保存时会用新格式重建
+    return null
   } catch {
     return null
   }
 }
 
+function saveCredentialsStore(store: CredentialsStore): void {
+  localStorage.setItem(REMEMBER_CREDS_KEY, JSON.stringify(store))
+}
+
+export function saveRememberedCredentials(username: string, password: string): void {
+  const store = getCredentialsStore() || { lastUsedUsername: '', accounts: {} }
+  store.accounts[username] = encodePassword(password)
+  store.lastUsedUsername = username
+  saveCredentialsStore(store)
+}
+
+export function getRememberedCredentials(): { username: string; password: string } | null {
+  const store = getCredentialsStore()
+  if (!store || !store.lastUsedUsername) return null
+  const encoded = store.accounts[store.lastUsedUsername]
+  if (!encoded) return null
+  return { username: store.lastUsedUsername, password: decodePassword(encoded) }
+}
+
+/** 获取所有历史用户名列表 */
+export function getHistoryUsernames(): string[] {
+  const store = getCredentialsStore()
+  return store ? Object.keys(store.accounts) : []
+}
+
+/** 根据用户名获取保存的凭据 */
+export function getCredentialsByUsername(username: string): { username: string; password: string } | null {
+  const store = getCredentialsStore()
+  if (!store || !store.accounts[username]) return null
+  return { username, password: decodePassword(store.accounts[username]) }
+}
+
 export function clearRememberedCredentials(): void {
   localStorage.removeItem(REMEMBER_CREDS_KEY)
+}
+
+/** 移除指定用户名的凭据 */
+export function removeCredentialsByUsername(username: string): void {
+  const store = getCredentialsStore()
+  if (!store) return
+  delete store.accounts[username]
+  if (store.lastUsedUsername === username) {
+    const usernames = Object.keys(store.accounts)
+    store.lastUsedUsername = usernames.length > 0 ? usernames[0] : ''
+  }
+  if (Object.keys(store.accounts).length === 0) {
+    localStorage.removeItem(REMEMBER_CREDS_KEY)
+  } else {
+    saveCredentialsStore(store)
+  }
 }
 
 // 请求拦截器：动态 baseURL + 附加 token + 离线预检
@@ -330,7 +382,9 @@ export const useAuthStore = defineStore('auth', () => {
     users.value = []
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    clearRememberedCredentials()
+    // 记住我凭据不清除，保留用于下次自动填充
+    // 设置 session 级别标记，防止回到登录页时自动登录
+    sessionStorage.setItem('manual_logout', 'true')
   }
 
   // 激活账户
@@ -369,12 +423,7 @@ export const useAuthStore = defineStore('auth', () => {
       return { success: true }
     }
     const result = await login(creds.username, creds.password, false)
-    if (!result.success) {
-      // 仅在凭据被后端明确拒绝（auth_error）时清除，网络错误保留凭据
-      if (result.code === 'auth_error') {
-        clearRememberedCredentials()
-      }
-    }
+    // 网络错误保留凭据供重试，认证错误也不清除（用户可在表单中修改密码）
     return result
   }
 

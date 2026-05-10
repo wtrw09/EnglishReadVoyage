@@ -8,7 +8,7 @@
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
     "harmony:sync": "vite build && node scripts/copy-to-harmony.cjs",
-    "android:sync": "vite build && cap sync ../android",
+    "android:sync": "vite build && powershell -NoProfile -Command \"Copy-Item -Recurse -Force 'dist/*' -Destination '../android/app/src/main/assets/public/'\"",
     "android:open": "cap open ../android",
     "android:run": "npm run android:sync && cap run ../android"
   },

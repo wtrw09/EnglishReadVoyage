@@ -1,6 +1,6 @@
 <template>
   <!-- 原生壳标识class，用于CSS安全区域适配 -->
-  <div id="app-root" :class="{ 'is-native-shell': isNativeShell() }">
+  <div id="app-root" :class="{ 'is-native-shell': isNativeShell(), 'is-capacitor-shell': isCapacitorNative() }">
     <!-- 全局网络状态通知栏（可关闭，点击可手动重连） -->
     <div
       v-if="networkStatus !== 'online' && !dismissed"
@@ -67,17 +67,20 @@
       </div>
 
       <!-- 历史可用地址 -->
-      <div v-if="verifiedUrls.length" class="sheet-section">
+      <div v-if="serverList.length" class="sheet-section">
         <div class="url-list-title">历史可用地址</div>
         <div
-          v-for="url in verifiedUrls"
-          :key="url"
+          v-for="server in serverList"
+          :key="server.url"
           class="url-item"
-          :class="{ active: url === currentServerUrl }"
-          @click="switchToUrl(url)"
+          :class="{ active: server.url === currentServerUrl }"
+          @click="switchToServer(server)"
         >
-          <span class="url-text">{{ url }}</span>
-          <van-tag v-if="url === currentServerUrl" plain type="primary">当前</van-tag>
+          <div class="url-info">
+            <span class="url-name">{{ server.name || '未命名' }}</span>
+            <span class="url-text">{{ server.url }}</span>
+          </div>
+          <van-tag v-if="server.url === currentServerUrl" plain type="primary">当前</van-tag>
         </div>
       </div>
 
@@ -118,8 +121,10 @@ import { useNetworkStatus } from '@/utils/useNetworkStatus'
 import {
   getServerBaseUrl,
   isNativeShell,
-  getVerifiedUrls,
+  isCapacitorNative,
+  getVerifiedServerList,
   setServerBaseUrl,
+  type ServerEntry
 } from '@/utils/apiBase'
 
 const router = useRouter()
@@ -134,8 +139,8 @@ watch(dismissed, (val) => {
 const isChecking = ref(false)
 // ActionSheet 面板显示控制
 const showConnectionSheet = ref(false)
-// 历史可用地址列表
-const verifiedUrls = ref(getVerifiedUrls())
+// 历史可用服务器列表
+const serverList = ref<ServerEntry[]>(getVerifiedServerList())
 // 当前服务器地址显示
 const currentServerUrl = computed(() => {
   const url = getServerBaseUrl()
@@ -177,7 +182,7 @@ async function handleBannerClick() {
   if (networkStatus.value === 'serverUnreachable' || networkStatus.value === 'offline') {
     if (isNativeShell()) {
       // 原生壳：弹出连接管理面板
-      verifiedUrls.value = getVerifiedUrls()
+      serverList.value = getVerifiedServerList()
       showConnectionSheet.value = true
     } else {
       // Web 浏览器：保留原有重试逻辑
@@ -215,10 +220,10 @@ async function handleSheetChangeServer() {
 }
 
 // 面板：切换到历史地址
-async function switchToUrl(url: string) {
+async function switchToServer(server: ServerEntry) {
   showConnectionSheet.value = false
   const oldUrl = getServerBaseUrl()
-  setServerBaseUrl(url)
+  setServerBaseUrl(server.url)
   isChecking.value = true
   await checkConnection()
   isChecking.value = false
@@ -227,7 +232,8 @@ async function switchToUrl(url: string) {
     // 新地址可达后才清除旧服务器的登录状态，确保回滚时不丢失登录状态
     const { useAuthStore } = await import('@/store/auth')
     useAuthStore().logout()
-    showToast({ type: 'success', message: '已切换至: ' + url, duration: 1500 })
+    const displayName = server.name || server.url
+    showToast({ type: 'success', message: '已切换至: ' + displayName, duration: 1500 })
     // 需要重新登录获取新服务器上的 token
     router.replace({ name: 'Login' })
   } else {
@@ -268,9 +274,9 @@ body {
   opacity: 0;
 }
 
-/* 原生壳安全区域适配 - 确保导航栏不被状态栏遮挡 */
-.is-native-shell .van-nav-bar--fixed {
-  padding-top: var(--safe-area-top, 24px) !important;
+/* Capacitor (Android) 安全区域适配 - 缩小 nav-bar placeholder 带来的顶部空隙 */
+.is-capacitor-shell .home > .content {
+  margin-top: -16px;
 }
 
 /* 全局网络状态栏 */
@@ -384,7 +390,6 @@ body {
   margin-bottom: 6px;
   font-size: 13px;
   cursor: pointer;
-  word-break: break-all;
 }
 .url-item:active {
   opacity: 0.7;
@@ -393,10 +398,22 @@ body {
   border: 1px solid #1989fa;
   background: #f0f9ff;
 }
-.url-text {
+.url-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.url-name {
+  font-size: 14px;
+  font-weight: 500;
   color: #323233;
-  margin-right: 8px;
+}
+.url-text {
+  font-size: 12px;
+  color: #969799;
+  word-break: break-all;
 }
 .sheet-actions {
   display: flex;

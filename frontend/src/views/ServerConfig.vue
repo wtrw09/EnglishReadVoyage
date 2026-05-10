@@ -3,6 +3,11 @@
 
   仅 Capacitor 原生态需要：WebView 运行在 https://localhost，必须告诉 App 后端服务在哪。
   浏览器态也可以访问此页手动切换服务端，但不会被路由守卫强制进入。
+
+  功能：
+  - 支持服务器地址命名（标签）
+  - 历史服务器列表显示名称
+  - 允许编辑服务器名称
 -->
 <template>
   <div class="server-config-page">
@@ -23,6 +28,14 @@
 
       <van-cell-group inset>
         <van-field
+          v-model="serverName"
+          label="名称标签"
+          placeholder="为服务器起个名字（选填）"
+          maxlength="20"
+          show-word-limit
+          clearable
+        />
+        <van-field
           v-model="serverUrl"
           label="服务地址"
           placeholder="如 http://192.168.1.100:8888"
@@ -38,19 +51,25 @@
       </div>
 
       <!-- 历史可用地址（仅原生壳） -->
-      <div v-if="nativeShell && verifiedUrls.length" class="history-section">
+      <div v-if="nativeShell && serverList.length" class="history-section">
         <div class="history-title">历史可用地址</div>
         <div
-          v-for="url in verifiedUrls"
-          :key="url"
+          v-for="server in serverList"
+          :key="server.url"
           class="history-item"
-          :class="{ active: url === savedUrl }"
+          :class="{ active: server.url === savedUrl }"
         >
-          <span class="history-url">{{ url }}</span>
-          <van-tag v-if="url === savedUrl" type="primary" class="current-tag">当前</van-tag>
+          <div class="history-info">
+            <span class="history-name" :class="{ 'current-name': server.url === savedUrl }">
+              {{ server.name || '未命名' }}
+            </span>
+            <span class="history-url">{{ server.url }}</span>
+          </div>
+          <van-tag v-if="server.url === savedUrl" type="primary" class="current-tag">当前</van-tag>
           <div class="history-actions">
-            <van-button size="mini" type="primary" plain @click="selectUrl(url)">使用</van-button>
-            <van-button size="mini" type="danger" plain @click="deleteUrl(url)">删除</van-button>
+            <van-button size="mini" type="primary" plain @click="selectServer(server)">使用</van-button>
+            <van-button size="mini" type="default" plain @click="showEditNameDialog(server)">重命名</van-button>
+            <van-button size="mini" type="danger" plain @click="deleteServer(server.url)">删除</van-button>
           </div>
         </div>
       </div>
@@ -80,10 +99,33 @@
         </van-button>
       </div>
 
-      <div v-if="savedUrl" class="current">
-        当前：{{ savedUrl }}
+      <div v-if="currentServerName || savedUrl" class="current">
+        <span v-if="currentServerName">当前：{{ currentServerName }}</span>
+        <span v-if="currentServerName && savedUrl"> - </span>
+        <span v-if="savedUrl">{{ savedUrl }}</span>
       </div>
     </div>
+
+    <!-- 编辑名称弹窗 -->
+    <van-popup v-model:show="showEditDialog" position="bottom" round>
+      <div class="edit-name-popup">
+        <div class="edit-name-header">
+          <span>编辑服务器名称</span>
+          <van-button text="取消" size="small" @click="showEditDialog = false" />
+        </div>
+        <van-field
+          v-model="editName"
+          placeholder="请输入服务器名称"
+          maxlength="20"
+          show-word-limit
+          autofocus
+          @keyup.enter="confirmEditName"
+        />
+        <div class="edit-name-actions">
+          <van-button type="primary" block @click="confirmEditName">确定</van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -97,21 +139,33 @@ import {
   clearServerBaseUrl,
   hasServerBaseUrl,
   isNativeShell,
-  getVerifiedUrls,
-  addVerifiedUrl,
-  removeVerifiedUrl
+  getVerifiedServerList,
+  addVerifiedServer,
+  removeVerifiedServer,
+  updateServerName,
+  getServerName,
+  type ServerEntry
 } from '@/utils/apiBase'
 
 const router = useRouter()
 
+const serverName = ref('')
 const serverUrl = ref(getServerBaseUrl())
 const savedUrl = ref(getServerBaseUrl())
 const errorMsg = ref('')
 const testing = ref(false)
-const verifiedUrls = ref(getVerifiedUrls())
+const serverList = ref<ServerEntry[]>(getVerifiedServerList())
+
+// 编辑名称弹窗相关
+const showEditDialog = ref(false)
+const editName = ref('')
+const editingServer = ref<ServerEntry | null>(null)
 
 const nativeShell = computed(() => isNativeShell())
 const canGoBack = computed(() => hasServerBaseUrl())
+
+// 当前服务器名称
+const currentServerName = computed(() => getServerName(savedUrl.value))
 
 // 归一化：去空白、去尾斜杠、缺协议头时自动补 http://
 function normalize(url: string): string {
@@ -186,11 +240,13 @@ async function handleSave() {
     return
   }
 
+  // 保存服务器地址和名称
+  const name = serverName.value.trim()
+  addVerifiedServer(url, name)
   setServerBaseUrl(url)
-  addVerifiedUrl(url)
   savedUrl.value = url
   serverUrl.value = url
-  verifiedUrls.value = getVerifiedUrls()
+  serverList.value = getVerifiedServerList()
   showToast({ type: 'success', message: '已保存', duration: 1000 })
   router.push({ name: 'Login' })
 }
@@ -199,32 +255,50 @@ function handleClear() {
   clearServerBaseUrl()
   savedUrl.value = ''
   serverUrl.value = ''
+  serverName.value = ''
   showToast({ type: 'success', message: '已清除', duration: 1000 })
 }
 
-function selectUrl(url: string) {
-  serverUrl.value = url
+function selectServer(server: ServerEntry) {
+  serverUrl.value = server.url
+  serverName.value = server.name
   errorMsg.value = ''
 
   testing.value = true
-  testConnection(url).then(ok => {
+  testConnection(server.url).then(ok => {
     testing.value = false
     if (!ok) {
       errorMsg.value = '无法连通该地址，请确认服务端已启动且网络可达'
       return
     }
-    setServerBaseUrl(url)
-    addVerifiedUrl(url)
-    savedUrl.value = url
-    verifiedUrls.value = getVerifiedUrls()
+    addVerifiedServer(server.url)
+    setServerBaseUrl(server.url)
+    savedUrl.value = server.url
+    serverList.value = getVerifiedServerList()
     showToast({ type: 'success', message: '已切换', duration: 1000 })
   })
 }
 
-function deleteUrl(url: string) {
-  removeVerifiedUrl(url)
-  verifiedUrls.value = getVerifiedUrls()
+function deleteServer(url: string) {
+  removeVerifiedServer(url)
+  serverList.value = getVerifiedServerList()
   showToast({ type: 'success', message: '已删除', duration: 800 })
+}
+
+function showEditNameDialog(server: ServerEntry) {
+  editingServer.value = server
+  editName.value = server.name
+  showEditDialog.value = true
+}
+
+function confirmEditName() {
+  if (editingServer.value) {
+    const newName = editName.value.trim().slice(0, 20)
+    updateServerName(editingServer.value.url, newName)
+    serverList.value = getVerifiedServerList()
+    showEditDialog.value = false
+    showToast({ type: 'success', message: '已保存', duration: 1000 })
+  }
 }
 
 function handleBack() {
@@ -309,18 +383,51 @@ function handleBack() {
     border: 1px solid #1989fa;
   }
 }
-.history-url {
+.history-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.history-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-name {
+  font-size: 14px;
+  font-weight: 500;
   color: #323233;
-  margin-right: 8px;
+  
+  &.current-name {
+    color: #1989fa;
+  }
+}
+.history-url {
+  font-size: 12px;
+  color: #969799;
+  word-break: break-all;
 }
 .current-tag {
   margin-right: 8px;
   flex-shrink: 0;
 }
-.history-actions {
+/* 编辑名称弹窗样式 */
+.edit-name-popup {
+  padding: 16px;
+  padding-bottom: 24px;
+}
+.edit-name-header {
   display: flex;
-  gap: 6px;
-  flex-shrink: 0;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #323233;
+}
+.edit-name-actions {
+  margin-top: 16px;
 }
 </style>

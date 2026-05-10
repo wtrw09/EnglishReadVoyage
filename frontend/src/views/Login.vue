@@ -50,7 +50,9 @@
             placeholder="请输入用户名"
             :rules="[{ required: true, message: '请填写用户名' }]"
             left-icon="fa-user"
+            :right-icon="usernameHistoryList.length > 0 ? 'arrow-down' : ''"
             :disabled="nativeShell && serverStatus === 'unreachable'"
+            @click-right-icon="onUsernameClick"
           />
           <van-field
             v-model="form.password"
@@ -85,8 +87,8 @@
 
         <div class="switch-mode">
           <span class="text-link" @click="switchToActivate">激活账户</span>
-          <span class="text-link divider">|</span>
-          <span class="text-link" @click="goServerConfig">修改服务端地址</span>
+          <span v-if="nativeShell" class="text-link divider">|</span>
+          <span v-if="nativeShell" class="text-link" @click="goServerConfig">修改服务端地址</span>
         </div>
       </van-form>
 
@@ -137,6 +139,30 @@
         </div>
 
       </van-form>
+
+      <!-- 历史用户名选择弹出框 -->
+      <van-popup
+        v-model:show="showUsernamePicker"
+        position="bottom"
+        round
+        closeable
+        title="选择历史账户"
+      >
+        <div class="history-title">选择历史账户</div>
+        <van-cell-group>
+          <van-cell
+            v-for="item in usernameHistoryList"
+            :key="item"
+            :title="item"
+            icon="contact"
+            is-link
+            @click="selectHistoryUser(item)"
+          />
+        </van-cell-group>
+        <div class="history-clear-area">
+          <van-button plain size="small" type="danger" @click="clearHistory">清除历史记录</van-button>
+        </div>
+      </van-popup>
     </div>
   </div>
 </template>
@@ -145,7 +171,7 @@
 import { reactive, ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { showNotify } from 'vant'
-import { useAuthStore, getRememberedCredentials } from '@/store/auth'
+import { useAuthStore, getRememberedCredentials, getHistoryUsernames, getCredentialsByUsername, clearRememberedCredentials } from '@/store/auth'
 import { isNativeShell, getServerBaseUrl } from '@/utils/apiBase'
 import { useNetworkStatus } from '@/utils/useNetworkStatus'
 
@@ -172,8 +198,32 @@ const serverStatus = ref<'checking' | 'reachable' | 'unreachable'>('reachable')
 const isHealthChecking = ref(false)
 const nativeShell = computed(() => isNativeShell())
 const { checkConnection, status: networkStatus } = useNetworkStatus()
-const rememberMe = ref(false)
+const rememberMe = ref(true)
 const autoLoggingIn = ref(false)
+
+// 用户名历史选择
+const showUsernamePicker = ref(false)
+const usernameHistoryList = computed(() => getHistoryUsernames())
+
+function onUsernameClick() {
+  if (nativeShell.value && serverStatus.value === 'unreachable') return
+  if (usernameHistoryList.value.length === 0) return
+  showUsernamePicker.value = true
+}
+
+function selectHistoryUser(username: string) {
+  showUsernamePicker.value = false
+  form.username = username
+  const creds = getCredentialsByUsername(username)
+  form.password = creds ? creds.password : ''
+}
+
+function clearHistory() {
+  showUsernamePicker.value = false
+  clearRememberedCredentials()
+  form.username = ''
+  form.password = ''
+}
 
 // 登录表单
 const form = reactive<LoginForm>({
@@ -240,6 +290,14 @@ async function checkServerHealth() {
 
 async function tryAutoLogin() {
   if (!authStore.isLoggedIn) {
+    // 手动退出登录后不自动登录，只填充凭据到表单
+    const isManualLogout = sessionStorage.getItem('manual_logout') === 'true'
+    if (isManualLogout) {
+      sessionStorage.removeItem('manual_logout')
+      fillSavedCredentials()
+      return
+    }
+
     autoLoggingIn.value = true
     const result = await authStore.autoLogin()
     autoLoggingIn.value = false
@@ -248,12 +306,17 @@ async function tryAutoLogin() {
       router.replace(redirect || '/')
     } else {
       console.log('[AutoLogin] Failed:', result.message)
-      // 自动登录失败，预填用户名减少输入
-      const creds = getRememberedCredentials()
-      if (creds) {
-        form.username = creds.username
-      }
+      fillSavedCredentials()
     }
+  }
+}
+
+/** 将保存的凭据填充到表单（可能没有凭据） */
+function fillSavedCredentials() {
+  const creds = getRememberedCredentials()
+  if (creds) {
+    form.username = creds.username
+    form.password = creds.password
   }
 }
 
@@ -405,5 +468,17 @@ const onActivateSubmit = async () => {
       flex: 1;
     }
   }
+}
+
+.history-title {
+  padding: 20px 16px 12px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #323233;
+}
+
+.history-clear-area {
+  padding: 12px 16px 24px;
+  text-align: center;
 }
 </style>
