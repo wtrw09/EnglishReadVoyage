@@ -90,3 +90,6 @@ backend/Books/
 
 # Test data
 test/
+
+# Claude Code
+.claude/
