@@ -189,7 +189,7 @@ const loadPrecompileStatus = async () => {
 const handleSyncBooks = async () => {
   showConfirmDialog({
     title: '修复书籍数据',
-    message: '将扫描 Books 目录并同步数据库记录，同时检查语音配置文件完整性，是否继续？'
+    message: '将扫描 Books 目录并同步数据库记录，同时自动创建「未分组」分类并关联书籍到管理员，检查语音配置文件完整性，是否继续？'
   }).then(async () => {
     showLoadingToast({ message: '正在同步书籍...', forbidClick: true, duration: 0 })
     try {
@@ -201,6 +201,7 @@ const handleSyncBooks = async () => {
       if (res.data.removed?.length > 0) messages.push(`删除无效书籍 ${res.data.removed.length} 本`)
       if (res.data.errors?.length > 0) messages.push(`${res.data.errors.length} 本出错`)
       if (res.data.audio_fixed?.length > 0) messages.push(`自动修复语音配置 ${res.data.audio_fixed.length} 本`)
+      if (res.data.associated?.length > 0) messages.push(`关联 ${res.data.associated.length} 本书到「未分组」`)
       
       if (messages.length === 0) {
         showNotify({ type: 'success', message: '无需修复，数据已同步' })

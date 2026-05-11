@@ -2911,7 +2911,8 @@ class BookService:
         2. 扫描 Books 目录下的所有书籍文件夹
         3. 修复路径不匹配的记录
         4. 添加新发现的书籍到数据库
-        5. 检查并修复所有书籍的音频配置
+        5. 自动创建管理员的「未分组」分类，并将所有书籍关联到管理员
+        6. 检查并修复所有书籍的音频配置
         
         返回:
             dict: 包含修复统计信息
@@ -2927,7 +2928,8 @@ class BookService:
             "removed": [],
             "errors": [],
             "audio_fixed": [],
-            "audio_errors": []
+            "audio_errors": [],
+            "associated": []
         }
         
         # 1. 获取数据库中所有书籍
@@ -3081,8 +3083,65 @@ class BookService:
                 })
         
         await db.commit()
-        
-        # 5. 检查并修复所有书籍的音频配置
+
+        # 5. 自动创建管理员的「未分组」分类，并将所有书籍关联到管理员
+        # 避免出现书籍已在 books 表但首页不显示的问题
+        try:
+            from app.models.database_models import Category
+            from app.services.category_service import category_service
+
+            # 查找管理员用户
+            stmt_admin = select(User).where(User.role == 'admin')
+            result_admin = await db.execute(stmt_admin)
+            admin_user = result_admin.scalar_one_or_none()
+
+            if admin_user:
+                # 查找或创建「未分组」分类
+                stmt_cat = select(Category).where(
+                    Category.name == "未分组",
+                    Category.type == "user",
+                    Category.user_id == admin_user.id
+                )
+                result_cat = await db.execute(stmt_cat)
+                ungrouped_cat = result_cat.scalar_one_or_none()
+
+                if not ungrouped_cat:
+                    ungrouped_cat = Category(
+                        name="未分组",
+                        type="user",
+                        user_id=admin_user.id,
+                        sort_order=0
+                    )
+                    db.add(ungrouped_cat)
+                    await db.commit()
+                    await db.refresh(ungrouped_cat)
+
+                # 将所有尚未关联的书籍关联到管理员的「未分组」分类
+                stmt_books = select(Book)
+                result_books = await db.execute(stmt_books)
+                all_books = result_books.scalars().all()
+
+                for book in all_books:
+                    stmt_rel = select(BookCategoryRel).where(
+                        BookCategoryRel.book_id == book.id,
+                        BookCategoryRel.user_id == admin_user.id
+                    )
+                    result_rel = await db.execute(stmt_rel)
+                    existing_rel = result_rel.scalar_one_or_none()
+
+                    if not existing_rel:
+                        success = await category_service.add_book_to_category(
+                            db, book.id, ungrouped_cat.id, admin_user.id
+                        )
+                        if success:
+                            result["associated"].append({
+                                "book_id": book.id,
+                                "title": book.title
+                            })
+        except Exception as e:
+            logger.error(f"自动创建未分组关联失败: {e}")
+
+        # 6. 检查并修复所有书籍的音频配置
         # 重新获取所有书籍（因为可能有新增或修改）
         stmt = select(Book)
         query_result = await db.execute(stmt)
