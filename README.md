@@ -1,5 +1,7 @@
 # EnglishReadVoyage
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 [English Version](README_EN.md)
 
 EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英语水平的工具。它提供支持添加、编辑各类英语读物，支持即点即查的词典，原文点读，让英语学习更高效、更有趣。

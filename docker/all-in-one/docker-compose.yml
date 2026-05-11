@@ -4,8 +4,8 @@ services:
   app:
     # 镜像来源（根据实际情况选择其一）：
     # - 本地镜像: image: englishreadvoyage:latest（需先通过 build.ps1 构建）
-    # - CNB 镜像: image: registry.cnb.cool/wtrw09/englishreadvoyage:latest（首次自动拉取）
-    image: englishreadvoyage:latest
+    # - CNB 镜像: image: docker.cnb.cool/wtrw09/englishreadvoyage:latest（首次自动拉取，需先 docker login）
+    image: docker.cnb.cool/wtrw09/englishreadvoyage:latest
     container_name: englishread
     ports:
       - "8888:80"

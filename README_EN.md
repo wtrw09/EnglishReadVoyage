@@ -1,5 +1,7 @@
 # EnglishReadVoyage
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 [中文版](README.md)
 
 EnglishReadVoyage is a tool that helps English learners improve their English through **enhanced reading**. It supports adding and editing various English reading materials, instant dictionary lookup, and click-to-read functionality, making English learning more efficient and enjoyable.
@@ -55,7 +57,7 @@ If you prefer not to build locally, you can pull a pre-built image directly from
 
 ```bash
 # Pull the latest image
-docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
+docker pull docker.cnb.cool/wtrw09/englishreadvoyage:latest
 ```
 
 Once the image is pulled, follow the [Docker Deployment Startup](#docker-deployment-startup) steps below to start.
