@@ -93,13 +93,10 @@ docker compose pull && docker compose up -d
 如已构建或拉取了 CNB 制品库镜像，可直接使用：
 
 ```bash
-# 1. 登录 CNB 制品库
-docker login registry.cnb.cool -u cnb -p <你的令牌>
-
-# 2. 拉取镜像
+# 1. 拉取镜像
 docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
 
-# 3. 运行容器
+# 2. 运行容器
 docker run -d \
   --name englishread \
   -p 8888:80 \

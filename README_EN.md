@@ -93,13 +93,10 @@ docker compose pull && docker compose up -d
 If you have built or pulled the CNB registry image, use it directly:
 
 ```bash
-# 1. Login to CNB registry
-docker login registry.cnb.cool -u cnb -p <your-token>
-
-# 2. Pull image
+# 1. Pull image
 docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
 
-# 3. Run container
+# 2. Run container
 docker run -d \
   --name englishread \
   -p 8888:80 \
@@ -107,6 +104,7 @@ docker run -d \
   -v ${PWD}/backend/Books:/app/Books \
   registry.cnb.cool/wtrw09/englishreadvoyage:latest
 ```
+
 
 > The image supports linux/amd64 and linux/arm64 architectures, and will automatically select the appropriate architecture when pulling.
 
