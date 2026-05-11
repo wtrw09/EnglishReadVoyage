@@ -166,19 +166,17 @@ class CategoryService:
                 and_(BookCategoryRel.book_id == book_id, BookCategoryRel.user_id == user_id)
             )
             result = await db.execute(stmt_rel)
-            existing_rel = result.scalar_one_or_none()
+            existing_rels = result.scalars().all()
 
-            if existing_rel:
-                # 更新已有关联，将 category_id 设为 NULL 表示未分组
-                existing_rel.category_id = None
-            else:
-                # 创建新关联，category_id 为 NULL 表示未分组
-                rel = BookCategoryRel(
-                    book_id=book_id,
-                    category_id=None,
-                    user_id=user_id
-                )
-                db.add(rel)
+            # 删除所有已有关联（允许跨分类移除），然后创建一条未分组关联
+            for rel in existing_rels:
+                await db.delete(rel)
+            rel = BookCategoryRel(
+                book_id=book_id,
+                category_id=None,
+                user_id=user_id
+            )
+            db.add(rel)
 
             await db.commit()
             return True
@@ -198,11 +196,14 @@ class CategoryService:
             and_(BookCategoryRel.book_id == book_id, BookCategoryRel.user_id == user_id)
         )
         result = await db.execute(stmt_rel)
-        existing_rel = result.scalar_one_or_none()
+        existing_rels = result.scalars().all()
 
-        if existing_rel:
-            # 更新已有关联
-            existing_rel.category_id = category_id
+        if existing_rels:
+            # 更新第一个已有关联的 category_id，删除其余（书只属于一个分类）
+            first_rel = existing_rels[0]
+            first_rel.category_id = category_id
+            for rel in existing_rels[1:]:
+                await db.delete(rel)
         else:
             # 创建新关联
             rel = BookCategoryRel(

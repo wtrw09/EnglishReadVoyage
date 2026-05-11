@@ -3127,9 +3127,9 @@ class BookService:
                         BookCategoryRel.user_id == admin_user.id
                     )
                     result_rel = await db.execute(stmt_rel)
-                    existing_rel = result_rel.scalar_one_or_none()
+                    existing_rels = result_rel.scalars().all()
 
-                    if not existing_rel:
+                    if not existing_rels:
                         success = await category_service.add_book_to_category(
                             db, book.id, ungrouped_cat.id, admin_user.id
                         )

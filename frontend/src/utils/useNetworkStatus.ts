@@ -145,18 +145,27 @@ async function verifyToken(): Promise<'valid' | 'expired' | 'networkError'> {
  * 2. 心跳检测服务端
  * 3. 恢复连接后验证 token
  *
- * 带并发防护，同一时间只允许一个实例运行
+ * 带并发防护 + URL 变化检测：服务端地址变更后自动启动新检查
  */
 let checkConnectionPromise: Promise<void> | null = null
+let checkConnectionBaseUrl: string = ''
 
 async function checkConnection(): Promise<void> {
-  if (checkConnectionPromise) {
-    console.log('[NetworkStatus] checkConnection 已有进行中的请求，复用')
+  const currentBaseUrl = getServerBaseUrl()
+  // 仅当有进行中的请求且服务端地址未变化时才复用
+  if (checkConnectionPromise && checkConnectionBaseUrl === currentBaseUrl) {
+    console.log('[NetworkStatus] checkConnection 复用已有请求')
     return checkConnectionPromise
+  }
+  // URL 已变化或没有进行中请求：启动新的检测
+  if (checkConnectionPromise) {
+    console.log('[NetworkStatus] 服务端地址已变化，忽略旧的 checkConnection')
   }
   checkConnectionPromise = _doCheckConnection().finally(() => {
     checkConnectionPromise = null
+    checkConnectionBaseUrl = ''
   })
+  checkConnectionBaseUrl = currentBaseUrl
   return checkConnectionPromise
 }
 

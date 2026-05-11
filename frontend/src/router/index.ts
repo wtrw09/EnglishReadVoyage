@@ -74,8 +74,14 @@ const router = createRouter({
 // 路由守卫
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
-  const isLoggedIn = authStore.isLoggedIn
+  let isLoggedIn = authStore.isLoggedIn
   const isAdmin = authStore.isAdmin
+
+  // 兜底：Pinia store 状态可能因响应式时序问题未被同步，从 localStorage 直接检查
+  if (!isLoggedIn && localStorage.getItem('token')) {
+    console.warn('[Router] Pinia isLoggedIn=false 但 localStorage 有 token，强制同步')
+    isLoggedIn = true
+  }
 
   // 原生壳（Android Capacitor / HarmonyOS）且未配置服务端地址：强制进 ServerConfig 页
   if (isNativeShell() && !hasServerBaseUrl() && to.name !== 'ServerConfig') {

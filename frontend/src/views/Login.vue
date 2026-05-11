@@ -142,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { showNotify } from 'vant'
 import { useAuthStore, getRememberedCredentials } from '@/store/auth'
@@ -267,9 +267,31 @@ const onSubmit = async () => {
   
   if (result.success) {
     showNotify({ type: 'success', message: '登录成功', duration: 1500 })
+
+    // 等待 Vue 响应式传播（Pinia token 状态同步到路由守卫的 computed）
+    await nextTick()
+
     // 跳转到之前尝试访问的页面或首页
     const redirect = route.query.redirect as string
-    router.replace(redirect || '/')
+    const target = redirect || '/'
+
+    // 防御性检查：如果路由守卫因状态未同步而将 isLoggedIn 判定为 false 重定向回 Login，
+    // 手动触发重试直到成功
+    const MAX_RETRY = 5
+    for (let i = 0; i < MAX_RETRY; i++) {
+      try {
+        await router.replace(target)
+        // 导航成功后检查当前是否仍停留在登录页
+        if (router.currentRoute.value.name !== 'Login') {
+          break // 已经跳走，成功
+        }
+      } catch (e) {
+        console.warn('[Login] 导航尝试失败:', e)
+      }
+      // 等待一帧后重试
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await nextTick()
+    }
   } else {
     // 只清除密码，保留用户名
     form.password = ''
