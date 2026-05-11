@@ -43,7 +43,7 @@ EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英�
 cd docker/all-in-one
 
 # 2. 准备书籍目录（可选）
-# 将你的英文书籍放入 backend/Books/ 目录，
+# 将你的已经存在的英文书籍放入 backend/Books/ 目录，
 # 书籍目录结构参考：Books/Level_E/书名/001_书名.md
 
 # 3. 一键启动
@@ -87,6 +87,28 @@ docker compose down
 # 更新镜像后重新部署（保留数据）
 docker compose pull && docker compose up -d
 ```
+
+### 使用 CNB 镜像部署（推荐）
+
+如已构建或拉取了 CNB 制品库镜像，可直接使用：
+
+```bash
+# 1. 登录 CNB 制品库
+docker login registry.cnb.cool -u cnb -p <你的令牌>
+
+# 2. 拉取镜像
+docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
+
+# 3. 运行容器
+docker run -d \
+  --name englishread \
+  -p 8888:80 \
+  -v ${PWD}/backend/data:/app/data \
+  -v ${PWD}/backend/Books:/app/Books \
+  registry.cnb.cool/wtrw09/englishreadvoyage:latest
+```
+
+> 镜像支持 linux/amd64 和 linux/arm64 架构，拉取时会自动选择对应架构。
 
 ## 离线词典配置（可选）
 

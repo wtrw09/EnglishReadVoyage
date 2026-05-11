@@ -95,22 +95,14 @@ if ($pushChoice -eq "1") {
     $Push = $false
 }
 
-# 如果指定了仓库地址，添加前缀
-$FullImageName = $ImageName
-if ($Registry) {
-    $FullImageName = "$Registry/$ImageName"
-}
-
-# CNB 推送时使用多架构 manifest
-if ($pushChoice -eq "3" -and $Architecture -eq "all") {
-    $useCNBMultiArch = $true
-} else {
-    $useCNBMultiArch = $false
-}
-
-# CNB 推送时使用统一标签（不带架构后缀）
+# CNB 推送时使用统一标签（直接使用仓库地址，不带 ImageName 后缀）
 if ($pushChoice -eq "3") {
     $FullImageName = "registry.cnb.cool/wtrw09/englishreadvoyage"
+} elseif ($Registry) {
+    # 其他仓库：仓库地址 + 镜像名
+    $FullImageName = "$Registry/$ImageName"
+} else {
+    $FullImageName = $ImageName
 }
 
 # 完整镜像标签
@@ -261,7 +253,7 @@ if ($Architecture -eq "all") {
     $Tag = "latest"
     
     # CNB 多架构模式：同时构建 amd64 和 arm64，使用 --push 直接推送
-    if ($useCNBMultiArch) {
+    if ($pushChoice -eq "3") {
         Write-Host "多架构 CNB 推送模式：同时构建并推送" -ForegroundColor Cyan
         
         # 构建多架构镜像并直接推送
