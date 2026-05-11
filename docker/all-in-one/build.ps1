@@ -51,62 +51,9 @@ $defaultTag = "latest"
 $TagInput = Read-Host "请输入镜像标签 (默认: $defaultTag)"
 $Tag = if ($TagInput) { $TagInput } else { $defaultTag }
 
-# 交互式输入仓库地址
-Write-Host ""
-Write-Host "是否推送到远程仓库?" -ForegroundColor Green
-Write-Host "  [1] 仅构建本地镜像" -ForegroundColor White
-Write-Host "  [2] 推送到 Docker Hub" -ForegroundColor White
-Write-Host "  [3] 推送到 CNB 制品库 (registry.cnb.cool)" -ForegroundColor White
-Write-Host "  [4] 推送到其他仓库" -ForegroundColor White
-
-$pushChoice = Read-Host "请输入选项 (1-4)"
-
-
-$Push = $false
-$Registry = ""
-
-if ($pushChoice -eq "1") {
-    $Push = $false
-    Write-Host "将仅构建本地镜像" -ForegroundColor Gray
-} elseif ($pushChoice -eq "2") {
-    $Push = $true
-    $dockerHubUser = Read-Host "请输入 Docker Hub 用户名"
-    if ($dockerHubUser) {
-        $Registry = $dockerHubUser
-    } else {
-        Write-Host "未输入用户名，将仅构建本地镜像" -ForegroundColor Yellow
-        $Push = $false
-    }
-} elseif ($pushChoice -eq "3") {
-    $Push = $true
-    $Registry = "registry.cnb.cool/wtrw09/englishreadvoyage"
-    Write-Host "推送到 CNB 制品库: $Registry" -ForegroundColor Cyan
-} elseif ($pushChoice -eq "4") {
-    $Push = $true
-    $customRegistry = Read-Host "请输入仓库地址 (如: registry.cn-hangzhou.aliyuncs.com/yourname)"
-    if ($customRegistry) {
-        $Registry = $customRegistry
-    } else {
-        Write-Host "未输入仓库地址，将仅构建本地镜像" -ForegroundColor Yellow
-        $Push = $false
-    }
-} else {
-    Write-Host "无效选项，默认仅构建本地镜像" -ForegroundColor Yellow
-    $Push = $false
-}
-
-# CNB 推送时使用统一标签（直接使用仓库地址，不带 ImageName 后缀）
-if ($pushChoice -eq "3") {
-    $FullImageName = "registry.cnb.cool/wtrw09/englishreadvoyage"
-} elseif ($Registry) {
-    # 其他仓库：仓库地址 + 镜像名
-    $FullImageName = "$Registry/$ImageName"
-} else {
-    $FullImageName = $ImageName
-}
-
 # 完整镜像标签
-$ImageTag = "${FullImageName}:${Tag}"
+$ImageTag = "${ImageName}:${Tag}"
+$Push = $false
 
 # 确认信息
 Write-Host ""
@@ -116,11 +63,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "目标架构: $Architecture" -ForegroundColor Yellow
 Write-Host "镜像名称: $ImageName" -ForegroundColor Yellow
 Write-Host "镜像标签: $Tag" -ForegroundColor Yellow
-if ($Registry) {
-    Write-Host "仓库地址: $Registry" -ForegroundColor Yellow
-}
 Write-Host "完整镜像名: $ImageTag" -ForegroundColor Yellow
-Write-Host "推送镜像: $Push" -ForegroundColor Yellow
 Write-Host "========================================" -ForegroundColor Cyan
 
 $confirm = Read-Host "确认开始构建? (Y/n)"
@@ -251,32 +194,6 @@ Write-Host "[2/2] 构建合并镜像..." -ForegroundColor Green
 # 处理 "all" 架构：先后台构建再前台，构建两个单独的镜像
 if ($Architecture -eq "all") {
     $Tag = "latest"
-    
-    # CNB 多架构模式：同时构建 amd64 和 arm64，使用 --push 直接推送
-    if ($pushChoice -eq "3") {
-        Write-Host "多架构 CNB 推送模式：同时构建并推送" -ForegroundColor Cyan
-        
-        # 构建多架构镜像并直接推送
-        $multiArchArgs = @(
-            "buildx", "build",
-            "--platform", "linux/amd64,linux/arm64",
-            "--tag", "$FullImageName:latest",
-            "--file", "docker/all-in-one/Dockerfile",
-            "--build-arg", "PYTHON_IMAGE=python:3.13-slim",
-            "--build-arg", "NODE_IMAGE=node:22-alpine",
-            "--push",
-            "."
-        )
-        
-        Write-Host "执行: docker $($multiArchArgs -join ' ')" -ForegroundColor DarkGray
-        & docker @multiArchArgs
-        if ($LASTEXITCODE -ne 0) { Write-Error "多架构构建失败"; exit 1 }
-        
-        Write-Host "✓ 多架构镜像构建并推送成功: $FullImageName:latest" -ForegroundColor Green
-        Write-Host "  支持平台: linux/amd64, linux/arm64" -ForegroundColor Cyan
-        
-        exit 0
-    }
     
     # 本地多架构模式：分别构建并加载到本地
     Write-Host "多架构本地模式：分别构建两个架构镜像" -ForegroundColor Cyan
@@ -415,42 +332,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "✓ 镜像构建成功: $ImageTag" -ForegroundColor Green
-
-# 推送镜像
-if ($Push) {
-    Write-Host ""
-    Write-Host "推送镜像到仓库..." -ForegroundColor Green
-    
-    # CNB 单架构推送
-    if ($pushChoice -eq "3") {
-        # 使用 buildx --push 推送
-        $pushArgs = @(
-            "buildx", "build",
-            "--platform", $platforms,
-            "--tag", $ImageTag,
-            "--file", "docker/all-in-one/Dockerfile",
-            "--build-arg", "PYTHON_IMAGE=python:3.13-slim",
-            "--build-arg", "NODE_IMAGE=node:22-alpine",
-            "--push",
-            "."
-        )
-        Write-Host "执行: docker $($pushArgs -join ' ')" -ForegroundColor DarkGray
-        & docker @pushArgs
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ 推送成功: $ImageTag" -ForegroundColor Green
-        } else {
-            Write-Host "✗ 推送失败" -ForegroundColor Red
-        }
-    } else {
-        # 其他仓库直接 push
-        docker push $ImageTag
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ 推送成功" -ForegroundColor Green
-        } else {
-            Write-Host "✗ 推送失败" -ForegroundColor Red
-        }
-    }
-}
 
 # 构建完成信息
 Write-Host ""
