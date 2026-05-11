@@ -76,3 +76,4 @@ docker-compose.yml
 # 文档
 *.md
 !README.md
+!docker/all-in-one/model/**

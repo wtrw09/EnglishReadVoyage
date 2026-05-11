@@ -70,6 +70,7 @@ dist/
 
 # Model directories
 model/
+!docker/all-in-one/model/
 voices/
 
 # Cache directories
