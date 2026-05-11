@@ -27,7 +27,13 @@ EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英�
 - **词典 API 配置**：配置韦氏词典等在线词典的 API Key
 - **语音缓存管理**：生成和清理语音缓存
 
-## 本地构建镜像（可选）
+## 安装部署服务后端
+
+本项目提供 Docker 镜像部署方式，无需安装 Python 或 Node.js。
+
+### Docker 镜像获取
+
+#### 本地构建镜像（可选）
 
 如果你需要自行构建镜像（如自定义功能），可以运行以下命令构建本地镜像：
 
@@ -42,8 +48,18 @@ bash docker/all-in-one/build.sh
 构建完成后会生成 `englishreadvoyage:latest` 本地镜像，后续可直接使用。
 
 也可以跳过此步骤，直接从网上拉取已构建好的镜像（见下文）。
+#### 从CNB拉取镜像
 
-## 快速开始 - Docker 部署
+如果不想本地构建，可以直接从 CNB（cnb.cool）拉取已构建好的镜像：
+
+```bash
+# 拉取最新镜像
+docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
+```
+
+镜像拉取完成后，参照下方[Docker 部署启动](#docker-部署启动)步骤启动即可。
+
+### Docker 部署启动
 
 这是最简单的部署方式，无需安装 Python 或 Node.js。
 
@@ -84,15 +100,7 @@ docker-compose up -d
 
 数据文件将保存在运行目录下的 `backend/` 子目录中。
 
-### 访问应用
-
-启动后打开浏览器访问：**http://localhost:8888**
-
-默认管理员账号：
-- 用户名：`admin`
-- 密码：`admin`
-
-### 端口配置
+#### 端口配置
 
 默认端口为 `8888`。如需修改，编辑当前目录下的 `docker-compose.yml`，将 `8888:80` 改为 `你想要的端口:80`：
 
@@ -101,7 +109,7 @@ ports:
   - "9999:80"   # 将前端端口改为 9999
 ```
 
-### 常用命令
+#### 常用命令
 
 ```bash
 # 查看日志
@@ -117,7 +125,78 @@ docker-compose down
 docker-compose pull && docker-compose up -d
 ```
 
-## 离线词典配置（可选）
+## 客户端访问
+
+### 网页访问
+
+启动后打开浏览器访问：**http://localhost:8888**
+
+默认管理员账号：
+- 用户名：`admin`
+- 密码：`admin`
+
+### App 客户端
+
+#### Android App 使用
+
+从源码构建：
+
+1. 打开 Android Studio，导入 `android/` 目录
+2. 在 `frontend/` 目录下构建前端产物：
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+3. 构建产物会自动同步到 Android 项目，用 Android Studio 打包 APK 即可
+
+使用说明：
+
+- Android App 通过 Capacitor WebView 加载前端页面
+- 确保手机上可以访问 Docker 部署的服务器地址
+- 首次打开 App 后，在登录页面输入服务器地址和端口即可连接
+
+#### 鸿蒙 App 使用
+
+从源码构建：
+
+1. 使用 DevEco Studio 打开 `harmony/` 目录
+2. 在 `frontend/` 目录下构建前端产物：
+
+```bash
+cd frontend
+npm install
+npm run harmony:sync
+```
+
+3. 使用 DevEco Studio 打包 HAP 或 APP 即可
+
+使用说明：
+
+- 鸿蒙 App 使用 WebView 加载内嵌的前端页面（资源打包在 App 内）
+- 支持后台音频播放（听书模式）
+- 通过 WebView JavaScript Bridge 实现音频播放桥接
+## 必要配置
+### 百度翻译api
+主要用于把英文翻译成中文，是免费机器翻译，个人使用额度足够。目前没有找到其他更好的免费翻译，只配置这个了。
+## 可选配置
+### 韦氏词典配置（可选）
+
+韦氏词典（Merriam-Webster）提供更权威、更详细的英文释义。如需启用：
+
+1. **获取 API Key**：访问 [Merriam-Webster Developer Portal](https://www.dictionaryapi.com/register/index)，注册账号后申请以下两个 API Key（完全免费）：
+   - **Learner's Dictionary API Key**：主词典，提供详细释义和例句
+   - **Thesaurus API Key**：同义词词典，提供同义词/反义词（可选）
+2. **配置位置**：在管理员界面的「词典设置」中分别填入两个 API Key
+3. **配置优势**：相比默认的 FreeDictionaryAPI，韦氏词典提供：
+   - 更权威的英文释义
+   - 更丰富的例句
+   - 详细的词源信息
+   - 准确的同义词/反义词（需 Thesaurus API Key）
+
+### 离线词典配置（可选）
 
 如需本地词典查询（速度快、无需联网），可按以下步骤配置：
 
@@ -133,47 +212,21 @@ docker-compose pull && docker-compose up -d
 
 如果没有放置该文件，词典查询会自动使用在线 FreeDictionaryAPI，不影响其他功能。
 
-## Android App 使用
+### 语音服务配置（可选）
 
-### 从源码构建
+项目默认使用微软 [Edge-TTS](https://github.com/rany2/edge-tts)，完全免费且朗读标准，是开箱即用的最佳选择。
 
-1. 打开 Android Studio，导入 `android/` 目录
-2. 在 `frontend/` 目录下构建前端产物：
+如需更高质量或更多音色，可配置以下付费语音服务：
 
-```bash
-cd frontend
-npm install
-npm run build
-```
+| 服务 | 类型 | 特点 |
+|------|------|------|
+| **Azure TTS** | 微软 Neural | 高质量神经网络语音，音色丰富 |
+| **豆包 TTS** | 字节在线 | 中文语音自然，支持情感 |
+| **MiniMax TTS** | 国内在线 | 多语言支持，有免费额度 |
+| **硅基流动 TTS** | 国内在线 | 多款模型可选 |
+| **Kokoro TTS** | 本地模型 | 需本地部署，音质优秀 |
 
-3. 构建产物会自动同步到 Android 项目，用 Android Studio 打包 APK 即可
-
-### 使用说明
-
-- Android App 通过 Capacitor WebView 加载前端页面
-- 确保手机上可以访问 Docker 部署的服务器地址
-- 首次打开 App 后，在登录页面输入服务器地址和端口即可连接
-
-## 鸿蒙 App 使用
-
-### 从源码构建
-
-1. 使用 DevEco Studio 打开 `harmony/` 目录
-2. 在 `frontend/` 目录下构建前端产物：
-
-```bash
-cd frontend
-npm install
-npm run harmony:sync
-```
-
-3. 使用 DevEco Studio 打包 HAP 或 APP 即可
-
-### 使用说明
-
-- 鸿蒙 App 使用 WebView 加载内嵌的前端页面（资源打包在 App 内）
-- 支持后台音频播放（听书模式）
-- 通过 WebView JavaScript Bridge 实现音频播放桥接
+配置方式：在管理员界面的「语音设置」中选择服务并填入对应 API Key。
 
 ## 服务器地址配置
 

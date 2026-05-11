@@ -12,7 +12,7 @@ EnglishReadVoyage is a tool that helps English learners improve their English th
 - **Instant Lookup**: Long-press any word to instantly see its definition and pronunciation.
 - **Text-to-Speech**: Click to read sentences aloud. Supports multiple TTS engines (Edge-TTS, Doubao, SiliconFlow, MiniMax, Azure, etc.) for reading selected text or entire books.
 - **Audiobook Mode**: Supports background playback for hands-free learning.
-- **Dictionary**: Supports both offline local dictionary and online dictionary lookup with definitions, example sentences, and pronunciations. Merriam-Webster requires ByteDance registration and API key configuration.
+- **Dictionary**: Supports both offline local dictionary and online dictionary lookup with definitions, example sentences, and pronunciations. Merriam-Webster provides more detailed definitions.
 - **Word Bank**: Save new words and review them in one place.
 - **Book Grouping**: Create your own categories to organize books.
 - **Reading Progress**: Automatically records your reading position with cross-device sync.
@@ -27,7 +27,13 @@ EnglishReadVoyage is a tool that helps English learners improve their English th
 - **Dictionary API Configuration**: Configure API keys for online dictionaries like Merriam-Webster.
 - **Voice Cache Management**: Generate and clean up voice caches.
 
-## Build Local Image (Optional)
+## Deploy Backend Service
+
+This project provides Docker image deployment without needing to install Python or Node.js.
+
+### Get Docker Image
+
+#### Build Local Image (Optional)
 
 If you need to build the image yourself (e.g., to customize features), run:
 
@@ -43,16 +49,27 @@ This will produce a `englishreadvoyage:latest` local image for direct use.
 
 You can skip this step and pull a pre-built image directly (see below).
 
-## Quick Start - Docker Deployment
+#### Pull Image from CNB
+
+If you prefer not to build locally, you can pull a pre-built image directly from CNB (cnb.cool):
+
+```bash
+# Pull the latest image
+docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
+```
+
+Once the image is pulled, follow the [Docker Deployment Startup](#docker-deployment-startup) steps below to start.
+
+### Docker Deployment Startup
 
 This is the simplest deployment method with no need to install Python or Node.js.
 
-### Prerequisites
+#### Prerequisites
 
 - Install [Docker](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux)
 - Ensure Docker service is running
 
-### Deployment Steps
+#### Deployment Steps
 
 ```bash
 # 1. Create a directory for config and data (any location, myapp used as example)
@@ -84,15 +101,7 @@ On container startup, the following operations are automatically performed:
 
 Data files will be saved in the `backend/` subdirectory of your working directory.
 
-### Access the App
-
-After startup, open browser to access: **http://localhost:8888**
-
-Default admin account:
-- Username: `admin`
-- Password: `admin`
-
-### Port Configuration
+#### Port Configuration
 
 Default port is `8888`. To modify, edit the `docker-compose.yml` in your current directory, change `8888:80` to `your_desired_port:80`:
 
@@ -101,7 +110,7 @@ ports:
   - "9999:80"   # Change frontend port to 9999
 ```
 
-### Common Commands
+#### Common Commands
 
 ```bash
 # View logs
@@ -117,7 +126,83 @@ docker-compose down
 docker-compose pull && docker-compose up -d
 ```
 
-## Offline Dictionary Configuration (Optional)
+## Client Access
+
+### Web Access
+
+After startup, open browser to access: **http://localhost:8888**
+
+Default admin account:
+- Username: `admin`
+- Password: `admin`
+
+### App Clients
+
+#### Android App Usage
+
+Build from source:
+
+1. Open Android Studio and import `android/` directory
+2. Build frontend in `frontend/` directory:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+3. Build output will automatically sync to the Android project. Use Android Studio to package the APK.
+
+Usage instructions:
+
+- Android App loads the frontend page through Capacitor WebView
+- Ensure the phone can access the Docker-deployed server address
+- On first open, enter the server address and port on the login page to connect.
+
+#### HarmonyOS App Usage
+
+Build from source:
+
+1. Open `harmony/` directory with DevEco Studio
+2. Build frontend in `frontend/` directory:
+
+```bash
+cd frontend
+npm install
+npm run harmony:sync
+```
+
+3. Use DevEco Studio to package HAP or APP.
+
+Usage instructions:
+
+- HarmonyOS App uses WebView to load the embedded frontend page (resources packaged in App)
+- Supports background audio playback (audiobook mode)
+- Audio playback bridging implemented through WebView JavaScript Bridge
+
+## Required Configuration
+
+### Baidu Translation API
+
+Used to translate English to Chinese. It's a free machine translation service with sufficient quota for personal use. No better free translation alternative has been found yet.
+
+## Optional Configuration
+
+### Merriam-Webster Dictionary Configuration (Optional)
+
+Merriam-Webster provides more authoritative and detailed English definitions. To enable:
+
+1. **Get API Keys**: Visit [Merriam-Webster Developer Portal](https://www.dictionaryapi.com/register/index), register an account and apply for the following two API Keys (completely free):
+   - **Learner's Dictionary API Key**: Main dictionary, provides detailed definitions and example sentences
+   - **Thesaurus API Key**: Thesaurus dictionary, provides synonyms/antonyms (optional)
+2. **Configuration Location**: Enter the two API Keys separately in the admin panel's "Dictionary Settings"
+3. **Benefits**: Compared to the default FreeDictionaryAPI, Merriam-Webster provides:
+   - More authoritative English definitions
+   - Richer example sentences
+   - Detailed etymology information
+   - Accurate synonyms/antonyms (requires Thesaurus API Key)
+
+### Offline Dictionary Configuration (Optional)
 
 To enable local dictionary lookup (fast speed, no internet required), follow these steps:
 
@@ -133,47 +218,21 @@ To enable local dictionary lookup (fast speed, no internet required), follow the
 
 If this file is not placed, dictionary lookup will automatically use the online FreeDictionaryAPI, which does not affect other features.
 
-## Android App Usage
+### Voice Services Configuration (Optional)
 
-### Build from Source
+The project uses [Edge-TTS](https://github.com/rany2/edge-tts) by default, which is completely free with standard pronunciation — the best out-of-the-box choice.
 
-1. Open Android Studio and import `android/` directory
-2. Build frontend in `frontend/` directory:
+For higher quality or more voice options, you can configure the following paid voice services:
 
-```bash
-cd frontend
-npm install
-npm run build
-```
+| Service | Type | Features |
+|---------|------|----------|
+| **Azure TTS** | Microsoft Neural | High-quality neural voices, rich options |
+| **Doubao TTS** | ByteDance Online | Natural Chinese voice, emotional support |
+| **MiniMax TTS** | China Online | Multi-language support, free quota |
+| **SiliconFlow TTS** | China Online | Multiple models available |
+| **Kokoro TTS** | Local Model | Requires local deployment, excellent quality |
 
-3. Build output will automatically sync to the Android project. Use Android Studio to package the APK.
-
-### Usage Instructions
-
-- Android App loads the frontend page through Capacitor WebView
-- Ensure the phone can access the Docker-deployed server address
-- On first open, enter the server address and port on the login page to connect.
-
-## HarmonyOS App Usage
-
-### Build from Source
-
-1. Open `harmony/` directory with DevEco Studio
-2. Build frontend in `frontend/` directory:
-
-```bash
-cd frontend
-npm install
-npm run harmony:sync
-```
-
-3. Use DevEco Studio to package HAP or APP.
-
-### Usage Instructions
-
-- HarmonyOS App uses WebView to load the embedded frontend page (resources packaged in App)
-- Supports background audio playback (audiobook mode)
-- Audio playback bridging implemented through WebView JavaScript Bridge
+Configuration: Select the service and enter the corresponding API Key in the admin panel's "Voice Settings".
 
 ## Server Address Configuration
 

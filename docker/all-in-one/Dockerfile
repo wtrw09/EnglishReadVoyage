@@ -47,7 +47,17 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && 
 
 # 复制并安装 Python 依赖
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt && \
+    # 清理 __pycache__ 字节码缓存（运行时不需要）
+    find /root/.local -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true && \
+    # 删除 site-packages 中的 test 目录（生产环境不需要）
+    rm -rf /root/.local/lib/python3.13/site-packages/*/tests/ /root/.local/lib/python3.13/site-packages/*/test/ && \
+    # 删除 setuptools（运行时不需要）
+    pip uninstall -y setuptools 2>/dev/null || true && \
+    # 删除 spaCy 中运行时不需要的模块
+    rm -rf /root/.local/lib/python3.13/site-packages/spacy/tests \
+           /root/.local/lib/python3.13/site-packages/spacy/cli \
+           /root/.local/lib/python3.13/site-packages/spacy/displacy
 
 # ==================== 最终运行阶段 ====================
 FROM ${PYTHON_IMAGE}
