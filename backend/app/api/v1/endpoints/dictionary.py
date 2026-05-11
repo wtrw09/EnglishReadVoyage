@@ -57,7 +57,7 @@ async def get_user_translation(
     user = result.scalars().first()
 
     if not user:
-        return ""
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
     if user.role == "admin":
         # 管理员：使用自己的翻译API
@@ -66,7 +66,10 @@ async def get_user_translation(
         )
         settings = result.scalars().first()
         if not settings or not settings.selected_translation_api_id:
-            return ""
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="请先配置百度翻译API：设置 → 词典设置"
+            )
 
         result = await db.execute(
             select(TranslationAPI).where(
@@ -81,14 +84,17 @@ async def get_user_translation(
         result = await db.execute(select(User).where(User.username == "admin"))
         admin_user = result.scalars().first()
         if not admin_user:
-            return ""
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="管理员账户不存在")
 
         result = await db.execute(
             select(UserSettings).where(UserSettings.user_id == admin_user.id)
         )
         admin_settings = result.scalars().first()
         if not admin_settings or not admin_settings.selected_translation_api_id:
-            return ""
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="管理员未配置翻译API，请联系管理员"
+            )
 
         result = await db.execute(
             select(TranslationAPI).where(
@@ -100,7 +106,10 @@ async def get_user_translation(
         api = result.scalars().first()
 
     if not api:
-        return ""
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="翻译API未启用或不存在"
+        )
 
     # 调用百度翻译API
     translation = await translation_service.translate_with_baidu(
