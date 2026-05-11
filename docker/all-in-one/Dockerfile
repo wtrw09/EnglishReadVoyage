@@ -54,9 +54,8 @@ RUN pip install --no-cache-dir --user -r requirements.txt && \
     rm -rf /root/.local/lib/python3.13/site-packages/*/tests/ /root/.local/lib/python3.13/site-packages/*/test/ && \
     # 删除 setuptools（运行时不需要）
     pip uninstall -y setuptools 2>/dev/null || true && \
-    # 删除 spaCy 中运行时不需要的模块（保留 cli，因为 spacy.__init__ 需要导入 cli.info）
-    rm -rf /root/.local/lib/python3.13/site-packages/spacy/tests \
-           /root/.local/lib/python3.13/site-packages/spacy/displacy
+    # 只删除 spaCy 测试模块（cli 和 displacy 有内部依赖，不可删除）
+    rm -rf /root/.local/lib/python3.13/site-packages/spacy/tests
 
 # ==================== 最终运行阶段 ====================
 FROM ${PYTHON_IMAGE}
