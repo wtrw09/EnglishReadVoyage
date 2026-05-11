@@ -8,28 +8,25 @@
 
 main:
   push:
-    # 启用 Docker 服务（流水线内置 docker 命令）
     - services:
         - docker
+      stages:
+        # 设置镜像标签
+        - name: set docker tag
+          script: |
+            echo -n "${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest"
+          exports:
+            info: IMAGE_TAG
 
-    # 构建阶段
-    stages:
-      # 设置镜像标签
-      - name: set docker tag
-        script: |
-          echo -n "${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest"
-        exports:
-          info: IMAGE_TAG
-
-      # 构建多架构镜像（amd64 + arm64），一次性推送
-      # 注意：buildx 多架构构建时会自动选择对应架构的 base 镜像，无需指定 -arm64 后缀
-      - name: build and push multi-arch image
-        script: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --tag ${IMAGE_TAG} \
-            --file docker/all-in-one/Dockerfile \
-            --build-arg PYTHON_IMAGE=python:3.13-slim \
-            --build-arg NODE_IMAGE=node:22-alpine \
-            --push \
-            .
+        # 构建多架构镜像（amd64 + arm64），一次性推送
+        # 注意：buildx 多架构构建时会自动选择对应架构的 base 镜像，无需指定 -arm64 后缀
+        - name: build and push multi-arch image
+          script: |
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --tag ${IMAGE_TAG} \
+              --file docker/all-in-one/Dockerfile \
+              --build-arg PYTHON_IMAGE=python:3.13-slim \
+              --build-arg NODE_IMAGE=node:22-alpine \
+              --push \
+              .
