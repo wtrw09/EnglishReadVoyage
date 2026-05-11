@@ -1,0 +1,51 @@
+# CNB 云原生构建配置文件
+# 文档：https://docs.cnb.cool/zh/build/
+
+main:
+  push:
+    # 启用 Docker 服务（流水线内置 docker 命令）
+    - services:
+        - docker
+
+    # 构建阶段
+    stages:
+      # 设置镜像标签
+      - name: set docker tag
+        script: |
+          echo -n "${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest"
+        exports:
+          info: IMAGE_TAG
+
+      # 构建 AMD64 镜像
+      - name: build amd64 image
+        script: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag ${IMAGE_TAG}-amd64 \
+            --file docker/all-in-one/Dockerfile \
+            --build-arg PYTHON_IMAGE=python:3.13-slim-amd64 \
+            --build-arg NODE_IMAGE=node:22-alpine-amd64 \
+            --load \
+            .
+
+      # 推送 AMD64 镜像
+      - name: push amd64 image
+        script: |
+          docker push ${IMAGE_TAG}-amd64
+
+      # 构建 ARM64 镜像
+      - name: build arm64 image
+        script: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --tag ${IMAGE_TAG}-arm64 \
+            --file docker/all-in-one/Dockerfile \
+            --build-arg PYTHON_IMAGE=python:3.13-slim-arm64 \
+            --build-arg NODE_IMAGE=node:22-alpine-arm64 \
+            --load \
+            .
+
+      # 推送 ARM64 镜像
+      - name: push arm64 image
+        script: |
+          docker push ${IMAGE_TAG}-arm64

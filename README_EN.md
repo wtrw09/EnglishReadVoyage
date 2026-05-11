@@ -155,3 +155,11 @@ Whether using the web version or mobile App, you can configure the server addres
 - All user data (reading progress, word bank, etc.) is stored in Docker's `backend/data/` mounted volume
 - It is recommended to regularly back up database files in `backend/data/` directory
 - For production deployment, it is recommended to set a strong password for `SECRET_KEY` in the `docker-compose.yml` environment
+
+## Repository
+
+The source code is hosted on the following platforms:
+
+- **GitHub**: https://github.com/wtrw09/EnglishReadVoyage
+- **Gitee**: https://gitee.com/wtrw09/EnglishReadVoyage
+- **CNB.Cool**: https://cnb.cool/wtrw09/EnglishReadVoyage

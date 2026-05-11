@@ -155,3 +155,11 @@ npm run harmony:sync
 - 所有用户数据（阅读进度、生词本等）存储在 Docker 的 `backend/data/` 挂载卷中
 - 建议定期备份 `backend/data/` 目录下的数据库文件
 - 生产环境部署时，建议在 `docker-compose.yml` 的 environment 中设置 `SECRET_KEY` 为强密码
+
+## 代码仓库
+
+本项目代码托管在以下平台，可按需访问：
+
+- **GitHub**：https://github.com/wtrw09/EnglishReadVoyage
+- **Gitee**：https://gitee.com/wtrw09/EnglishReadVoyage
+- **CNB.Cool**：https://cnb.cool/wtrw09/EnglishReadVoyage
