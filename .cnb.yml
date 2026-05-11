@@ -1,5 +1,10 @@
 # CNB 云原生构建配置文件
 # 文档：https://docs.cnb.cool/zh/build/
+#
+# 使用说明：
+# - 构建多架构镜像（amd64 + arm64）并创建 manifest list
+# - 构建完成后镜像标签统一为: latest
+# - 拉取时会自动选择对应架构的镜像
 
 main:
   push:
@@ -16,36 +21,14 @@ main:
         exports:
           info: IMAGE_TAG
 
-      # 构建 AMD64 镜像
-      - name: build amd64 image
+      # 构建多架构镜像（amd64 + arm64），一次性推送
+      - name: build and push multi-arch image
         script: |
           docker buildx build \
-            --platform linux/amd64 \
-            --tag ${IMAGE_TAG}-amd64 \
+            --platform linux/amd64,linux/arm64 \
+            --tag ${IMAGE_TAG} \
             --file docker/all-in-one/Dockerfile \
-            --build-arg PYTHON_IMAGE=python:3.13-slim-amd64 \
-            --build-arg NODE_IMAGE=node:22-alpine-amd64 \
-            --load \
+            --build-arg PYTHON_IMAGE=python:3.13-slim \
+            --build-arg NODE_IMAGE=node:22-alpine \
+            --push \
             .
-
-      # 推送 AMD64 镜像
-      - name: push amd64 image
-        script: |
-          docker push ${IMAGE_TAG}-amd64
-
-      # 构建 ARM64 镜像
-      - name: build arm64 image
-        script: |
-          docker buildx build \
-            --platform linux/arm64 \
-            --tag ${IMAGE_TAG}-arm64 \
-            --file docker/all-in-one/Dockerfile \
-            --build-arg PYTHON_IMAGE=python:3.13-slim-arm64 \
-            --build-arg NODE_IMAGE=node:22-alpine-arm64 \
-            --load \
-            .
-
-      # 推送 ARM64 镜像
-      - name: push arm64 image
-        script: |
-          docker push ${IMAGE_TAG}-arm64
