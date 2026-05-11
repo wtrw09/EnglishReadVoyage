@@ -56,9 +56,11 @@ Write-Host ""
 Write-Host "是否推送到远程仓库?" -ForegroundColor Green
 Write-Host "  [1] 仅构建本地镜像" -ForegroundColor White
 Write-Host "  [2] 推送到 Docker Hub" -ForegroundColor White
-Write-Host "  [3] 推送到其他仓库" -ForegroundColor White
+Write-Host "  [3] 推送到 CNB 制品库 (registry.cnb.cool)" -ForegroundColor White
+Write-Host "  [4] 推送到其他仓库" -ForegroundColor White
 
-$pushChoice = Read-Host "请输入选项 (1-3)"
+$pushChoice = Read-Host "请输入选项 (1-4)"
+
 
 $Push = $false
 $Registry = ""
@@ -77,6 +79,10 @@ if ($pushChoice -eq "1") {
     }
 } elseif ($pushChoice -eq "3") {
     $Push = $true
+    $Registry = "registry.cnb.cool/wtrw09/englishreadvoyage"
+    Write-Host "推送到 CNB 制品库: $Registry" -ForegroundColor Cyan
+} elseif ($pushChoice -eq "4") {
+    $Push = $true
     $customRegistry = Read-Host "请输入仓库地址 (如: registry.cn-hangzhou.aliyuncs.com/yourname)"
     if ($customRegistry) {
         $Registry = $customRegistry
@@ -93,6 +99,18 @@ if ($pushChoice -eq "1") {
 $FullImageName = $ImageName
 if ($Registry) {
     $FullImageName = "$Registry/$ImageName"
+}
+
+# CNB 推送时使用多架构 manifest
+if ($pushChoice -eq "3" -and $Architecture -eq "all") {
+    $useCNBMultiArch = $true
+} else {
+    $useCNBMultiArch = $false
+}
+
+# CNB 推送时使用统一标签（不带架构后缀）
+if ($pushChoice -eq "3") {
+    $FullImageName = "registry.cnb.cool/wtrw09/englishreadvoyage"
 }
 
 # 完整镜像标签
@@ -240,7 +258,36 @@ Write-Host "[2/2] 构建合并镜像..." -ForegroundColor Green
 
 # 处理 "all" 架构：先后台构建再前台，构建两个单独的镜像
 if ($Architecture -eq "all") {
-    Write-Host "多架构模式：先构建 AMD64，再构建 ARM64" -ForegroundColor Cyan
+    $Tag = "latest"
+    
+    # CNB 多架构模式：同时构建 amd64 和 arm64，使用 --push 直接推送
+    if ($useCNBMultiArch) {
+        Write-Host "多架构 CNB 推送模式：同时构建并推送" -ForegroundColor Cyan
+        
+        # 构建多架构镜像并直接推送
+        $multiArchArgs = @(
+            "buildx", "build",
+            "--platform", "linux/amd64,linux/arm64",
+            "--tag", "$FullImageName:latest",
+            "--file", "docker/all-in-one/Dockerfile",
+            "--build-arg", "PYTHON_IMAGE=python:3.13-slim",
+            "--build-arg", "NODE_IMAGE=node:22-alpine",
+            "--push",
+            "."
+        )
+        
+        Write-Host "执行: docker $($multiArchArgs -join ' ')" -ForegroundColor DarkGray
+        & docker @multiArchArgs
+        if ($LASTEXITCODE -ne 0) { Write-Error "多架构构建失败"; exit 1 }
+        
+        Write-Host "✓ 多架构镜像构建并推送成功: $FullImageName:latest" -ForegroundColor Green
+        Write-Host "  支持平台: linux/amd64, linux/arm64" -ForegroundColor Cyan
+        
+        exit 0
+    }
+    
+    # 本地多架构模式：分别构建并加载到本地
+    Write-Host "多架构本地模式：分别构建两个架构镜像" -ForegroundColor Cyan
     
     # 先构建 AMD64
     Write-Host ""
@@ -248,7 +295,7 @@ if ($Architecture -eq "all") {
     $amd64Args = @(
         "buildx", "build",
         "--platform", "linux/amd64",
-        "--tag", "${ImageName}:${Tag}-amd64",
+        "--tag", "${ImageName}:latest",
         "--file", "docker/all-in-one/Dockerfile",
         "--pull=false",
         "--load",
@@ -263,7 +310,7 @@ if ($Architecture -eq "all") {
     Write-Host "执行: docker $($amd64Args -join ' ')" -ForegroundColor DarkGray
     & docker @amd64Args
     if ($LASTEXITCODE -ne 0) { Write-Error "AMD64 构建失败"; exit 1 }
-    Write-Host "✓ AMD64 镜像构建成功: ${ImageName}:${Tag}-amd64" -ForegroundColor Green
+    Write-Host "✓ AMD64 镜像构建成功: ${ImageName}:latest" -ForegroundColor Green
     
     # 再构建 ARM64
     Write-Host ""
@@ -271,7 +318,7 @@ if ($Architecture -eq "all") {
     $arm64Args = @(
         "buildx", "build",
         "--platform", "linux/arm64",
-        "--tag", "${ImageName}:${Tag}-arm64",
+        "--tag", "${ImageName}:latest",
         "--file", "docker/all-in-one/Dockerfile",
         "--pull=false",
         "--load",
@@ -286,7 +333,7 @@ if ($Architecture -eq "all") {
     Write-Host "执行: docker $($arm64Args -join ' ')" -ForegroundColor DarkGray
     & docker @arm64Args
     if ($LASTEXITCODE -ne 0) { Write-Error "ARM64 构建失败"; exit 1 }
-    Write-Host "✓ ARM64 镜像构建成功: ${ImageName}:${Tag}-arm64" -ForegroundColor Green
+    Write-Host "✓ ARM64 镜像构建成功: ${ImageName}:latest" -ForegroundColor Green
     
     # 输出结果
     Write-Host ""
@@ -298,12 +345,13 @@ if ($Architecture -eq "all") {
     
     # 询问是否导出
     Write-Host ""
-    $exportChoice = Read-Host "是否导出镜像? [1] AMD64 [2] ARM64 [3] 两者 [N] 跳过"
+    Write-Host "是否导出镜像? [1] AMD64 [2] ARM64 [3] 两者 [N] 跳过" -ForegroundColor White
+    $exportChoice = Read-Host "请输入选项"
     if ($exportChoice -eq "1" -or $exportChoice -eq "3") {
-        Export-Image -ImageTag "${ImageName}:${Tag}-amd64" -OutputFile "${ImageName}-amd64-${Tag}.tar"
+        Export-Image -ImageTag "${ImageName}:latest" -OutputFile "${ImageName}-amd64-latest.tar"
     }
     if ($exportChoice -eq "2" -or $exportChoice -eq "3") {
-        Export-Image -ImageTag "${ImageName}:${Tag}-arm64" -OutputFile "${ImageName}-arm64-${Tag}.tar"
+        Export-Image -ImageTag "${ImageName}:latest" -OutputFile "${ImageName}-arm64-latest.tar"
     }
     
     exit 0
@@ -380,11 +428,35 @@ Write-Host "✓ 镜像构建成功: $ImageTag" -ForegroundColor Green
 if ($Push) {
     Write-Host ""
     Write-Host "推送镜像到仓库..." -ForegroundColor Green
-    docker push $ImageTag
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✓ 推送成功" -ForegroundColor Green
+    
+    # CNB 单架构推送
+    if ($pushChoice -eq "3") {
+        # 使用 buildx --push 推送
+        $pushArgs = @(
+            "buildx", "build",
+            "--platform", $platforms,
+            "--tag", $ImageTag,
+            "--file", "docker/all-in-one/Dockerfile",
+            "--build-arg", "PYTHON_IMAGE=python:3.13-slim",
+            "--build-arg", "NODE_IMAGE=node:22-alpine",
+            "--push",
+            "."
+        )
+        Write-Host "执行: docker $($pushArgs -join ' ')" -ForegroundColor DarkGray
+        & docker @pushArgs
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ 推送成功: $ImageTag" -ForegroundColor Green
+        } else {
+            Write-Host "✗ 推送失败" -ForegroundColor Red
+        }
     } else {
-        Write-Host "✗ 推送失败" -ForegroundColor Red
+        # 其他仓库直接 push
+        docker push $ImageTag
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ 推送成功" -ForegroundColor Green
+        } else {
+            Write-Host "✗ 推送失败" -ForegroundColor Red
+        }
     }
 }
 
