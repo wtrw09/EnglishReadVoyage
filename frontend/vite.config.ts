@@ -17,6 +17,7 @@ function harmonyCompat(): Plugin {
         .replace(/\scrossorigin(="[^"]*")?/g, '')
         .replace(/\stype="module"/g, '')
         .replace(/(<script)(\s+src=)/g, '$1 defer$2')
+        .replace(/href="\.\/vite\.svg"/g, 'href="/vite.svg"')
     }
   }
 }

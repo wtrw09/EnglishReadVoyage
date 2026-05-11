@@ -85,8 +85,8 @@
 
         <div class="switch-mode">
           <span class="text-link" @click="switchToActivate">激活账户</span>
-          <span class="text-link divider">|</span>
-          <span class="text-link" @click="goServerConfig">修改服务端地址</span>
+          <span v-if="nativeShell" class="text-link divider">|</span>
+          <span v-if="nativeShell" class="text-link" @click="goServerConfig">修改服务端地址</span>
         </div>
       </van-form>
 

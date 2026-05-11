@@ -56,7 +56,7 @@ bash docker/all-in-one/build.sh
 
 ```bash
 # 拉取最新镜像
-docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
+docker pull docker.cnb.cool/wtrw09/englishreadvoyage:latest
 ```
 
 镜像拉取完成后，参照下方[Docker 部署启动](#docker-部署启动)步骤启动即可。

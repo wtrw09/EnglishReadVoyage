@@ -218,7 +218,6 @@ import md5 from 'blueimp-md5'
 import { api, useAuthStore } from '@/store/auth'
 import { buildStaticUrl } from '@/utils/apiBase'
 import VirtualContent from '@/components/VirtualContent.vue'
-import WordPronunciation from '@/components/WordPronunciation.vue'
 import DictResultPopup from '@/components/DictResultPopup.vue'
 import { useDictionarySettings } from '@/views/Home/composables/useDictionarySettings'
 
@@ -233,11 +232,6 @@ const dictionarySourceLabels: Record<string, string> = {
   'merriam-webster-learners': '韦氏词典'
 }
 
-// 获取当前词典源显示名称
-const currentDictionaryLabel = computed(() => {
-  const source = dictionarySource.value
-  return dictionarySourceLabels[source] || '在线词典'
-})
 
 // 懒加载编辑和音频检查对话框（代码分割）
 const BookEditDialog = defineAsyncComponent(() => import('@/components/BookEditDialog.vue'))
@@ -1265,7 +1259,7 @@ const lookupWord = async (word: string, sentence: string = '') => {
       if (errorMsg) {
         // 提取关键错误信息，避免过长
         if (errorMsg.includes('未配置') || errorMsg.includes('请先')) {
-          dictSentenceError.value = '翻译未配置'
+          dictSentenceError.value = '如需句子翻译，请配置百度翻译api'
         } else if (errorMsg.includes('联系管理员')) {
           dictSentenceError.value = '请联系管理员'
         } else if (errorMsg.includes('网络') || errorMsg.includes('超时')) {
@@ -1320,7 +1314,7 @@ const lookupSecondWord = async (word: string, sentence: string = '') => {
       const errorMsg = transError.response?.data?.detail
       if (errorMsg) {
         if (errorMsg.includes('未配置') || errorMsg.includes('请先')) {
-          secondDictSentenceError.value = '翻译未配置'
+          secondDictSentenceError.value = '如需句子翻译，请配置百度翻译api'
         } else if (errorMsg.includes('联系管理员')) {
           secondDictSentenceError.value = '请联系管理员'
         } else if (errorMsg.includes('网络') || errorMsg.includes('超时')) {
