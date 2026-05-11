@@ -76,15 +76,13 @@ COPY docker/all-in-one/model/en_core_web_sm /root/.local/lib/python3.13/site-pac
 
 # 设置 Python 环境变量
 ENV PATH=/root/.local/bin:$PATH
-ENV PYTHONPATH=/root/.local/lib/python3.13/site-packages:$PYTHONPATH
+ENV PYTHONPATH=/root/.local/lib/python3.13/site-packages
 
 # 环境变量默认值（与 docker-compose.yml 保持一致）
 ENV DEBUG=False
 ENV HOST=0.0.0.0
 ENV PORT=8000
 ENV CORS_ORIGINS=["*"]
-ENV SECRET_KEY=your-secret-key-change-in-production
-ENV ACCESS_TOKEN_EXPIRE_MINUTES=3000
 ENV KOKORO_API_URL=http://localhost:8880/v1/audio/speech
 ENV KOKORO_DEFAULT_VOICE=bf_v0isabella
 ENV KOKORO_DEFAULT_SPEED=1.0
