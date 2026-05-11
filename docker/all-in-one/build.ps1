@@ -14,7 +14,7 @@ Set-Location $ProjectRoot
 Write-Host "项目根目录: $ProjectRoot" -ForegroundColor Gray
 
 # 镜像名称
-$ImageName = "englishread-all-in-one"
+$ImageName = "englishreadvoyage"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "EnglishReadVoyage 单镜像合并构建脚本" -ForegroundColor Cyan
@@ -287,7 +287,7 @@ if ($Architecture -eq "all") {
     $amd64Args = @(
         "buildx", "build",
         "--platform", "linux/amd64",
-        "--tag", "${ImageName}:latest",
+        "--tag", "englishreadvoyage:latest",
         "--file", "docker/all-in-one/Dockerfile",
         "--pull=false",
         "--load",
@@ -302,7 +302,7 @@ if ($Architecture -eq "all") {
     Write-Host "执行: docker $($amd64Args -join ' ')" -ForegroundColor DarkGray
     & docker @amd64Args
     if ($LASTEXITCODE -ne 0) { Write-Error "AMD64 构建失败"; exit 1 }
-    Write-Host "✓ AMD64 镜像构建成功: ${ImageName}:latest" -ForegroundColor Green
+    Write-Host "✓ AMD64 镜像构建成功: englishreadvoyage:latest" -ForegroundColor Green
     
     # 再构建 ARM64
     Write-Host ""
@@ -310,7 +310,7 @@ if ($Architecture -eq "all") {
     $arm64Args = @(
         "buildx", "build",
         "--platform", "linux/arm64",
-        "--tag", "${ImageName}:latest",
+        "--tag", "englishreadvoyage:latest",
         "--file", "docker/all-in-one/Dockerfile",
         "--pull=false",
         "--load",
@@ -325,7 +325,7 @@ if ($Architecture -eq "all") {
     Write-Host "执行: docker $($arm64Args -join ' ')" -ForegroundColor DarkGray
     & docker @arm64Args
     if ($LASTEXITCODE -ne 0) { Write-Error "ARM64 构建失败"; exit 1 }
-    Write-Host "✓ ARM64 镜像构建成功: ${ImageName}:latest" -ForegroundColor Green
+    Write-Host "✓ ARM64 镜像构建成功: englishreadvoyage:latest" -ForegroundColor Green
     
     # 输出结果
     Write-Host ""
@@ -333,24 +333,24 @@ if ($Architecture -eq "all") {
     Write-Host "构建完成！" -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "镜像列表:" -ForegroundColor Yellow
-    docker images $ImageName --format "table {{.Repository}}:{{.Tag}}`t{{.Size}}"
+    docker images englishreadvoyage --format "table {{.Repository}}:{{.Tag}}`t{{.Size}}"
     
     # 询问是否导出
     Write-Host ""
     Write-Host "是否导出镜像? [1] AMD64 [2] ARM64 [3] 两者 [N] 跳过" -ForegroundColor White
     $exportChoice = Read-Host "请输入选项"
     if ($exportChoice -eq "1" -or $exportChoice -eq "3") {
-        Export-Image -ImageTag "${ImageName}:latest" -OutputFile "${ImageName}-amd64-latest.tar"
+        Export-Image -ImageTag "englishreadvoyage:latest" -OutputFile "englishreadvoyage-amd64-latest.tar"
     }
     if ($exportChoice -eq "2" -or $exportChoice -eq "3") {
-        Export-Image -ImageTag "${ImageName}:latest" -OutputFile "${ImageName}-arm64-latest.tar"
+        Export-Image -ImageTag "englishreadvoyage:latest" -OutputFile "englishreadvoyage-arm64-latest.tar"
     }
     
     exit 0
 }
 
 # 单架构构建
-Write-Host "镜像: $ImageTag" -ForegroundColor Green
+Write-Host "镜像: englishreadvoyage:latest" -ForegroundColor Green
 Write-Host "Dockerfile: docker/all-in-one/Dockerfile" -ForegroundColor Gray
 Write-Host "构建上下文: 项目根目录" -ForegroundColor Gray
 
@@ -458,7 +458,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "构建完成！" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "镜像: $ImageTag" -ForegroundColor Yellow
-docker images $ImageName --format "table {{.Repository}}:{{.Tag}}`t{{.Size}}`t{{.CreatedAt}}" | Select-Object -First 2
+docker images englishreadvoyage --format "table {{.Repository}}:{{.Tag}}`t{{.Size}}`t{{.CreatedAt}}" | Select-Object -First 2
 
 # 导出镜像选项
 Write-Host ""
@@ -471,8 +471,8 @@ $exportChoice = Read-Host "请输入选项 (1-2)"
 if ($exportChoice -eq "1") {
     Write-Host ""
     Write-Host "=== 导出镜像 ===" -ForegroundColor Cyan
-    $outputFile = "$ImageName-$Architecture-$Tag.tar"
-    Export-Image -ImageTag $ImageTag -OutputFile $outputFile
+    $outputFile = "englishreadvoyage-$Architecture-$Tag.tar"
+    Export-Image -ImageTag "englishreadvoyage:latest" -OutputFile $outputFile
 }
 
 # 使用说明
@@ -486,13 +486,13 @@ Write-Host "   cd docker/all-in-one" -ForegroundColor Gray
 Write-Host "   docker compose up -d" -ForegroundColor Gray
 Write-Host ""
 Write-Host "2. 直接使用 docker 运行:" -ForegroundColor Green
-Write-Host '   docker run -d `' -ForegroundColor Gray
-Write-Host '     -p 8888:80 `' -ForegroundColor Gray
-Write-Host '     -v ${PWD}/docker/all-in-one/backend/data:/app/data `' -ForegroundColor Gray
-Write-Host '     -v ${PWD}/docker/all-in-one/backend/Books:/app/Books `' -ForegroundColor Gray
-Write-Host '     --name englishread `' -ForegroundColor Gray
-Write-Host '     -e IS_PRODUCTION=True `' -ForegroundColor Gray
-Write-Host "     $ImageTag" -ForegroundColor Gray
+Write-Host '   docker run -d \' -ForegroundColor Gray
+Write-Host '     -p 8888:80 \' -ForegroundColor Gray
+Write-Host '     -v ${PWD}/backend/data:/app/data \' -ForegroundColor Gray
+Write-Host '     -v ${PWD}/backend/Books:/app/Books \' -ForegroundColor Gray
+Write-Host '     --name englishread \' -ForegroundColor Gray
+Write-Host '     -e IS_PRODUCTION=True \' -ForegroundColor Gray
+Write-Host '     englishreadvoyage:latest' -ForegroundColor Gray
 Write-Host ""
 Write-Host "3. 访问应用:" -ForegroundColor Green
 Write-Host "   打开浏览器访问 http://localhost:8888" -ForegroundColor Gray

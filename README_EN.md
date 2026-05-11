@@ -27,6 +27,22 @@ EnglishReadVoyage is a tool that helps English learners improve their English th
 - **Dictionary API Configuration**: Configure API keys for online dictionaries like Merriam-Webster.
 - **Voice Cache Management**: Generate and clean up voice caches.
 
+## Build Local Image (Optional)
+
+If you need to build the image yourself (e.g., to customize features), run:
+
+```bash
+# Windows (PowerShell recommended)
+.\docker\all-in-one\build.ps1
+
+# Linux/Mac
+bash docker/all-in-one/build.sh
+```
+
+This will produce a `englishreadvoyage:latest` local image for direct use.
+
+You can skip this step and pull a pre-built image directly (see below).
+
 ## Quick Start - Docker Deployment
 
 This is the simplest deployment method with no need to install Python or Node.js.
@@ -39,21 +55,34 @@ This is the simplest deployment method with no need to install Python or Node.js
 ### Deployment Steps
 
 ```bash
-# 1. Enter the deployment directory
-cd docker/all-in-one
+# 1. Create a directory for config and data (any location, myapp used as example)
+mkdir myapp && cd myapp
 
-# 2. Prepare books directory (optional)
-# Place your English books in backend/Books/ directory.
-# Book directory structure reference: Books/Level_E/BookName/001_BookName.md
+# 2. Download docker-compose.yml
+# Copy docker-compose.yml from the project's docker/all-in-one/ directory
 
-# 3. Start with one command
-docker compose up -d
+# 3. Modify image source (optional)
+# Edit docker-compose.yml and change the image to the CNB registry address to pull from the cloud
+# See the "Image Source" note below
+
+# 4. Start service
+docker-compose up -d
 ```
+
+> **Note**: Newer Docker also supports `docker compose` (without hyphen). Both are equivalent.
+
+> **Image Source**: The image name is set in the `image` field of `docker-compose.yml`. Modify it as needed:
+> - **Local image**: `image: englishreadvoyage:latest` (build first via `build.ps1`)
+> - **CNB image**: `image: registry.cnb.cool/wtrw09/englishreadvoyage:latest` (auto-pull on first run)
+>
+> Both methods use `docker-compose up -d` — just change one line in the yml file.
 
 On container startup, the following operations are automatically performed:
 - Creates data and cache directories
 - Initializes database (data.db and auto table creation)
 - Starts backend service and frontend Nginx
+
+Data files will be saved in the `backend/` subdirectory of your working directory.
 
 ### Access the App
 
@@ -65,7 +94,7 @@ Default admin account:
 
 ### Port Configuration
 
-Default port is `8888`. To modify, edit `docker/all-in-one/docker-compose.yml`, change `8888:80` to `your_desired_port:80`, for example:
+Default port is `8888`. To modify, edit the `docker-compose.yml` in your current directory, change `8888:80` to `your_desired_port:80`:
 
 ```yaml
 ports:
@@ -79,34 +108,14 @@ ports:
 docker logs -f englishread
 
 # Restart service
-docker compose restart
+docker-compose restart
 
 # Stop service
-docker compose down
+docker-compose down
 
 # Update image and redeploy (keep data)
-docker compose pull && docker compose up -d
+docker-compose pull && docker-compose up -d
 ```
-
-### Deploy Using CNB Image (Recommended)
-
-If you have built or pulled the CNB registry image, use it directly:
-
-```bash
-# 1. Pull image
-docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
-
-# 2. Run container
-docker run -d \
-  --name englishread \
-  -p 8888:80 \
-  -v ${PWD}/backend/data:/app/data \
-  -v ${PWD}/backend/Books:/app/Books \
-  registry.cnb.cool/wtrw09/englishreadvoyage:latest
-```
-
-
-> The image supports linux/amd64 and linux/arm64 architectures, and will automatically select the appropriate architecture when pulling.
 
 ## Offline Dictionary Configuration (Optional)
 
@@ -120,7 +129,7 @@ To enable local dictionary lookup (fast speed, no internet required), follow the
    # Then place ecdict.db into the backend/data/ directory
    ```
    **Subsequent deployments**: The `backend/data/` directory already exists, just copy it in
-4. Restart container: `docker compose restart`
+4. Restart container: `docker-compose restart`
 
 If this file is not placed, dictionary lookup will automatically use the online FreeDictionaryAPI, which does not affect other features.
 

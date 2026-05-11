@@ -27,6 +27,22 @@ EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英�
 - **词典 API 配置**：配置韦氏词典等在线词典的 API Key
 - **语音缓存管理**：生成和清理语音缓存
 
+## 本地构建镜像（可选）
+
+如果你需要自行构建镜像（如自定义功能），可以运行以下命令构建本地镜像：
+
+```bash
+# Windows（推荐使用 PowerShell）
+.\docker\all-in-one\build.ps1
+
+# Linux/Mac
+bash docker/all-in-one/build.sh
+```
+
+构建完成后会生成 `englishreadvoyage:latest` 本地镜像，后续可直接使用。
+
+也可以跳过此步骤，直接从网上拉取已构建好的镜像（见下文）。
+
 ## 快速开始 - Docker 部署
 
 这是最简单的部署方式，无需安装 Python 或 Node.js。
@@ -39,21 +55,34 @@ EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英�
 ### 部署步骤
 
 ```bash
-# 1. 进入部署目录
-cd docker/all-in-one
+# 1. 创建一个目录存放配置和数据（位置随意，以 myapp 为例）
+mkdir myapp && cd myapp
 
-# 2. 准备书籍目录（可选）
-# 将你的已经存在的英文书籍放入 backend/Books/ 目录，
-# 书籍目录结构参考：Books/Level_E/书名/001_书名.md
+# 2. 下载 docker-compose.yml
+# 从项目 docker/all-in-one/ 目录复制 docker-compose.yml 到当前目录
 
-# 3. 一键启动
-docker compose up -d
+# 3. 修改镜像来源（可选）
+# 编辑 docker-compose.yml，将 image 改为 CNB 镜像地址即可从网上拉取
+# 详见下方的「镜像来源说明」
+
+# 4. 启动服务
+docker-compose up -d
 ```
+
+> **注意**：新版 Docker 也支持不带短横线的 `docker compose` 命令，两者等价，任选其一。
+
+> **镜像来源说明**：镜像名在 `docker-compose.yml` 的 `image` 字段设置，可根据实际需要修改：
+> - 使用**本地镜像**：`image: englishreadvoyage:latest`（需先通过 `build.ps1` 构建）
+> - 使用**CNB 镜像**：`image: registry.cnb.cool/wtrw09/englishreadvoyage:latest`（首次自动拉取）
+>
+> 两种方式都是用 `docker-compose up -d` 启动，只需修改 yml 中的一行即可。
 
 容器启动后会自动完成以下操作：
 - 创建数据目录和缓存目录
 - 初始化数据库（data.db 和自动建表）
 - 启动后端服务和前端 Nginx
+
+数据文件将保存在运行目录下的 `backend/` 子目录中。
 
 ### 访问应用
 
@@ -65,7 +94,7 @@ docker compose up -d
 
 ### 端口配置
 
-默认端口为 `8888`，如需修改，编辑 `docker/all-in-one/docker-compose.yml`，将 `8888:80` 改为 `你想要的端口:80`，例如：
+默认端口为 `8888`。如需修改，编辑当前目录下的 `docker-compose.yml`，将 `8888:80` 改为 `你想要的端口:80`：
 
 ```yaml
 ports:
@@ -79,33 +108,14 @@ ports:
 docker logs -f englishread
 
 # 重启服务
-docker compose restart
+docker-compose restart
 
 # 停止服务
-docker compose down
+docker-compose down
 
 # 更新镜像后重新部署（保留数据）
-docker compose pull && docker compose up -d
+docker-compose pull && docker-compose up -d
 ```
-
-### 使用 CNB 镜像部署（推荐）
-
-如已构建或拉取了 CNB 制品库镜像，可直接使用：
-
-```bash
-# 1. 拉取镜像
-docker pull registry.cnb.cool/wtrw09/englishreadvoyage:latest
-
-# 2. 运行容器
-docker run -d \
-  --name englishread \
-  -p 8888:80 \
-  -v ${PWD}/backend/data:/app/data \
-  -v ${PWD}/backend/Books:/app/Books \
-  registry.cnb.cool/wtrw09/englishreadvoyage:latest
-```
-
-> 镜像支持 linux/amd64 和 linux/arm64 架构，拉取时会自动选择对应架构。
 
 ## 离线词典配置（可选）
 
