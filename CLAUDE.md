@@ -134,6 +134,21 @@ docker exec -it <容器名> tail -f /var/log/supervisor/backend.log
 - `/api/v1/audiobook/*` - Audiobook playback
 - `/api/v1/settings/*` - User settings
 
+### Frontend Structure (frontend/src/)
+- `components/` - 通用 UI 组件 (BookEditDialog, DictResultPopup 等)
+- `views/` - 页面组件 (Reader, Home, Dictionary, Vocabulary 等)
+- `store/` - Pinia 状态管理 (auth.ts)
+- `router/` - Vue Router 路由配置
+- `types/` - TypeScript 类型定义
+- UI 框架：Vant 4 (移动端优先)
+
+### Mobile App Build
+```bash
+cd frontend
+npm run harmony:sync  # 同步到鸿蒙 App
+npm run android:sync   # 同步到 Android App
+```
+
 ## Book Content Structure
 
 Books stored in `Books/Level_[A-Z]/[book_name]/` with markdown files numbered `001_*.md`.
@@ -141,6 +156,20 @@ Books stored in `Books/Level_[A-Z]/[book_name]/` with markdown files numbered `0
 Page breaks: `---` with blank lines before/after
 
 Exclude from TTS: `<!-- ignore -->...<!-- /ignore -->`
+
+### Book Level Directory
+- `Level_A/` - 入门级 (Beginner)
+- `Level_B/` - 初级 (Elementary)
+- ...
+- `Level_Z/` - 母语级别 (Native)
+
+### Book Directory Structure
+```
+Books/Level_A/The Cat/
+├── 001_chapter1.md
+├── 002_chapter2.md
+└── cover.jpg  # 可选封面图
+```
 
 ## Key Configuration
 
