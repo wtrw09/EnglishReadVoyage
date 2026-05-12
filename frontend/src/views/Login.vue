@@ -332,7 +332,7 @@ const onActivateSubmit = async () => {
 }
 
 .login-content {
-  padding: 20px;
+  padding: 0 20px 20px;
 }
 
 .logo-area {

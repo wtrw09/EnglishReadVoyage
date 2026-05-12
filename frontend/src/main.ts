@@ -26,20 +26,9 @@ async function initSafeArea() {
     // 设置白色背景状态栏 + 深色文字图标
     await StatusBar.setBackgroundColor({ color: '#ffffff' })
     await StatusBar.setStyle({ style: Style.Dark })
-    
-    // 获取精确状态栏高度设置到CSS变量
-    const info = await StatusBar.getInfo()
-    if (info && info.height && info.height > 0) {
-      document.documentElement.style.setProperty(
-        '--safe-area-top',
-        `${info.height}px`
-      )
-      // 同时设置到body padding作为兜底
-      document.body.style.paddingTop = `${info.height}px`
-    }
   } catch {
-    // StatusBar插件不可用（如在浏览器中），使用CSS默认值
-    // CSS中已有 .is-native-shell .van-nav-bar--fixed { padding-top: var(--safe-area-top, 24px) !important; }
+    // StatusBar插件不可用（如在浏览器中），无需手动设置padding
+    // setOverlaysWebView({ overlay: false }) 已原生处理好状态栏避让
   }
 }
 
@@ -51,7 +40,7 @@ app.use(router)
 // DOM准备好后初始化安全区域
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(initSafeArea, 100) // 延迟100ms确保CSS变量已设置
+    setTimeout(initSafeArea, 100) // 延迟确保 StatusBar 插件初始化
   })
 } else {
   setTimeout(initSafeArea, 100)

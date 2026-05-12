@@ -1151,8 +1151,7 @@ onMounted(() => {
 }
 
 .content {
-  padding: 12px;
-  padding-bottom: 70px;
+  padding: 0 12px 70px;
 }
 
 .loading-center {

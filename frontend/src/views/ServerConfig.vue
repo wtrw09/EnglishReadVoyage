@@ -238,7 +238,7 @@ function handleBack() {
   background: #f7f8fa;
 }
 .content {
-  padding: 20px;
+  padding: 0 20px 20px;
 }
 .logo-area {
   text-align: center;

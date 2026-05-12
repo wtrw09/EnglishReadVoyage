@@ -1,6 +1,6 @@
 <template>
   <!-- 原生壳标识class，用于CSS安全区域适配 -->
-  <div id="app-root" :class="{ 'is-native-shell': isNativeShell() }">
+  <div id="app-root" :class="{ 'is-native-shell': isNativeShell(), 'is-harmony-shell': isHarmonyNative() }">
     <!-- 全局网络状态通知栏（可关闭，点击可手动重连） -->
     <div
       v-if="networkStatus !== 'online' && !dismissed"
@@ -118,6 +118,7 @@ import { useNetworkStatus } from '@/utils/useNetworkStatus'
 import {
   getServerBaseUrl,
   isNativeShell,
+  isHarmonyNative,
   getVerifiedUrls,
   setServerBaseUrl,
 } from '@/utils/apiBase'
@@ -268,9 +269,12 @@ body {
   opacity: 0;
 }
 
-/* 原生壳安全区域适配 - 确保导航栏不被状态栏遮挡 */
-.is-native-shell .van-nav-bar--fixed {
-  padding-top: var(--safe-area-top, 24px) !important;
+/* 原生壳安全区域适配 - 导航栏由 placeholder 自动处理，不再单独加 padding */
+/* 状态栏避让由 main.ts 中 StatusBar.setOverlaysWebView({ overlay: false }) 原生处理 */
+
+/* 鸿蒙壳：没有 overlay: false 机制，需要显式加安全区域 padding */
+.is-harmony-shell .van-nav-bar--fixed {
+  padding-top: 24px !important;
 }
 
 /* 全局网络状态栏 */

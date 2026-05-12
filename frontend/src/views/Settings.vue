@@ -225,8 +225,7 @@ onMounted(async () => {
 }
 
 .settings-content {
-  padding: 12px;
-  padding-bottom: 80px;
+  padding: 0 12px 80px;
   background: #f7f8fa;
   box-sizing: border-box;
 }

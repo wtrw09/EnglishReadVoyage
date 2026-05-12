@@ -812,7 +812,7 @@ onMounted(() => {
 }
 
 .content {
-  padding: 12px;
+  padding: 0 12px 12px;
 }
 
 .action-bar {
