@@ -86,6 +86,9 @@ cache/
 *.tar
 *.tar.gz
 
+# Frontend build outputs
+frontend/android/
+
 # Book contents (generated audio, images)
 backend/Books/
 

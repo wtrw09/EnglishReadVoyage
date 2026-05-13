@@ -216,6 +216,8 @@ async function _doCheckConnection(): Promise<void> {
         return
       }
       // tokenResult === 'valid'：继续执行，下面会 setOnline()
+    } else {
+      console.log('[NetworkStatus] 服务器可达但无 token，跳过验证 → setOnline')
     }
   }
 

@@ -359,25 +359,6 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  // 自动登录（使用缓存的凭据）
-  async function autoLogin(): Promise<ApiResult<void>> {
-    const creds = getRememberedCredentials()
-    if (!creds) {
-      return { success: false, message: '没有缓存的凭据' }
-    }
-    if (isLoggedIn.value) {
-      return { success: true }
-    }
-    const result = await login(creds.username, creds.password, false)
-    if (!result.success) {
-      // 仅在凭据被后端明确拒绝（auth_error）时清除，网络错误保留凭据
-      if (result.code === 'auth_error') {
-        clearRememberedCredentials()
-      }
-    }
-    return result
-  }
-
   // 获取当前用户信息
   async function fetchCurrentUser(): Promise<ApiResult<User>> {
     try {
@@ -548,7 +529,6 @@ export const useAuthStore = defineStore('auth', () => {
     // Actions
     login,
     logout,
-    autoLogin,
     fetchCurrentUser,
     updateCurrentUser,
     fetchUsers,

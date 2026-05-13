@@ -11,114 +11,203 @@
  */
 <template>
   <div class="home">
-    <!-- 顶部导航栏 -->
-    <van-nav-bar fixed placeholder>
-      <template #left>
-        <div class="nav-left">
-          <div class="nav-search">
-            <i class="fas fa-search search-icon"></i>
-            <input
-              v-model="searchText"
-              type="text"
-              placeholder="搜索书籍..."
-              class="search-input"
-              @input="handleSearch"
+    <!-- 未登录：登录表单 -->
+    <template v-if="!authStore.isLoggedIn">
+      <!-- 登录表单 -->
+      <div v-if="!isActivateMode" class="login-section">
+        <div class="login-header">
+          <img src="/logo.svg" alt="English Read Voyage" class="login-icon" />
+          <h1>英语阅读之旅</h1>
+          <p>English Read Voyage</p>
+        </div>
+        <van-form @submit="handleLogin">
+          <van-cell-group inset>
+            <van-field
+              v-model="loginForm.username"
+              name="username"
+              label="用户名"
+              placeholder="请输入用户名"
+              :rules="[{ required: true, message: '请填写用户名' }]"
             />
+            <van-field
+              v-model="loginForm.password"
+              type="password"
+              name="password"
+              label="密码"
+              placeholder="请输入密码"
+              :rules="[{ required: true, message: '请填写密码' }]"
+            />
+          </van-cell-group>
+          <div style="margin: 16px">
+            <van-button round block type="primary" native-type="submit" :loading="authStore.loading">
+              登录
+            </van-button>
           </div>
-        </div>
-      </template>
-      <template #right>
-        <div class="nav-actions">
-          <!-- 书籍管理下拉菜单 -->
-          <van-popover
-            v-model:show="showBookPopover"
-            placement="bottom-end"
-            :actions="bookActions"
-            close-on-click-outside
-            teleport="body"
-            @update:show="(show: boolean) => handlePopoverShow(show, 'book')"
-            @select="onBookActionSelect"
-          >
-            <template #reference>
-              <div class="nav-icon-btn">
-                <i class="fas fa-bars"></i>
-              </div>
-            </template>
-          </van-popover>
-          <!-- 拓展功能下拉菜单 -->
-          <van-popover
-            v-model:show="showExpandPopover"
-            placement="bottom-end"
-            :actions="expandActions"
-            close-on-click-outside
-            teleport="body"
-            @update:show="(show: boolean) => handlePopoverShow(show, 'expand')"
-            @select="onExpandSelect"
-          >
-            <template #reference>
-              <div class="nav-icon-btn">
-                <i class="fas fa-wrench"></i>
-              </div>
-            </template>
-            <template #action="{ action }">
-              <div class="settings-action-item">
-                <i :class="['fas', action.icon]"></i>
-                <span>{{ action.text }}</span>
-              </div>
-            </template>
-          </van-popover>
-          <!-- 用户名下拉菜单 -->
-          <van-popover
-            v-model:show="showUserPopover"
-            placement="bottom-end"
-            :actions="userActions"
-            close-on-click-outside
-            teleport="body"
-            @update:show="(show: boolean) => handlePopoverShow(show, 'user')"
-            @select="onUserSelect"
-          >
-            <template #reference>
-              <span class="username-link">{{ authStore.user?.username || '用户' }}</span>
-            </template>
-          </van-popover>
-          <!-- 设置按钮（直接跳转） -->
-          <div class="nav-icon-btn" @click="router.push('/settings')">
-            <i class="fas fa-gear"></i>
+          <div v-if="loginError" class="login-error">{{ loginError }}</div>
+          <div class="switch-mode">
+            <span class="text-link" @click="switchToActivate">激活账户</span>
           </div>
-        </div>
-      </template>
-    </van-nav-bar>
+        </van-form>
+      </div>
 
-    <!-- 内容区域 -->
-    <div class="content">
-      <BookList
-        :groups="bookGroups"
-        :loading="loading"
-        :load-error="loadError"
-        :network-status="networkStatus"
-        :search-text="searchText"
-        v-model:active-names="activeNames"
-        :is-multi-select="isMultiSelect"
-        v-model:selected-books="selectedBooks"
-        :hide-read-books-map="hideReadBooksMap"
-        :cover-error-map="coverErrorMap"
-        :is-admin="authStore.isAdmin"
-        :is-landscape="isLandscape"
-        v-model:swipe-cell-refs="swipeCellRefs"
-        @import="openImportDialog"
-        @select-all="selectAllBooks"
-        @select-current-group="selectAllBooksInCurrentGroup"
-        @export="exportSelectedBooks"
-        @move="batchMoveBooks"
-        @batch-delete="batchDeleteBooks"
-        @cancel-multi-select="cancelMultiSelect"
-        @book-click="handleBookClick"
-        @book-contextmenu="showContextMenu"
-        @group-contextmenu="showGroupContextMenu"
-        @mark-read="markBookAsRead"
-        @retry-load="handleRetryLoad"
-      />
-    </div>
+      <!-- 激活表单 -->
+      <div v-else class="login-section">
+        <div class="login-header">
+          <img src="/logo.svg" alt="English Read Voyage" class="login-icon" />
+          <h1>英语阅读之旅</h1>
+          <p>请输入邀请码激活账户</p>
+        </div>
+        <van-form @submit="onActivateSubmit">
+          <van-cell-group inset>
+            <van-field
+              v-model="activateForm.invitationCode"
+              name="invitationCode"
+              label="邀请码"
+              placeholder="请输入邀请码"
+              :rules="[{ required: true, message: '请填写邀请码' }]"
+            />
+            <van-field
+              v-model="activateForm.password"
+              type="password"
+              name="password"
+              label="设置密码"
+              placeholder="请设置登录密码"
+              :rules="[{ required: true, message: '请设置密码' }]"
+            />
+            <van-field
+              v-model="activateForm.confirmPassword"
+              type="password"
+              name="confirmPassword"
+              label="确认密码"
+              placeholder="请再次输入密码"
+              :rules="[
+                { required: true, message: '请确认密码' },
+                { validator: validateConfirmPassword, message: '两次输入的密码不一致' }
+              ]"
+            />
+          </van-cell-group>
+          <div style="margin: 16px">
+            <van-button round block type="primary" native-type="submit" :loading="authStore.loading">
+              激活
+            </van-button>
+          </div>
+          <div class="switch-mode">
+            <span class="text-link" @click="switchToLogin">返回登录</span>
+          </div>
+        </van-form>
+      </div>
+    </template>
+
+    <!-- 已登录：正常首页内容 -->
+    <template v-else>
+      <!-- 顶部导航栏 -->
+      <van-nav-bar fixed placeholder>
+        <template #left>
+          <div class="nav-left">
+            <div class="nav-search">
+              <i class="fas fa-search search-icon"></i>
+              <input
+                v-model="searchText"
+                type="text"
+                placeholder="搜索书籍..."
+                class="search-input"
+                @input="handleSearch"
+              />
+            </div>
+          </div>
+        </template>
+        <template #right>
+          <div class="nav-actions">
+            <!-- 书籍管理下拉菜单 -->
+            <van-popover
+              v-model:show="showBookPopover"
+              placement="bottom-end"
+              :actions="bookActions"
+              close-on-click-outside
+              teleport="body"
+              @update:show="(show: boolean) => handlePopoverShow(show, 'book')"
+              @select="onBookActionSelect"
+            >
+              <template #reference>
+                <div class="nav-icon-btn">
+                  <i class="fas fa-bars"></i>
+                </div>
+              </template>
+            </van-popover>
+            <!-- 拓展功能下拉菜单 -->
+            <van-popover
+              v-model:show="showExpandPopover"
+              placement="bottom-end"
+              :actions="expandActions"
+              close-on-click-outside
+              teleport="body"
+              @update:show="(show: boolean) => handlePopoverShow(show, 'expand')"
+              @select="onExpandSelect"
+            >
+              <template #reference>
+                <div class="nav-icon-btn">
+                  <i class="fas fa-wrench"></i>
+                </div>
+              </template>
+              <template #action="{ action }">
+                <div class="settings-action-item">
+                  <i :class="['fas', action.icon]"></i>
+                  <span>{{ action.text }}</span>
+                </div>
+              </template>
+            </van-popover>
+            <!-- 用户名下拉菜单 -->
+            <van-popover
+              v-model:show="showUserPopover"
+              placement="bottom-end"
+              :actions="userActions"
+              close-on-click-outside
+              teleport="body"
+              @update:show="(show: boolean) => handlePopoverShow(show, 'user')"
+              @select="onUserSelect"
+            >
+              <template #reference>
+                <span class="username-link">{{ authStore.user?.username || '用户' }}</span>
+              </template>
+            </van-popover>
+            <!-- 设置按钮（直接跳转） -->
+            <div class="nav-icon-btn" @click="router.push('/settings')">
+              <i class="fas fa-gear"></i>
+            </div>
+          </div>
+        </template>
+      </van-nav-bar>
+
+      <!-- 内容区域 -->
+      <div class="content">
+        <BookList
+          :groups="bookGroups"
+          :loading="loading"
+          :load-error="loadError"
+          :network-status="networkStatus"
+          :search-text="searchText"
+          v-model:active-names="activeNames"
+          :is-multi-select="isMultiSelect"
+          v-model:selected-books="selectedBooks"
+          :hide-read-books-map="hideReadBooksMap"
+          :cover-error-map="coverErrorMap"
+          :is-admin="authStore.isAdmin"
+          :is-landscape="isLandscape"
+          v-model:swipe-cell-refs="swipeCellRefs"
+          @import="openImportDialog"
+          @select-all="selectAllBooks"
+          @select-current-group="selectAllBooksInCurrentGroup"
+          @export="exportSelectedBooks"
+          @move="batchMoveBooks"
+          @batch-delete="batchDeleteBooks"
+          @cancel-multi-select="cancelMultiSelect"
+          @book-click="handleBookClick"
+          @book-contextmenu="showContextMenu"
+          @group-contextmenu="showGroupContextMenu"
+          @mark-read="markBookAsRead"
+          @retry-load="handleRetryLoad"
+        />
+      </div>
 
     <!-- 导入对话框 -->
     <ImportDialog :import-state="importState" />
@@ -357,6 +446,7 @@
         </div>
       </div>
     </van-dialog>
+    </template>
   </div>
 </template>
 
@@ -394,6 +484,57 @@ defineOptions({
 const router = useRouter()
 const authStore = useAuthStore()
 const { status: networkStatus, checkConnection } = useNetworkStatus()
+
+// 登录表单状态
+const loginForm = ref({ username: '', password: '' })
+const loginError = ref('')
+
+// 激活表单状态
+const isActivateMode = ref(false)
+const activateForm = ref({ invitationCode: '', password: '', confirmPassword: '' })
+
+function switchToActivate() {
+  isActivateMode.value = true
+}
+
+function switchToLogin() {
+  isActivateMode.value = false
+}
+
+function validateConfirmPassword(val: string) {
+  return val === activateForm.value.password
+}
+
+async function onActivateSubmit() {
+  const result = await authStore.activateAccount(
+    activateForm.value.invitationCode,
+    activateForm.value.password
+  )
+  if (result.success) {
+    showNotify({
+      type: 'success',
+      message: '激活成功，请使用新密码登录',
+      duration: 1500,
+      onClose: () => {
+        activateForm.value = { invitationCode: '', password: '', confirmPassword: '' }
+        isActivateMode.value = false
+      }
+    })
+  } else {
+    showNotify({ type: 'danger', message: result.message })
+  }
+}
+
+async function handleLogin() {
+  loginError.value = ''
+  const result = await authStore.login(loginForm.value.username, loginForm.value.password)
+  if (result.success) {
+    loginForm.value = { username: '', password: '' }
+    await loadGroups()
+  } else {
+    loginError.value = result.message || '登录失败'
+  }
+}
 
 // 加载分组请求序号，用于过滤过期响应（防止并发竞态）
 let loadGroupsSeq = 0
@@ -653,7 +794,7 @@ const onUserSelect = (action: PopoverAction) => {
     }).then(() => {
       authStore.logout()
       showToast('已退出登录')
-      router.push('/login')
+      router.push('/')
     }).catch(() => {})
   }
 }
@@ -1384,5 +1525,60 @@ watch(networkStatus, (newStatus, oldStatus) => {
   color: #646566;
   word-break: break-all;
   min-height: 20px;
+}
+
+/* 登录表单 */
+.login-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 80vh;
+  padding: 40px 20px;
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.login-icon {
+  width: 80px;
+  height: 80px;
+}
+
+.login-header h1 {
+  margin: 12px 0 6px;
+  font-size: 24px;
+  color: #323233;
+}
+
+.login-header p {
+  margin: 0;
+  font-size: 14px;
+  color: #969799;
+}
+
+.login-error {
+  text-align: center;
+  color: #ee0a24;
+  font-size: 13px;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+
+.switch-mode {
+  text-align: center;
+  margin-top: 16px;
+}
+
+.text-link {
+  font-size: 14px;
+  color: #1989fa;
+  cursor: pointer;
+}
+
+.text-link:active {
+  opacity: 0.7;
 }
 </style>

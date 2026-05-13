@@ -23,6 +23,12 @@
 
       <van-cell-group inset>
         <van-field
+          v-model="serverName"
+          label="服务器名称"
+          placeholder="如 家里电脑、公司服务器"
+          clearable
+        />
+        <van-field
           v-model="serverUrl"
           label="服务地址"
           placeholder="如 http://192.168.1.100:8888"
@@ -41,16 +47,19 @@
       <div v-if="nativeShell && verifiedUrls.length" class="history-section">
         <div class="history-title">历史可用地址</div>
         <div
-          v-for="url in verifiedUrls"
-          :key="url"
+          v-for="host in verifiedUrls"
+          :key="host.url"
           class="history-item"
-          :class="{ active: url === savedUrl }"
+          :class="{ active: host.url === savedUrl }"
         >
-          <span class="history-url">{{ url }}</span>
-          <van-tag v-if="url === savedUrl" type="primary" class="current-tag">当前</van-tag>
+          <div class="history-info">
+            <span v-if="host.name" class="history-name">{{ host.name }}</span>
+            <span class="history-url">{{ host.url }}</span>
+          </div>
+          <van-tag v-if="host.url === savedUrl" type="primary" class="current-tag">当前</van-tag>
           <div class="history-actions">
-            <van-button size="mini" type="primary" plain @click="selectUrl(url)">使用</van-button>
-            <van-button size="mini" type="danger" plain @click="deleteUrl(url)">删除</van-button>
+            <van-button size="mini" type="primary" plain @click="selectUrl(host)">使用</van-button>
+            <van-button size="mini" type="danger" plain @click="deleteUrl(host.url)">删除</van-button>
           </div>
         </div>
       </div>
@@ -95,23 +104,25 @@ import {
   getServerBaseUrl,
   setServerBaseUrl,
   clearServerBaseUrl,
-  hasServerBaseUrl,
   isNativeShell,
   getVerifiedUrls,
   addVerifiedUrl,
-  removeVerifiedUrl
+  removeVerifiedUrl,
+  getServerName
 } from '@/utils/apiBase'
 
 const router = useRouter()
 
 const serverUrl = ref(getServerBaseUrl())
+const serverName = ref(getServerName(getServerBaseUrl()))
 const savedUrl = ref(getServerBaseUrl())
 const errorMsg = ref('')
 const testing = ref(false)
 const verifiedUrls = ref(getVerifiedUrls())
 
 const nativeShell = computed(() => isNativeShell())
-const canGoBack = computed(() => hasServerBaseUrl())
+// 始终显示返回按钮，可以返回到登录页
+const canGoBack = computed(() => true)
 
 // 归一化：去空白、去尾斜杠、缺协议头时自动补 http://
 function normalize(url: string): string {
@@ -187,38 +198,42 @@ async function handleSave() {
   }
 
   setServerBaseUrl(url)
-  addVerifiedUrl(url)
+  addVerifiedUrl({ url, name: serverName.value })
   savedUrl.value = url
   serverUrl.value = url
   verifiedUrls.value = getVerifiedUrls()
-  showToast({ type: 'success', message: '已保存', duration: 1000 })
-  router.push({ name: 'Login' })
+  showToast({ type: 'success', message: '已保存，即将跳转...', duration: 1500 })
+  router.replace({ name: 'Login' })
 }
 
 function handleClear() {
   clearServerBaseUrl()
   savedUrl.value = ''
   serverUrl.value = ''
+  serverName.value = ''
   showToast({ type: 'success', message: '已清除', duration: 1000 })
 }
 
-function selectUrl(url: string) {
-  serverUrl.value = url
+async function selectUrl(host: { url: string; name: string }) {
+  serverUrl.value = host.url
+  serverName.value = host.name
   errorMsg.value = ''
 
   testing.value = true
-  testConnection(url).then(ok => {
-    testing.value = false
-    if (!ok) {
-      errorMsg.value = '无法连通该地址，请确认服务端已启动且网络可达'
-      return
-    }
-    setServerBaseUrl(url)
-    addVerifiedUrl(url)
-    savedUrl.value = url
-    verifiedUrls.value = getVerifiedUrls()
-    showToast({ type: 'success', message: '已切换', duration: 1000 })
-  })
+  const ok = await testConnection(host.url)
+  testing.value = false
+
+  if (!ok) {
+    errorMsg.value = '无法连通该地址，请确认服务端已启动且网络可达'
+    return
+  }
+
+  setServerBaseUrl(host.url)
+  addVerifiedUrl({ url: host.url, name: serverName.value })
+  savedUrl.value = host.url
+  verifiedUrls.value = getVerifiedUrls()
+  showToast({ type: 'success', message: '已切换', duration: 1000 })
+  router.replace({ name: 'Login' })
 }
 
 function deleteUrl(url: string) {
@@ -228,7 +243,7 @@ function deleteUrl(url: string) {
 }
 
 function handleBack() {
-  if (canGoBack.value) router.back()
+  router.replace({ name: 'Login' })
 }
 </script>
 
@@ -309,10 +324,29 @@ function handleBack() {
     border: 1px solid #1989fa;
   }
 }
-.history-url {
+.history-info {
   flex: 1;
-  color: #323233;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   margin-right: 8px;
+}
+.history-name {
+  font-weight: 500;
+  color: #323233;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-url {
+  font-size: 12px;
+  color: #969799;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .current-tag {
   margin-right: 8px;

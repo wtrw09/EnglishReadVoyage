@@ -8,9 +8,9 @@
     "build": "vue-tsc && vite build",
     "preview": "vite preview",
     "harmony:sync": "vite build && node scripts/copy-to-harmony.cjs",
-    "android:sync": "vite build && cap sync ../android",
-    "android:open": "cap open ../android",
-    "android:run": "npm run android:sync && cap run ../android"
+    "android:sync": "vite build && cap sync android",
+    "android:open": "cap open android",
+    "android:run": "npm run android:sync && cap run android"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

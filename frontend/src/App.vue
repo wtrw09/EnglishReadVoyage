@@ -3,7 +3,7 @@
   <div id="app-root" :class="{ 'is-native-shell': isNativeShell(), 'is-harmony-shell': isHarmonyNative() }">
     <!-- 全局网络状态通知栏（可关闭，点击可手动重连） -->
     <div
-      v-if="networkStatus !== 'online' && !dismissed"
+      v-if="bannerVisible"
       class="network-banner"
       :class="'banner-' + networkStatus"
       @click="handleBannerClick"
@@ -70,14 +70,17 @@
       <div v-if="verifiedUrls.length" class="sheet-section">
         <div class="url-list-title">历史可用地址</div>
         <div
-          v-for="url in verifiedUrls"
-          :key="url"
+          v-for="host in verifiedUrls"
+          :key="host.url"
           class="url-item"
-          :class="{ active: url === currentServerUrl }"
-          @click="switchToUrl(url)"
+          :class="{ active: host.url === currentServerUrl }"
+          @click="switchToUrl(host.url)"
         >
-          <span class="url-text">{{ url }}</span>
-          <van-tag v-if="url === currentServerUrl" plain type="primary">当前</van-tag>
+          <div class="url-item-info">
+            <span v-if="host.name" class="url-item-name">{{ host.name }}</span>
+            <span class="url-text">{{ host.url }}</span>
+          </div>
+          <van-tag v-if="host.url === currentServerUrl" plain type="primary">当前</van-tag>
         </div>
       </div>
 
@@ -114,6 +117,7 @@
 import { ref, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
+import { useAuthStore } from '@/store/auth'
 import { useNetworkStatus } from '@/utils/useNetworkStatus'
 import {
   getServerBaseUrl,
@@ -125,6 +129,25 @@ import {
 
 const router = useRouter()
 const { status: networkStatus, checkConnection } = useNetworkStatus()
+
+// 诊断：横幅渲染条件
+const bannerVisible = computed(() => {
+  if (networkStatus.value === 'online') return false
+  if (dismissed.value) return false
+
+  // tokenExpired 时，如果用户已经在可登录的页面（Home 含登录表单 / ServerConfig），
+  // 不显示冗余的"登录已过期"横幅
+  if (networkStatus.value === 'tokenExpired') {
+    const routeName = router.currentRoute.value?.name
+    if (routeName === 'Home' || routeName === 'ServerConfig') {
+      return false
+    }
+  }
+
+  const visible = true
+  console.log('[App] 横幅渲染条件: networkStatus=', networkStatus.value, 'dismissed=', dismissed.value, '→ 显示=', visible)
+  return visible
+})
 
 // 用户手动关闭横幅后，新的异常状态出现时重新显示
 const dismissed = ref(localStorage.getItem('bannerDismissed') === 'true')
@@ -171,7 +194,12 @@ async function handleBannerClick() {
   if (isChecking.value) return // 检测中忽略重复点击
 
   if (networkStatus.value === 'tokenExpired') {
-    router.replace({ name: 'Login' })
+    console.log('[App] 点击 tokenExpired 横幅, isLoggedIn=', useAuthStore()?.isLoggedIn)
+    if (isNativeShell()) {
+      router.replace({ name: 'ServerConfig' })
+    } else {
+      router.replace({ name: 'Home' })
+    }
     return
   }
 
@@ -210,7 +238,6 @@ async function handleSheetChangeServer() {
   showConnectionSheet.value = false
   // ServerConfig 路由标记为 guest，已登录用户会被守卫拦截跳回 Home
   // 先登出清理登录状态，确保可以正常进入配置页
-  const { useAuthStore } = await import('@/store/auth')
   useAuthStore().logout()
   router.push({ name: 'ServerConfig' })
 }
@@ -225,12 +252,16 @@ async function switchToUrl(url: string) {
   isChecking.value = false
   // await 后重新读取运行时状态
   if (networkStatus.value === 'online') {
-    // 新地址可达后才清除旧服务器的登录状态，确保回滚时不丢失登录状态
-    const { useAuthStore } = await import('@/store/auth')
+    // 新地址可达且有有效 token，清理旧登录状态确保路由守卫不会拦截
     useAuthStore().logout()
     showToast({ type: 'success', message: '已切换至: ' + url, duration: 1500 })
-    // 需要重新登录获取新服务器上的 token
-    router.replace({ name: 'Login' })
+    // 跳转到服务端配置页，需要重新登录获取新服务器上的 token
+    router.replace({ name: 'ServerConfig' })
+  } else if (networkStatus.value === 'tokenExpired') {
+    // 新地址可达但旧 token 在新服务器上无效 —— checkConnection 已自动清理 token 和登录状态
+    // 这仍然是一次成功的服务器切换，直接跳转到配置页让用户重新登录
+    showToast({ type: 'success', message: '已切换至: ' + url, duration: 1500 })
+    router.replace({ name: 'ServerConfig' })
   } else {
     // 新地址不可达，回滚旧地址，保留用户登录状态
     setServerBaseUrl(oldUrl)
@@ -397,10 +428,29 @@ body {
   border: 1px solid #1989fa;
   background: #f0f9ff;
 }
-.url-text {
+.url-item-info {
   flex: 1;
-  color: #323233;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   margin-right: 8px;
+}
+.url-item-name {
+  font-weight: 500;
+  color: #323233;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.url-text {
+  font-size: 12px;
+  color: #969799;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sheet-actions {
   display: flex;

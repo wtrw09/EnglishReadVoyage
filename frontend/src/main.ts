@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
+import AudiobookPlayer from '@/views/AudiobookPlayer.vue'
 
 // 导入Vant样式
 import 'vant/lib/index.css'
@@ -36,6 +37,8 @@ const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
+// 强制注册 AudiobookPlayer 组件，防止 Rollup 树摇优化移除
+app.component('AudiobookPlayer', AudiobookPlayer)
 
 // DOM准备好后初始化安全区域
 if (document.readyState === 'loading') {

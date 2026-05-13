@@ -18,18 +18,13 @@
     
     <div class="login-content">
       <div class="logo-area">
-        <i class="fas fa-list logo-icon" />
+        <img src="/logo.svg" alt="English Read Voyage" class="login-icon" />
         <h2>英语阅读之旅</h2>
         <p>{{ isActivateMode ? '请输入邀请码激活账户' : '请登录以继续' }}</p>
       </div>
 
-      <!-- 自动登录状态（所有平台） -->
-      <div v-if="autoLoggingIn" class="server-status checking">
-        <van-loading type="spinner" size="18" /> 自动登录中...
-      </div>
-
       <!-- 服务端状态提示（仅原生壳） -->
-      <template v-if="nativeShell && !autoLoggingIn">
+      <template v-if="nativeShell">
         <div v-if="serverStatus === 'checking'" class="server-status checking">
           <van-loading type="spinner" size="18" /> 正在检查服务端连接...
         </div>
@@ -173,7 +168,6 @@ const isHealthChecking = ref(false)
 const nativeShell = computed(() => isNativeShell())
 const { checkConnection, status: networkStatus } = useNetworkStatus()
 const rememberMe = ref(false)
-const autoLoggingIn = ref(false)
 
 // 登录表单
 const form = reactive<LoginForm>({
@@ -210,11 +204,12 @@ const validateConfirmPassword = (value: string) => {
 
 // 加载完成后检查服务端状态
 onMounted(() => {
+  console.log('[Login] onMounted, isNativeShell=', isNativeShell(), 'serverStatus=', serverStatus.value, 'networkStatus=', useNetworkStatus().status.value)
   if (isNativeShell()) {
     checkServerHealth()
   } else {
-    // Web 浏览器：无需健康检查，直接尝试自动登录
-    tryAutoLogin()
+    // Web 浏览器：无需健康检查，直接预填用户名
+    prefillUsername()
   }
 })
 
@@ -230,30 +225,20 @@ async function checkServerHealth() {
   const seq = ++healthCheckSeq
   isHealthChecking.value = true
   serverStatus.value = 'checking'
+  console.log('[Login] checkServerHealth 开始，之前状态=', serverStatus.value)
   await checkConnection()
+  console.log('[Login] checkConnection 完成，networkStatus=', networkStatus.value)
   // 过期响应忽略，防止快速多次重试时状态被旧结果覆盖
   if (seq !== healthCheckSeq) return
   serverStatus.value = networkStatus.value === 'online' ? 'reachable' : 'unreachable'
   isHealthChecking.value = false
-  if (networkStatus.value === 'online') await tryAutoLogin()
+  if (networkStatus.value === 'online') prefillUsername()
 }
 
-async function tryAutoLogin() {
-  if (!authStore.isLoggedIn) {
-    autoLoggingIn.value = true
-    const result = await authStore.autoLogin()
-    autoLoggingIn.value = false
-    if (result.success) {
-      const redirect = route.query.redirect as string
-      router.replace(redirect || '/')
-    } else {
-      console.log('[AutoLogin] Failed:', result.message)
-      // 自动登录失败，预填用户名减少输入
-      const creds = getRememberedCredentials()
-      if (creds) {
-        form.username = creds.username
-      }
-    }
+function prefillUsername() {
+  const creds = getRememberedCredentials()
+  if (creds) {
+    form.username = creds.username
   }
 }
 
@@ -266,10 +251,12 @@ const onSubmit = async () => {
   const result = await authStore.login(form.username, form.password, rememberMe.value)
   
   if (result.success) {
+    console.log('[Login] 登录成功，authStore.isLoggedIn=', authStore.isLoggedIn, 'localStorage.token=', !!localStorage.getItem('token'))
     showNotify({ type: 'success', message: '登录成功', duration: 1500 })
 
     // 等待 Vue 响应式传播（Pinia token 状态同步到路由守卫的 computed）
     await nextTick()
+    console.log('[Login] nextTick 后 authStore.isLoggedIn=', authStore.isLoggedIn, '路由名=', router.currentRoute.value.name)
 
     // 跳转到之前尝试访问的页面或首页
     const redirect = route.query.redirect as string
@@ -339,9 +326,9 @@ const onActivateSubmit = async () => {
   text-align: center;
   padding: 40px 0;
 
-  .logo-icon {
-    font-size: 80px;
-    color: #1989fa;
+  .login-icon {
+    width: 80px;
+    height: 80px;
   }
 
   h2 {

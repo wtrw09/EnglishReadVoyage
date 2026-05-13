@@ -19,6 +19,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from urllib.parse import quote
 
 # 获取字体文件路径
 FONT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'fonts', 'simsun.ttc')

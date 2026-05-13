@@ -19,8 +19,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/server-config',
     name: 'ServerConfig',
-    component: () => import('@/views/ServerConfig.vue'),
-    meta: { guest: true }
+    component: () => import('@/views/ServerConfig.vue')
   },
   {
     path: '/login',

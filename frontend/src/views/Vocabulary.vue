@@ -328,7 +328,7 @@
       :style="{ maxHeight: '60%' }"
     >
       <div class="export-popup-header">
-        <span class="export-popup-title">导出Word文档</span>
+        <span class="export-popup-title">导出生词</span>
         <i class="fas fa-xmark export-popup-close" @click="showExportDialog = false" style="font-size: 20px; color: #999; cursor: pointer; padding: 4px;"></i>
       </div>
 
@@ -1311,8 +1311,6 @@ watch(showDetailDialog, (newVal) => {
 
 .export-content {
   padding: 16px;
-  max-height: 60vh;
-  overflow-y: auto;
 }
 
 .export-tip {

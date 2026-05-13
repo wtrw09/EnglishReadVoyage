@@ -719,6 +719,37 @@ const checkOrientation = () => {
   isLandscape.value = window.innerWidth > window.innerHeight
 }
 
+// === 调试辅助：排查 Capacitor Android 安全区域问题 ===
+const debugLayout = (source: string) => {
+  const el = document.querySelector('.audiobook-player')
+  const navEl = document.querySelector('.player-nav')
+  const rect = el?.getBoundingClientRect()
+  const navRect = navEl?.getBoundingClientRect()
+
+  // 从计算样式中读取 safe-area-inset-top
+  const dummy = document.createElement('div')
+  dummy.style.cssText = 'position:fixed;top:env(safe-area-inset-top, 0px);visibility:hidden'
+  document.body.appendChild(dummy)
+  const safeTop = parseFloat(getComputedStyle(dummy).top)
+  document.body.removeChild(dummy)
+
+  const info = {
+    source,
+    isNativeShell: document.getElementById('app-root')?.classList.contains('is-native-shell'),
+    windowInnerHeight: window.innerHeight,
+    documentClientHeight: document.documentElement.clientHeight,
+    screenHeight: screen.height,
+    playerTop: rect?.top,
+    playerHeight: rect?.height,
+    playerBottom: rect?.bottom,
+    navTop: navRect?.top,
+    navHeight: navRect?.height,
+    safeAreaInsetTop: safeTop,
+    currentBookTotalDuration: currentBookTotalDuration.value,
+  }
+  console.log('[AudiobookPlayer:debugLayout]', JSON.stringify(info, null, 2))
+}
+// ==================================================
 const goBack = () => {
   router.back()
 }
@@ -1556,6 +1587,12 @@ onMounted(() => {
   checkOrientation()
   window.addEventListener('resize', checkOrientation)
   setupMediaSession()
+
+  // === 调试信息：排查 Capacitor Android 安全区域问题 ===
+  debugLayout('mounted')
+  window.addEventListener('resize', () => debugLayout('resize'))
+  // ==================================================
+
   // 绑定 PlaylistPlayer 事件
   player.on('progress', ({ globalMs }) => {
     if (!isDragging.value) currentGlobalMs.value = globalMs
@@ -1653,10 +1690,15 @@ onUnmounted(() => {
 
 <style scoped lang="less">
 .audiobook-player {
-  height: 100vh;
+  /* 使用 svh (Small Viewport Height) 确保在移动端正确处理地址栏 */
+  height: 100svh;
+  /* 回退到 dvh 和 vh */
   height: 100dvh;
+  height: 100vh;
   background: linear-gradient(180deg, #f5f5f5 0%, #fff 100%);
   overflow: hidden;
+  /* 确保在原生壳中精确定位 */
+  position: relative;
 
   // 新布局：左右分栏
   .player-layout {
@@ -1738,6 +1780,7 @@ onUnmounted(() => {
   // 右侧播放列表区域
   .playlist-section {
     width: 33.333%;
+    max-width: 360px;
     border-left: 1px solid #eee;
     display: flex;
     flex-direction: column;

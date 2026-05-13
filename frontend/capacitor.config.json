@@ -8,7 +8,7 @@
   },
   "android": {
     "allowMixedContent": true,
-    "rootPath": "../android"
+    "path": "../android"
   },
   "plugins": {
     "SplashScreen": {
