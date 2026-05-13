@@ -387,8 +387,18 @@
             type="primary"
             block
             :disabled="exportSelectedIds.length === 0"
+            :loading="exportAnkiLoading"
+            @click="exportToAnki"
+          >
+            导出Anki格式
+          </van-button>
+          <van-button
+            type="default"
+            block
+            :disabled="exportSelectedIds.length === 0"
             :loading="exportLoading"
             @click="exportToWord"
+            style="margin-top: 10px;"
           >
             导出Word文档
           </van-button>
@@ -448,6 +458,7 @@ const showExportDialog = ref(false)
 const exportSelectedIds = ref<number[]>([])
 const exportHiddenFields = ref<string[]>(['word', 'translation'])
 const exportLoading = ref(false)
+const exportAnkiLoading = ref(false)
 
 // 判断导出是否全选
 const isAllExportSelected = computed(() => {
@@ -819,27 +830,26 @@ const toggleHiddenField = (field: string) => {
   }
 }
 
-// 导出Word文档
-const exportToWord = async () => {
+// 导出Anki格式
+const exportToAnki = async () => {
   if (exportSelectedIds.value.length === 0) return
 
-  exportLoading.value = true
+  exportAnkiLoading.value = true
   try {
-    const response = await api.post('/vocabulary/export', {
-      ids: exportSelectedIds.value,
-      hidden_fields: exportHiddenFields.value
+    const response = await api.post('/vocabulary/export/apkg', {
+      ids: exportSelectedIds.value
     }, {
       responseType: 'blob'
     })
 
     // 创建下载链接
     const blob = new Blob([response.data], {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      type: 'application/x-apkg'
     })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `生词本_${new Date().toISOString().slice(0, 10)}.docx`
+    link.download = `生词本_${new Date().toISOString().slice(0, 10)}.apkg`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -850,7 +860,42 @@ const exportToWord = async () => {
   } catch (error) {
     showToast('导出失败')
   } finally {
-    exportLoading.value = false
+    exportAnkiLoading.value = false
+  }
+}
+
+// 导出Word文档
+const exportToWord = async () => {
+  if (exportSelectedIds.value.length === 0) return;
+
+  exportLoading.value = true;
+  try {
+    const response = await api.post('/vocabulary/export', {
+      ids: exportSelectedIds.value,
+      hidden_fields: exportHiddenFields.value
+    }, {
+      responseType: 'blob'
+    });
+
+    // 创建下载链接
+    const blob = new Blob([response.data], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `生词本_${new Date().toISOString().slice(0, 10)}.docx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    showToast('导出成功');
+    showExportDialog.value = false;
+  } catch (error) {
+    showToast('导出失败');
+  } finally {
+    exportLoading.value = false;
   }
 }
 

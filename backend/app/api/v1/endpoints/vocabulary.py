@@ -11,7 +11,9 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.database_models import User, Vocabulary
 from app.schemas.vocabulary import VocabularyCreate, VocabularyResponse, VocabularyListResponse, VocabularyBatchDelete, VocabularyExport
+from app.services.dictionary_service import dictionary_service
 from docx import Document
+import genanki
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -335,6 +337,149 @@ async def export_vocabulary(
     return StreamingResponse(
         iter([file_stream.getvalue()]),
         media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        }
+    )
+
+
+def highlight_word_in_sentence(sentence: str, word: str) -> str:
+    """将句子中的目标单词加粗标红"""
+    import re
+    # 精确匹配单词（区分大小写），用 <b> 和 <span> 包裹
+    pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+    return pattern.sub(f'<b><span style="color:red;">{word}</span></b>', sentence)
+
+
+@router.post("/export/apkg")
+async def export_vocabulary_apkg(
+    request: VocabularyExport,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    导出生词本为 Anki APKG 文件。
+
+    正面：单词所在句子（目标单词加粗标红）
+    背面：句子翻译
+    如无句子，使用词典第一个例句；无例句则只保留单词和翻译
+    """
+    if not request.ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请选择要导出的生词"
+        )
+
+    # 获取生词数据
+    stmt = select(Vocabulary).where(
+        and_(
+            Vocabulary.id.in_(request.ids),
+            Vocabulary.user_id == current_user.id
+        )
+    )
+    result = await db.execute(stmt)
+    vocab_list = result.scalars().all()
+
+    if not vocab_list:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到要导出的生词"
+        )
+
+    # 创建 Anki 模型 - 正面的句子和背面的翻译
+    model_id = 1607392320
+    model = genanki.Model(
+        model_id,
+        'EnglishReadVoyage Sentence Card',
+        fields=[
+            {'name': 'Front'},
+            {'name': 'Back'},
+        ],
+        templates=[
+            {
+                'name': 'Card 1',
+                'qfmt': '{{Front}}',
+                'afmt': '{{FrontSide}}<hr id="answer">{{Back}}',
+            },
+        ],
+        css='''
+            .card {
+                font-family: Arial;
+                font-size: 20px;
+                text-align: center;
+                color: black;
+                background-color: white;
+            }
+            .card {
+                color: #333;
+            }
+        '''
+    )
+
+    # 创建牌组
+    deck_id = 2059400111
+    deck = genanki.Deck(deck_id, 'EnglishReadVoyage生词本')
+
+    # 遍历生词，创建卡片
+    for vocab in vocab_list:
+        word = vocab.word or ''
+        translation = vocab.translation or ''
+
+        # 确定正面内容
+        front_content = ''
+        back_content = translation
+
+        if vocab.sentence:
+            # 使用生词本中的句子
+            front_content = highlight_word_in_sentence(vocab.sentence, word)
+        else:
+            # 查询词典获取例句
+            dict_result = await dictionary_service.lookup(word, source='local')
+            if dict_result:
+                # 找到第一个例句
+                example_found = False
+                for meaning in dict_result.meanings or []:
+                    for definition in meaning.definitions or []:
+                        if definition.example:
+                            front_content = highlight_word_in_sentence(definition.example, word)
+                            example_found = True
+                            break
+                    if example_found:
+                        break
+
+                if not example_found:
+                    # 没有例句，只显示单词
+                    front_content = f'<b>{word}</b>'
+
+        note = genanki.Note(model=model, fields=[front_content, back_content])
+        deck.add_note(note)
+
+    # 生成 APKG 文件
+    import tempfile
+    from datetime import datetime
+    import uuid
+
+    # 创建临时文件
+    temp_file = tempfile.NamedTemporaryFile(suffix='.apkg', delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+
+    deck.write_to_file(temp_path)
+
+    # 读取文件内容
+    with open(temp_path, 'rb') as f:
+        apkg_data = f.read()
+
+    # 删除临时文件
+    import os
+    os.unlink(temp_path)
+
+    # 返回文件流
+    filename = f"vocabulary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.apkg"
+
+    return StreamingResponse(
+        iter([apkg_data]),
+        media_type='application/x-apkg',
         headers={
             'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
         }
