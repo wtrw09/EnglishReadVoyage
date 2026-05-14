@@ -1908,13 +1908,30 @@ class BookService:
 
                     await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
                 else:
-                    # 不生成音频时，只保存句子映射文件
+                    # 不生成音频时，直接复制ZIP中的sentences.json（保留翻译）
                     await progress_callback(70, "正在保存句子映射...")
 
-                    # 保存映射文件（不含audio_file）
                     mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
+
+                    # 直接从ZIP复制sentences.json（如果存在），保留翻译
+                    copied = False
+                    for zf_file in zf.namelist():
+                        if zf_file.endswith('sentences.json'):
+                            try:
+                                with zf.open(zf_file) as existing_file:
+                                    content = existing_file.read()
+                                with open(mapping_path, 'wb') as out_f:
+                                    out_f.write(content)
+                                copied = True
+                                break
+                            except Exception as e:
+                                logger.warning(f"复制sentences.json失败: {e}")
+                                pass
+
+                    # 如果没有成功复制，才用自己构建的
+                    if not copied:
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
 
                     await progress_callback(80, "句子映射已保存")
 
@@ -2019,6 +2036,28 @@ class BookService:
                         "file_path": rel_md_path,
                         "cover_path": cover_path
                     })
+
+                    # 覆盖导入时也需要复制sentences.json（保留翻译）
+                    # 在ZIP解压后、提交前，复制sentences.json到audio文件夹
+                    with zipfile.ZipFile(io.BytesIO(file_content)) as zf_check:
+                        audio_subfolder = audio_folder  # audio_folder在上面已创建
+                        audio_subfolder.mkdir(parents=True, exist_ok=True)
+                        mapping_path = audio_subfolder / 'sentences.json'
+                        copied = False
+                        for zf_file in zf_check.namelist():
+                            if zf_file.endswith('sentences.json'):
+                                try:
+                                    with zf_check.open(zf_file) as existing_file:
+                                        content = existing_file.read()
+                                    with open(mapping_path, 'wb') as out_f:
+                                        out_f.write(content)
+                                    copied = True
+                                    break
+                                except Exception as e:
+                                    logger.warning(f"覆盖导入时复制sentences.json失败: {e}")
+                                    pass
+                        if copied:
+                            logger.info(f"覆盖导入时已复制sentences.json: {book_folder_path.name}")
                 else:
                     book_data = {
                         "id": book_id,
@@ -2266,12 +2305,24 @@ class BookService:
                         )
 
                     successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
-                    
-                    mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
-                else:
-                    mapping_path = audio_folder / 'sentences.json'
+
+                # 直接复制ZIP中的sentences.json（保留翻译和音频信息），不区分是否生成音频
+                mapping_path = audio_folder / 'sentences.json'
+                copied = False
+                for zf_file in zf.namelist():
+                    if zf_file.endswith('sentences.json'):
+                        try:
+                            with zf.open(zf_file) as existing_file:
+                                content = existing_file.read()
+                            with open(mapping_path, 'wb') as out_f:
+                                out_f.write(content)
+                            copied = True
+                            break
+                        except Exception as e:
+                            logger.warning(f"复制sentences.json失败: {e}")
+                            pass
+                if not copied:
+                    # 备用方案：写入从MD提取的句子映射（无翻译）
                     with open(mapping_path, 'w', encoding='utf-8') as f:
                         json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
                 

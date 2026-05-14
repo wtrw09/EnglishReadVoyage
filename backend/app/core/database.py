@@ -189,6 +189,16 @@ async def init_db():
             else:
                 print("Migration check: sort_order column already exists")
 
+            # 迁移：添加 vocabulary 表的 sentence_translation 字段
+            result = await conn.execute(text("PRAGMA table_info(vocabulary)"))
+            vocab_columns = [row[1] for row in result.fetchall()]
+            if 'sentence_translation' not in vocab_columns:
+                print("Adding sentence_translation column to vocabulary table...")
+                await conn.execute(text("ALTER TABLE vocabulary ADD COLUMN sentence_translation VARCHAR"))
+                print("Added column: sentence_translation")
+            else:
+                print("Migration check: sentence_translation column already exists")
+
             # 迁移：添加 user_settings 表的 dictionary_page_source 字段
             result = await conn.execute(text("PRAGMA table_info(user_settings)"))
             user_settings_columns = [row[1] for row in result.fetchall()]
