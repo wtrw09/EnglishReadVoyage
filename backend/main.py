@@ -121,11 +121,10 @@ else:
     # 默认使用项目目录下的 Books 文件夹
     BOOKS_DIR = Path(__file__).parent / "Books"
 
-if BOOKS_DIR.exists():
-    app.mount("/books", StaticFiles(directory=str(BOOKS_DIR)), name="books")
-    logger.info(f"Static files mounted: {BOOKS_DIR}")
-else:
-    logger.warning(f"Books directory not found at {BOOKS_DIR}")
+# 确保目录存在，不存在则自动创建
+BOOKS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/books", StaticFiles(directory=str(BOOKS_DIR)), name="books")
+logger.info(f"Static files mounted: {BOOKS_DIR}")
 
 # 挂载单词发音缓存音频目录（放在 data 目录下）
 WORD_AUDIO_DIR = Path(settings.BASE_DIR) / "data" / "word_audio"

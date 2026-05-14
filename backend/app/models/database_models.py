@@ -145,6 +145,7 @@ class Vocabulary(Base):
     phonetic: Mapped[Optional[str]] = mapped_column(String)
     translation: Mapped[Optional[str]] = mapped_column(String)
     sentence: Mapped[Optional[str]] = mapped_column(String)
+    sentence_translation: Mapped[Optional[str]] = mapped_column(String)
     book_name: Mapped[Optional[str]] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

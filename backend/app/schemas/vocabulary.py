@@ -10,6 +10,7 @@ class VocabularyCreate(BaseModel):
     phonetic: Optional[str] = Field(None, description="音标")
     translation: Optional[str] = Field(None, description="中文翻译")
     sentence: Optional[str] = Field(None, description="生词所在的句子")
+    sentence_translation: Optional[str] = Field(None, description="句子翻译")
     book_name: Optional[str] = Field(None, description="书籍名称")
 
 
@@ -20,6 +21,7 @@ class VocabularyResponse(BaseModel):
     phonetic: Optional[str] = Field(None, description="音标")
     translation: Optional[str] = Field(None, description="中文翻译")
     sentence: Optional[str] = Field(None, description="生词所在的句子")
+    sentence_translation: Optional[str] = Field(None, description="句子翻译")
     book_name: Optional[str] = Field(None, description="书籍名称")
     created_at: datetime = Field(..., description="添加时间")
 

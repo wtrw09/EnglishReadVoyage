@@ -1,17 +1,19 @@
 """生词本API端点。"""
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, delete
-from typing import List
+from typing import List, Optional
 import io
 import os
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
-from app.models.database_models import User, Vocabulary
+from app.models.database_models import User, Vocabulary, TranslationAPI
 from app.schemas.vocabulary import VocabularyCreate, VocabularyResponse, VocabularyListResponse, VocabularyBatchDelete, VocabularyExport
 from app.services.dictionary_service import dictionary_service
+from app.services.translation_service import translation_service
 from docx import Document
 import genanki
 from docx.shared import Pt, Inches
@@ -59,6 +61,7 @@ async def add_vocabulary(
     添加生词到生词本。
 
     如果相同的单词和句子组合已存在，则返回已存在的记录。
+    如果有句子但没有句子翻译，自动调用百度翻译获取。
     """
     # 检查是否已存在相同的生词（同一用户、同一单词、同一句子）
     stmt = select(Vocabulary).where(
@@ -75,6 +78,14 @@ async def add_vocabulary(
         # 已存在则返回已存在的记录
         return existing
 
+    # 确定句子翻译
+    sentence_translation = request.sentence_translation
+    if not sentence_translation and request.sentence:
+        # 需要翻译句子
+        sentence_translation = await _get_sentence_translation(db, current_user.id, request.sentence)
+        if sentence_translation is None:
+            sentence_translation = "请配置百度翻译api"
+
     # 创建新的生词记录
     vocab = Vocabulary(
         user_id=current_user.id,
@@ -82,6 +93,7 @@ async def add_vocabulary(
         phonetic=request.phonetic,
         translation=request.translation,
         sentence=request.sentence,
+        sentence_translation=sentence_translation,
         book_name=request.book_name
     )
     db.add(vocab)
@@ -89,6 +101,34 @@ async def add_vocabulary(
     await db.refresh(vocab)
 
     return vocab
+
+
+async def _get_sentence_translation(db: AsyncSession, user_id: int, sentence: str) -> Optional[str]:
+    """获取用户的翻译API配置并翻译句子"""
+    try:
+        # 获取用户的翻译API配置
+        stmt = select(TranslationAPI).where(
+            TranslationAPI.user_id == user_id,
+            TranslationAPI.is_active == True
+        ).order_by(TranslationAPI.id)
+        result = await db.execute(stmt)
+        api = result.scalars().first()
+
+        if not api or not api.app_id or not api.app_key:
+            return None
+
+        # 调用百度翻译
+        translated = await translation_service.translate_with_baidu(
+            text=sentence,
+            from_lang="en",
+            to_lang="zh",
+            app_id=api.app_id,
+            app_key=api.app_key
+        )
+        return translated
+    except Exception as e:
+        logging.warning(f"翻译句子失败: {e}")
+        return None
 
 
 @router.get("/", response_model=VocabularyListResponse)
@@ -425,10 +465,10 @@ async def export_vocabulary_apkg(
     for vocab in vocab_list:
         word = vocab.word or ''
         translation = vocab.translation or ''
+        sentence_translation = vocab.sentence_translation or ''
 
         # 确定正面内容
         front_content = ''
-        back_content = translation
 
         if vocab.sentence:
             # 使用生词本中的句子
@@ -451,6 +491,13 @@ async def export_vocabulary_apkg(
                 if not example_found:
                     # 没有例句，只显示单词
                     front_content = f'<b>{word}</b>'
+
+        # 确定背面内容：句子翻译 + --- + 单词翻译
+        back_parts = []
+        if sentence_translation:
+            back_parts.append(sentence_translation)
+        back_parts.append(translation)
+        back_content = '\n---\n'.join(back_parts)
 
         note = genanki.Note(model=model, fields=[front_content, back_content])
         deck.add_note(note)
@@ -485,3 +532,56 @@ async def export_vocabulary_apkg(
             'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
         }
     )
+
+
+@router.post("/update-sentence-translations")
+async def update_sentence_translations(
+    request: VocabularyBatchDelete,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    批量更新选中生词的句子翻译。
+
+    仅更新有句子但无句子翻译的生词。
+    无句子的生词会被跳过。
+    """
+    if not request.ids:
+        return {"success": True, "updated_count": 0, "skipped_count": 0}
+
+    # 获取所有需要处理的生词（一次查询）
+    stmt = select(Vocabulary).where(
+        and_(
+            Vocabulary.id.in_(request.ids),
+            Vocabulary.user_id == current_user.id
+        )
+    )
+    result = await db.execute(stmt)
+    all_vocabs = result.scalars().all()
+
+    # 区分需要更新的和需要跳过的
+    vocab_to_update = []
+    skipped_count = 0
+    for vocab in all_vocabs:
+        if vocab.sentence and vocab.sentence_translation is None:
+            vocab_to_update.append(vocab)
+        elif not vocab.sentence or vocab.sentence == "":
+            skipped_count += 1
+
+    # 批量更新翻译
+    updated_count = 0
+    for vocab in vocab_to_update:
+        sentence_trans = await _get_sentence_translation(db, current_user.id, vocab.sentence)
+        if sentence_trans:
+            vocab.sentence_translation = sentence_trans
+        else:
+            vocab.sentence_translation = "请配置百度翻译api"
+        updated_count += 1
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "updated_count": updated_count,
+        "skipped_count": skipped_count
+    }
