@@ -1,5 +1,6 @@
 """应用配置管理"""
 import os
+import json
 import secrets
 import logging
 from functools import lru_cache
@@ -104,11 +105,25 @@ class Settings(BaseSettings):
         self.IMPORT_TEMP_DIR = self.IMPORT_TEMP_DIR or os.path.join(tempfile.gettempdir(), "erv_imports")
 
         # 处理 CORS_ORIGINS：从逗号分隔字符串转为列表
+        # 兼容格式："*"、"["*"]"、"http://a.com,http://b.com"、"[\"http://a.com\",\"http://b.com\"]"
         if isinstance(self.CORS_ORIGINS, str):
-            if self.CORS_ORIGINS.strip() == "*":
+            raw = self.CORS_ORIGINS.strip()
+            # 去掉外层的方括号（如 ["*"]）
+            if raw.startswith("[") and raw.endswith("]"):
+                raw = raw[1:-1].strip()
+            if raw == "*":
                 self._cors_origins_list = ["*"]
             else:
-                self._cors_origins_list = [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+                # 尝试 JSON 解析（带引号的数组格式）
+                try:
+                    parsed = json.loads(f"[{raw}]")
+                    if isinstance(parsed, list):
+                        self._cors_origins_list = [str(o).strip() for o in parsed if o]
+                    else:
+                        self._cors_origins_list = [str(parsed).strip()]
+                except (json.JSONDecodeError, TypeError):
+                    # 回退到逗号分隔
+                    self._cors_origins_list = [origin.strip() for origin in raw.split(",") if origin.strip()]
         else:
             self._cors_origins_list = self.CORS_ORIGINS
 
