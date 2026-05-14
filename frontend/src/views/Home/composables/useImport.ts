@@ -6,7 +6,7 @@ import { ref, computed } from 'vue'
 import { showNotify, showToast, showConfirmDialog } from 'vant'
 import { useAuthStore } from '@/store/auth'
 import { buildApiUrl } from '@/utils/apiBase'
-import type { DuplicateCheckResult } from '../types'
+import type { DuplicateCheckResult, PrepareImportResponse } from '../types'
 
 export const useImport = () => {
   const authStore = useAuthStore()
@@ -65,6 +65,15 @@ export const useImport = () => {
 
   // 覆盖模式（已有书籍ID）
   const overwriteMode = ref('')
+
+  // ========== Token式导入相关状态 ==========
+
+  // prepare-import 返回的token
+  const uploadToken = ref('')
+  // 文件类型: zip/md/batch_md
+  const uploadFileType = ref('')
+  // prepare-import 完整结果
+  const prepareResult = ref<PrepareImportResponse | null>(null)
 
   // 合并检查对话框
   const showImportCheckDialog = ref(false)
@@ -317,6 +326,110 @@ export const useImport = () => {
       uploadStatus.value = `${statusText}...`
       xhr.send(formData)
     })
+  }
+
+  /**
+   * 通过 token 确认导入（SSE流式进度）
+   */
+  const confirmWithStream = (token: string, options?: {
+    skipDuplicates?: boolean
+    overwriteBookIds?: string[]
+  }): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+
+      xhr.addEventListener('load', async () => {
+        importing.value = true
+        importProgress.value = 0
+        importStatus.value = '正在处理...'
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const text = xhr.responseText
+            const matches = text.matchAll(/data: (\{.*?\})/g)
+            for (const match of matches) {
+              try {
+                const data = JSON.parse(match[1])
+                importProgress.value = data.percentage || 0
+                importStatus.value = data.message || ''
+
+                if (data.success === true) {
+                  showNotify({ type: 'success', message: data.message, duration: 1500 })
+                  if (data.book_id) {
+                    currentBookId.value = data.book_id
+                  }
+                  importCompleted.value = true
+                  if (uploadFileType.value === 'md') {
+                    showChoiceDialog.value = true
+                  }
+                } else if (data.success === false) {
+                  showNotify({ type: 'danger', message: data.message })
+                  importing.value = false
+                }
+              } catch (e) {
+                console.error('解析SSE数据失败:', e)
+              }
+            }
+            resolve()
+          } catch (e) {
+            resolve()
+          }
+        } else {
+          reject(new Error('导入请求失败'))
+        }
+        importing.value = false
+      })
+
+      xhr.addEventListener('error', () => {
+        importing.value = false
+        reject(new Error('导入请求网络错误'))
+      })
+
+      xhr.addEventListener('abort', () => {
+        importing.value = false
+        reject(new Error('导入请求已取消'))
+      })
+
+      // 构建 URL + 查询参数
+      let apiPath = buildApiUrl('/books/confirm-import')
+      const params = new URLSearchParams()
+      if (options?.skipDuplicates) {
+        params.append('skip_duplicates', 'true')
+      }
+      if (options?.overwriteBookIds && options.overwriteBookIds.length > 0) {
+        params.append('overwrite_book_ids', options.overwriteBookIds.join(','))
+      }
+      if (importCategoryId.value) {
+        params.append('category_id', importCategoryId.value.toString())
+      }
+      if (params.toString()) {
+        apiPath += `?${params.toString()}`
+      }
+
+      xhr.open('POST', apiPath)
+      xhr.setRequestHeader('Content-Type', 'application/json')
+      xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+
+      importProgress.value = 0
+      importStatus.value = '正在导入...'
+      xhr.send(JSON.stringify({ token }))
+    })
+  }
+
+  /**
+   * 通过 token 取消导入
+   */
+  const cancelUploadByToken = async (token: string): Promise<void> => {
+    if (!token) return
+    try {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', buildApiUrl('/books/cancel-import'))
+      xhr.setRequestHeader('Content-Type', 'application/json')
+      xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+      xhr.send(JSON.stringify({ token }))
+    } catch (e) {
+      console.error('取消导入失败:', e)
+    }
   }
 
   // ========== 检查重复书籍 ==========
@@ -610,23 +723,60 @@ export const useImport = () => {
   }
 
   /**
-   * 确认导入
+   * 确认导入（Token式：先prepare-upload，再confirm-import）
    */
   const handleImportConfirm = async () => {
     // 批量导入模式
     if (isBatchImport.value && selectedFiles.value.length > 0) {
       isBatchMdImport.value = true
 
-      const duplicateCheck = await checkMdDuplicates(selectedFiles.value)
+      const formData = new FormData()
+      selectedFiles.value.forEach(f => {
+        formData.append('files', f)
+      })
 
-      if (duplicateCheck.has_duplicates) {
-        duplicateCheckResult.value = duplicateCheck
-        showDuplicateDialog.value = true
-        importStatus.value = ''
-        return
+      uploading.value = true
+      uploadProgress.value = 0
+      uploadStatus.value = '正在上传检查文件...'
+
+      try {
+        const result = await uploadWithProgress(
+          buildApiUrl('/books/prepare-import'),
+          formData,
+          '正在上传检查'
+        )
+
+        if (result.ok && result.data) {
+          uploadToken.value = result.data.token
+          uploadFileType.value = result.data.file_type
+          prepareResult.value = result.data
+
+          const data = result.data
+          const hasDuplicates = data.duplicate_books && data.duplicate_books.length > 0
+
+          if (hasDuplicates) {
+            duplicateCheckResult.value = {
+              has_duplicates: true,
+              duplicate_books: data.duplicate_books,
+              new_books: data.valid_books.map((t: string) => ({ title: t, book_id: '' })),
+              total_books: data.total_books
+            }
+            showDuplicateDialog.value = true
+            importStatus.value = ''
+            return
+          }
+
+          await confirmWithStream(uploadToken.value)
+          return
+        }
+      } catch (error) {
+        console.error('prepare-import批量MD失败:', error)
+        showNotify({ type: 'danger', message: '上传检查失败' })
+      } finally {
+        uploading.value = false
+        uploadProgress.value = 0
+        uploadStatus.value = ''
       }
-
-      await handleBatchImport()
       return
     }
 
@@ -642,33 +792,71 @@ export const useImport = () => {
     isZipImport.value = selectedFile.value.name.endsWith('.zip')
 
     try {
-      if (isZipImport.value) {
-        isBatchMdImport.value = false
+      // 1. 调用 prepare-import 一次上传+检查
+      const formData = new FormData()
+      formData.append('file', selectedFile.value)
 
-        // 合并检查完整性+重复
-        const checkResult = await checkZipAll(selectedFile.value)
-        
-        // 显示检查结果对话框
-        importCheckResult.value = checkResult
+      uploading.value = true
+      uploadProgress.value = 0
+      uploadStatus.value = '正在上传检查文件...'
+
+      const result = await uploadWithProgress(
+        buildApiUrl('/books/prepare-import'),
+        formData,
+        '正在上传检查'
+      )
+
+      uploading.value = false
+
+      if (!result.ok || !result.data) {
+        showNotify({ type: 'danger', message: '文件上传检查失败，请重试' })
+        return
+      }
+
+      const data = result.data
+      uploadToken.value = data.token
+      uploadFileType.value = data.file_type
+      prepareResult.value = data
+
+      if (data.file_type === 'zip') {
+        // ZIP: 显示合并检查结果
+        importCheckResult.value = {
+          valid_books: data.valid_books || [],
+          invalid_books: data.invalid_books || [],
+          duplicate_books: data.duplicate_books || [],
+          total: data.total_books || 0,
+          message: data.message || ''
+        }
         showImportCheckDialog.value = true
         importStatus.value = ''
         return
       }
 
-      // 单个 MD 文件也使用 check-md-duplicates 接口检测重复
-      const duplicateCheck = await checkMdDuplicates([selectedFile.value])
+      // MD 文件: 检查重复
+      const hasDuplicates = data.duplicate_books && data.duplicate_books.length > 0
 
-      if (duplicateCheck.has_duplicates) {
-        duplicateCheckResult.value = duplicateCheck
+      if (hasDuplicates) {
+        isBatchMdImport.value = false
+        duplicateCheckResult.value = {
+          has_duplicates: true,
+          duplicate_books: data.duplicate_books,
+          new_books: data.valid_books.map((t: string) => ({ title: t, book_id: '' })),
+          total_books: data.total_books
+        }
         showDuplicateDialog.value = true
         importStatus.value = ''
         return
       }
 
-      return await doImport(false)
+      // 无重复，直接导入
+      return await confirmWithStream(data.token)
     } catch (error: any) {
-      console.error('检查书籍失败:', error)
-      return await doImport(false)
+      console.error('prepare-import失败:', error)
+      showNotify({ type: 'danger', message: '文件上传检查失败' })
+    } finally {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
     }
   }
 
@@ -870,118 +1058,46 @@ export const useImport = () => {
   }
 
   /**
-   * 根据用户选择执行批量MD导入
+   * 根据用户选择执行批量MD导入（Token式）
    */
   const doBatchImportWithAction = async () => {
-    if (selectedFiles.value.length === 0 || !importAction.value) return
+    if (!uploadToken.value) return
 
     importing.value = true
     importProgress.value = 0
     importStatus.value = '正在导入书籍...'
 
-    const skipBookIds = new Set<string>()
-    const overwriteBookIds = new Set<string>()
+    let overwriteBookIds: string[] | undefined = undefined
 
-    if (importAction.value === 'skip') {
-      duplicateCheckResult.value.duplicate_books.forEach((b: any) => skipBookIds.add(b.book_id))
-    } else if (importAction.value === 'overwrite') {
-      duplicateCheckResult.value.duplicate_books.forEach((b: any) => overwriteBookIds.add(b.book_id))
+    if (importAction.value === 'overwrite') {
+      overwriteBookIds = duplicateCheckResult.value.duplicate_books.map((b: any) => b.book_id)
     } else if (importAction.value === 'selected') {
-      selectedDuplicateBooks.value.forEach(id => overwriteBookIds.add(id))
-      duplicateCheckResult.value.duplicate_books.forEach((b: any) => {
-        if (!selectedDuplicateBooks.value.includes(b.book_id)) {
-          skipBookIds.add(b.book_id)
-        }
+      overwriteBookIds = selectedDuplicateBooks.value
+    }
+
+    const skipDuplicates = importAction.value === 'skip'
+
+    try {
+      await confirmWithStream(uploadToken.value, {
+        skipDuplicates,
+        overwriteBookIds
       })
+    } catch (error) {
+      console.error('Token式批量导入失败:', error)
+      showNotify({ type: 'danger', message: '批量导入失败' })
+    } finally {
+      importing.value = false
+      isBatchMdImport.value = false
+      selectedDuplicateBooks.value = []
+      uploadToken.value = ''
     }
-
-    const filenameToBookId = new Map<string, string>()
-    duplicateCheckResult.value.duplicate_books.forEach((b: any) => {
-      filenameToBookId.set(b.filename, b.book_id)
-    })
-    duplicateCheckResult.value.new_books.forEach((b: any) => {
-      filenameToBookId.set(b.filename, b.book_id)
-    })
-
-    const totalFiles = selectedFiles.value.length
-    let successCount = 0
-    let failCount = 0
-    let skipCount = 0
-
-    for (let i = 0; i < totalFiles; i++) {
-      const file = selectedFiles.value[i]
-      const bookId = filenameToBookId.get(file.name)
-      const baseProgress = Math.round((i / totalFiles) * 100)
-
-      if (bookId && skipBookIds.has(bookId)) {
-        skipCount++
-        importProgress.value = Math.min(baseProgress + Math.round(100 / totalFiles), 99)
-        importStatus.value = `跳过 (${i + 1}/${totalFiles}): ${file.name}`
-        continue
-      }
-
-      try {
-        const formData = new FormData()
-        formData.append('file', file)
-
-        const categoryId = importCategoryId.value
-        let apiPath = buildApiUrl('/books/import')
-        const params = new URLSearchParams()
-
-        if (categoryId) {
-          params.append('category_id', categoryId.toString())
-        }
-
-        if (bookId && overwriteBookIds.has(bookId)) {
-          params.append('overwrite_book_ids', bookId)
-        }
-
-        if (params.toString()) {
-          apiPath += `?${params.toString()}`
-        }
-
-        const result = await uploadWithProgressCallback(
-          apiPath,
-          formData,
-          `正在上传 (${i + 1}/${totalFiles}): ${file.name}`,
-          (progress) => {
-            importProgress.value = Math.min(baseProgress + Math.round(progress / totalFiles), 99)
-          }
-        )
-
-        if (result.ok) {
-          successCount++
-        } else {
-          failCount++
-          console.error(`导入失败: ${file.name}`)
-        }
-      } catch (error) {
-        failCount++
-        console.error(`导入异常: ${file.name}`, error)
-      }
-    }
-
-    importProgress.value = 100
-    const summary = skipCount > 0
-      ? `批量导入完成: 成功 ${successCount} 本, 跳过 ${skipCount} 本, 失败 ${failCount} 本`
-      : `批量导入完成: 成功 ${successCount} 本, 失败 ${failCount} 本`
-    importStatus.value = summary
-    importCompleted.value = true
-    importing.value = false
-
-    if (successCount > 0) {
-      showNotify({ type: 'success', message: `成功导入 ${successCount} 本书籍`, duration: 2000 })
-    }
-
-    isBatchMdImport.value = false
-    selectedDuplicateBooks.value = []
   }
 
   /**
-   * 根据用户选择执行ZIP导入
+   * 根据用户选择执行ZIP导入（Token式）
    */
   const doImportZipWithAction = async () => {
-    if (!selectedFile.value || !importAction.value) return
+    if (!uploadToken.value || !importAction.value) return
 
     importing.value = true
     importProgress.value = 0
@@ -996,7 +1112,18 @@ export const useImport = () => {
       overwriteBookIds = selectedDuplicateBooks.value
     }
 
-    await doImportZip(skipDuplicates, overwriteBookIds)
+    try {
+      await confirmWithStream(uploadToken.value, {
+        skipDuplicates,
+        overwriteBookIds
+      })
+    } catch (error) {
+      console.error('Token式ZIP导入失败:', error)
+      showNotify({ type: 'danger', message: '导入失败' })
+    } finally {
+      importing.value = false
+      uploadToken.value = ''
+    }
   }
 
   /**
@@ -1007,12 +1134,18 @@ export const useImport = () => {
    */
   const handleIntegrityErrorContinue = async () => {
     showIntegrityErrorDialog.value = false
-    // 清理不完整的书籍
-    await cleanupFailedImport(pendingIntegrityCleanup.value)
+    if (!uploadToken.value) {
+      // 降级：没有 token 时使用旧方式
+      await cleanupFailedImport(pendingIntegrityCleanup.value)
+      pendingIntegrityCleanup.value = []
+      integrityErrorBooks.value = []
+      return
+    }
     pendingIntegrityCleanup.value = []
     integrityErrorBooks.value = []
-    // 继续导入（不再重复检查）
-    await doImportZip(false, undefined)
+    await confirmWithStream(uploadToken.value, {
+      skipDuplicates: false
+    })
   }
 
   /**
@@ -1025,7 +1158,7 @@ export const useImport = () => {
   }
 
   /**
-   * 合并检查对话框 - 确认导入
+   * 合并检查对话框 - 确认导入（Token式）
    */
   const handleImportCheckConfirm = async () => {
     showImportCheckDialog.value = false
@@ -1033,7 +1166,13 @@ export const useImport = () => {
     const selectedIds = importCheckResult.value.duplicate_books
       .filter(b => selectedDuplicateBooksForMerge.value.includes(b.title))
       .map(b => b.book_id)
-    await doImportZip(true, selectedIds.length > 0 ? selectedIds : undefined)
+
+    if (!uploadToken.value) return
+
+    await confirmWithStream(uploadToken.value, {
+      skipDuplicates: true,
+      overwriteBookIds: selectedIds.length > 0 ? selectedIds : undefined
+    })
     // 重置选择
     selectedDuplicateBooksForMerge.value = []
   }
@@ -1091,6 +1230,12 @@ export const useImport = () => {
   }
 
   const cancelImport = () => {
+    // 如果存在 token，清理后端临时文件
+    if (uploadToken.value) {
+      cancelUploadByToken(uploadToken.value)
+      uploadToken.value = ''
+      uploadFileType.value = ''
+    }
     showDuplicateDialog.value = false
     importAction.value = null
     importing.value = false
@@ -1133,6 +1278,10 @@ export const useImport = () => {
       new_books: [],
       total_books: 0
     }
+    // 重置 token 状态
+    uploadToken.value = ''
+    uploadFileType.value = ''
+    prepareResult.value = null
   }
 
   // ========== 导出 ==========
@@ -1161,6 +1310,11 @@ export const useImport = () => {
     duplicateCheckResult,
     importAction,
     selectedDuplicateBooks,
+
+    // Token式导入
+    uploadToken,
+    uploadFileType,
+    prepareResult,
 
     // 完整性检测
     showIntegrityErrorDialog,
@@ -1208,5 +1362,9 @@ export const useImport = () => {
     uploadWithProgress,
     uploadWithProgressCallback,
     uploadWithProgressAndStream,
+
+    // Token式方法
+    confirmWithStream,
+    cancelUploadByToken,
   }
 }

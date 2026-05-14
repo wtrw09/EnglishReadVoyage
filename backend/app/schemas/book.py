@@ -64,6 +64,18 @@ class BookImportResponse(BaseModel):
     failed_sentences: List[dict] = Field(default_factory=list, description="翻译失败的句子列表")
 
 
+class PrepareImportResponse(BaseModel):
+    """准备导入响应（一次上传+检查结果）"""
+    token: str = Field(..., description="上传文件关联的token")
+    file_type: str = Field(..., description="文件类型: zip/md/batch_md")
+    original_filename: str = Field(..., description="原始文件名")
+    total_books: int = Field(0, description="总书籍数")
+    valid_books: List[str] = Field(default_factory=list, description="可以导入的书籍")
+    invalid_books: List[dict] = Field(default_factory=list, description="不完整的书籍列表")
+    duplicate_books: List[dict] = Field(default_factory=list, description="已存在的书籍列表")
+    message: str = Field("检查完成", description="结果消息")
+
+
 class TranslationFailedSentence(BaseModel):
     """翻译失败的句子"""
     text: str = Field(..., description="英文原文")

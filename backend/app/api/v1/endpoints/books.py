@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateRequest, BookUpdateResponse, BookPagesResponse, BookRenameRequest, BookRenameResponse, TranslationStatusResponse, RetryTranslateResponse, UpdateSentenceTranslationRequest, UpdateSentenceTranslationResponse, SentencePreviewResponse, SentenceUpdateRequest, SentenceUpdateResponse, BookSentencesResponse
+from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateRequest, BookUpdateResponse, BookPagesResponse, BookRenameRequest, BookRenameResponse, TranslationStatusResponse, RetryTranslateResponse, UpdateSentenceTranslationRequest, UpdateSentenceTranslationResponse, SentencePreviewResponse, SentenceUpdateRequest, SentenceUpdateResponse, BookSentencesResponse, PrepareImportResponse
 from app.services.book_service import book_service, get_effective_translation_api_config, get_cancel_event, clear_cancel_event
 from app.services.precompile_service import precompile_service
 from app.core.database import get_db
@@ -22,6 +22,7 @@ from app.utils.sse_utils import format_sse_message
 from app.api.dependencies import get_current_user, get_current_admin
 from app.models.database_models import User
 from app.core.config import get_settings
+from app.utils.import_temp import generate_token, save_file, save_files, get_meta, read_file, read_files, cleanup
 
 
 # ========== SSE 生成器辅助函数 ==========
@@ -195,6 +196,67 @@ async def get_book_pages(
         )
 
     return result
+
+
+@router.post("/prepare-import")
+async def prepare_import(
+    file: Optional[UploadFile] = File(None),
+    files: Optional[List[UploadFile]] = File(None),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """
+    上传文件并检查（一次上传，返回 token + 检查结果）
+    支持 .md、.zip 以及批量 MD
+    """
+    # 确定文件列表
+    upload_files: list[UploadFile] = []
+    if file:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="上传的文件无效")
+        upload_files = [file]
+    elif files:
+        upload_files = files
+    else:
+        raise HTTPException(status_code=400, detail="请上传文件")
+
+    # 校验文件格式
+    for f in upload_files:
+        if not f.filename or (not f.filename.endswith('.md') and not f.filename.endswith('.zip')):
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: {f.filename}")
+
+    # 判断文件类型
+    is_zip = any(f.filename.endswith('.zip') for f in upload_files)
+
+    token = generate_token()
+
+    if is_zip:
+        # ZIP: 只有一个文件
+        content = await upload_files[0].read()
+        await save_file(token, content, upload_files[0].filename)
+        check_result = await book_service.check_zip_all(db, content)
+        file_type = "zip"
+    else:
+        # MD 文件: 读取所有内容
+        file_list = []
+        for f in upload_files:
+            content = await f.read()
+            file_list.append((f.filename, content))
+        await save_files(token, file_list)
+        check_result = await book_service.check_md_duplicates(db, file_list)
+        file_type = "batch_md" if len(file_list) > 1 else "md"
+
+    check_total = check_result.get("total_books") or check_result.get("total", 0)
+    return PrepareImportResponse(
+        token=token,
+        file_type=file_type,
+        original_filename=upload_files[0].filename if len(upload_files) == 1 else ",".join(f.filename for f in upload_files),
+        total_books=check_total,
+        valid_books=check_result.get("valid_books", []),
+        invalid_books=check_result.get("invalid_books", []),
+        duplicate_books=check_result.get("duplicate_books", []),
+        message=check_result.get("message", "检查完成")
+    )
 
 
 @router.post("/import")
@@ -489,6 +551,172 @@ async def import_book_overwrite(
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/confirm-import")
+async def confirm_import(
+    token: str = Body(..., embed=True),
+    category_id: Optional[int] = Query(None),
+    skip_duplicates: Optional[bool] = Query(False),
+    overwrite_book_ids: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """
+    确认导入（从临时文件读取，SSE流式导入）
+    - 通过 token 获取之前上传的临时文件
+    - 支持 ZIP / 单个 MD / 批量 MD
+    - 返回 SSE 流式进度
+    """
+    meta = get_meta(token)
+    if not meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Token 不存在或已过期，请重新上传文件"
+        )
+
+    file_type = meta["file_type"]
+
+    async def event_generator():
+        queue = asyncio.Queue()
+        progress_callback = create_progress_callback(queue)
+
+        try:
+            if file_type == "zip":
+                file_content, original_filename = await read_file(token)
+                overwrite_ids = None
+                if overwrite_book_ids:
+                    overwrite_ids = [id.strip() for id in overwrite_book_ids.split(",") if id.strip()]
+                import_task = asyncio.create_task(
+                    book_service.import_book_with_progress(
+                        db=db,
+                        file_content=file_content,
+                        original_filename=original_filename,
+                        progress_callback=progress_callback,
+                        generate_audio=False,
+                        skip_duplicates=skip_duplicates,
+                        overwrite_book_ids=overwrite_ids
+                    )
+                )
+            elif file_type == "batch_md":
+                files_data = await read_files(token)
+                overwrite_ids = None
+                if overwrite_book_ids:
+                    overwrite_ids = [id.strip() for id in overwrite_book_ids.split(",") if id.strip()]
+                import_task = asyncio.create_task(
+                    book_service._import_md_batch(
+                        db=db,
+                        files_data=files_data,
+                        progress_callback=progress_callback,
+                        skip_duplicates=skip_duplicates,
+                        overwrite_book_ids=overwrite_ids
+                    )
+                )
+            else:
+                files_data = await read_files(token)
+                file_content, original_filename = files_data[0]
+                import_task = asyncio.create_task(
+                    book_service.import_book_with_progress(
+                        db=db,
+                        file_content=file_content,
+                        original_filename=original_filename,
+                        progress_callback=progress_callback,
+                        generate_audio=False
+                    )
+                )
+
+            # 使用统一的 SSE 生成器
+            async for sse_msg in create_sse_stream_generator(
+                queue, import_task,
+                final_message="导入完成",
+                error_message="导入失败"
+            ):
+                yield sse_msg
+
+            # 获取导入结果，处理分类关联
+            if import_task.done():
+                try:
+                    result = import_task.result()
+                    if result and result.success:
+                        if category_id:
+                            from app.services.category_service import category_service
+                            book_ids_to_add = result.book_ids if result.book_ids else [result.book_id] if result.book_id else []
+                            for bid in book_ids_to_add:
+                                if bid:
+                                    await category_service.add_book_to_category(
+                                        db, bid, category_id, admin.id
+                                    )
+                        if not category_id:
+                            from app.services.category_service import category_service
+                            from app.models.database_models import Category, BookCategoryRel
+                            from sqlalchemy import select
+
+                            stmt = select(Category).where(
+                                Category.name == "未分组",
+                                Category.type == "user",
+                                Category.user_id == admin.id
+                            )
+                            result_cat = await db.execute(stmt)
+                            ungrouped_cat = result_cat.scalar_one_or_none()
+
+                            if not ungrouped_cat:
+                                ungrouped_cat = Category(
+                                    name="未分组",
+                                    type="user",
+                                    user_id=admin.id
+                                )
+                                db.add(ungrouped_cat)
+                                await db.commit()
+                                await db.refresh(ungrouped_cat)
+
+                            book_ids_to_link = result.book_ids if result.book_ids else [result.book_id] if result.book_id else []
+                            for bid in book_ids_to_link:
+                                if bid:
+                                    existing_stmt = select(BookCategoryRel).where(
+                                        BookCategoryRel.book_id == bid,
+                                        BookCategoryRel.user_id == admin.id
+                                    )
+                                    existing_result = await db.execute(existing_stmt)
+                                    existing_rel = existing_result.scalar_one_or_none()
+                                    if not existing_rel:
+                                        await category_service.add_book_to_category(
+                                            db, bid, ungrouped_cat.id, admin.id
+                                        )
+                except Exception as e:
+                    logger.error(f"处理导入分类关联失败: {e}")
+
+        except Exception as e:
+            logger.error(f"confirm-import 处理异常: {e}")
+            yield format_sse_message(0, f"导入处理异常: {str(e)}", False)
+        finally:
+            # 清理临时文件
+            try:
+                await cleanup(token)
+            except Exception as e:
+                logger.error(f"清理临时文件失败: {e}")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/cancel-import")
+async def cancel_import(
+    token: str = Body(..., embed=True),
+    admin: User = Depends(get_current_admin)
+):
+    """取消导入，清理临时文件"""
+    meta = get_meta(token)
+    if not meta:
+        return {"success": False, "message": "Token 不存在或已过期"}
+    await cleanup(token)
+    return {"success": True, "message": "已取消导入并清理临时文件"}
 
 
 @router.post("/{book_id}/regenerate-audio")

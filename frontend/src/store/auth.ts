@@ -63,8 +63,14 @@ api.interceptors.response.use(
   (response) => {
     retryCount = 0 // 重置重试计数
     // 502 重试成功后恢复 online 状态（拦截器先注册后执行，重试成功时网络状态拦截器的 serverUnreachable 仍残留）
-    const { setOnline } = useNetworkStatus()
-    setOnline()
+    // 排除登录请求：login() 自身会在 token 保存到 localStorage 后再调用 setOnline()
+    // 避免 setOnline() 过早触发 Home 组件数据加载（此时 token 还未写入，请求会 401 导致登出）
+    const isLoginRequest = response.config?.url?.includes('/auth/login-detail')
+                        || response.config?.url?.includes('/auth/login')
+    if (!isLoginRequest) {
+      const { setOnline } = useNetworkStatus()
+      setOnline()
+    }
     return response
   },
   async (error) => {

@@ -1,4 +1,5 @@
 """英语分级阅读系统后端 - 主应用程序入口点"""
+import asyncio
 import logging
 import sys
 from fastapi import FastAPI
@@ -12,6 +13,7 @@ from app.core.config import get_settings
 from app.core.constants import API_V1_PREFIX
 from app.core.database import init_db
 from app.api.v1.router import api_router
+from app.utils.import_temp import cleanup_expired, ensure_temp_dir
 
 # 获取配置设置
 settings = get_settings()
@@ -73,8 +75,21 @@ async def lifespan(app: FastAPI):
     """应用程序生命周期事件"""
     # 启动时：初始化数据库
     await init_db()
+    # 启动临时文件清理后台任务
+    asyncio.create_task(_temp_cleanup_loop())
     yield
     # 关闭逻辑（如有）可以放在这里
+
+
+async def _temp_cleanup_loop():
+    """每5分钟清理过期临时文件"""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            await ensure_temp_dir()
+            await cleanup_expired()
+        except Exception as e:
+            logger.error(f"清理临时文件失败: {e}")
 
 # 创建FastAPI应用程序
 app = FastAPI(

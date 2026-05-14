@@ -1288,6 +1288,74 @@ class BookService:
             title=safe_name
         )
 
+    async def _import_md_batch(
+        self,
+        db: AsyncSession,
+        files_data: list[tuple[bytes, str]],
+        progress_callback: Optional[callable] = None,
+        skip_duplicates: bool = False,
+        overwrite_book_ids: Optional[list] = None
+    ) -> BookImportResponse:
+        """
+        批量导入MD文件
+        files_data: [(content, filename), ...]
+        """
+        total = len(files_data)
+        imported = []
+        skipped = []
+        failed = []
+
+        for i, (content, filename) in enumerate(files_data):
+            base_progress = int(i / total * 90) if total > 0 else 0
+            await progress_callback(base_progress, f"正在处理 ({i+1}/{total}): {filename}")
+
+            result = await self._import_md(
+                db=db,
+                file_content=content,
+                original_filename=filename,
+                progress_callback=progress_callback,
+                generate_audio=False
+            )
+
+            if result.success:
+                imported.append(result.book_id)
+            elif "已存在" in result.message:
+                if skip_duplicates:
+                    skipped.append(result.title)
+                    continue
+                elif overwrite_book_ids and result.book_id in overwrite_book_ids:
+                    result = await self._import_md(
+                        db=db,
+                        file_content=content,
+                        original_filename=filename,
+                        progress_callback=progress_callback,
+                        generate_audio=False,
+                        overwrite=True,
+                        existing_book_id=result.book_id
+                    )
+                    if result.success:
+                        imported.append(result.book_id)
+                    else:
+                        failed.append(result.title)
+                else:
+                    skipped.append(result.title)
+            else:
+                failed.append(result.title)
+
+        msg_parts = []
+        if imported:
+            msg_parts.append(f"成功导入 {len(imported)} 本")
+        if skipped:
+            msg_parts.append(f"跳过 {len(skipped)} 本（已存在）")
+        if failed:
+            msg_parts.append(f"失败 {len(failed)} 本")
+
+        return BookImportResponse(
+            success=len(imported) > 0,
+            message=", ".join(msg_parts),
+            book_ids=imported
+        )
+
     async def check_zip_integrity(self, file_content: bytes) -> dict:
         """
         检查ZIP文件中每本书的资源完整性
@@ -1741,6 +1809,13 @@ class BookService:
                                 'text': text
                             })
 
+                # 检查 ZIP 中是否已有 sentences.json（已通过 extractall 提取到 audio 目录）
+                zip_has_sentences = False
+                for zf_file in zf.namelist():
+                    if zf_file.endswith('sentences.json'):
+                        zip_has_sentences = True
+                        break
+
                 # 根据generate_audio参数决定是否生成语音
                 if generate_audio:
                     await progress_callback(60, f"共 {len(sentences_mapping)} 个句子，准备生成语音...")
@@ -1857,66 +1932,26 @@ class BookService:
 
                     # 保存映射文件
                     mapping_path = audio_folder / 'sentences.json'
-                    
-                    # 检查 ZIP 中是否已有 sentences.json，如果有则保留并合并
-                    existing_mapping = None
-                    for zf_file in zf.namelist():
-                        if zf_file.endswith('sentences.json'):
-                            try:
-                                with zf.open(zf_file) as existing_file:
-                                    existing_mapping = json.load(existing_file)
-                            except:
-                                pass
-                            break
-                    
-                    if existing_mapping and existing_mapping.get('sentences'):
-                        # 保留原有的 sentences.json（包含翻译和中文音频信息）
-                        # 合并新生成的音频信息
-                        new_sentences = successful_results
-                        existing_sentences = existing_mapping.get('sentences', [])
-                        
-                        # 构建 text -> existing_sentence 的映射
-                        existing_map = {s.get('text'): s for s in existing_sentences}
-                        
-                        # 合并：使用新生成的音频信息，但保留原有的翻译和中文音频记录
-                        merged_sentences = []
-                        for new_s in new_sentences:
-                            text = new_s.get('text', '')
-                            existing_s = existing_map.get(text, {})
-                            merged = {
-                                'page': new_s.get('page'),
-                                'index': new_s.get('index'),
-                                'text': text,
-                                'audio_file': new_s.get('audio_file'),
-                                'duration': new_s.get('duration'),
-                            }
-                            # 保留原有的翻译和中文音频信息
-                            if existing_s.get('translation'):
-                                merged['translation'] = existing_s['translation']
-                            if existing_s.get('audio_file_zh'):
-                                merged['audio_file_zh'] = existing_s['audio_file_zh']
-                            if existing_s.get('duration_zh'):
-                                merged['duration_zh'] = existing_s['duration_zh']
-                            merged_sentences.append(merged)
-                        
-                        with open(mapping_path, 'w', encoding='utf-8') as f:
-                            json.dump({'sentences': merged_sentences}, f, ensure_ascii=False, indent=2)
-                    else:
-                        # 没有原有的 sentences.json，保存新生成的
+
+                    if not zip_has_sentences:
+                        # ZIP中没有sentences.json，新建映射文件
                         with open(mapping_path, 'w', encoding='utf-8') as f:
                             json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
-
-                    await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
+                        await progress_callback(95, f"已生成 {len(successful_results)} 个语音文件")
+                    else:
+                        # ZIP中已有sentences.json，直接保留（已通过extractall提取），仅报告进度
+                        await progress_callback(95, f"已保留ZIP中原有的句子映射（含翻译和中文音频信息）")
                 else:
-                    # 不生成音频时，只保存句子映射文件
-                    await progress_callback(70, "正在保存句子映射...")
-
-                    # 保存映射文件（不含audio_file）
-                    mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
-
-                    await progress_callback(80, "句子映射已保存")
+                    if not zip_has_sentences:
+                        # ZIP中没有sentences.json，从内容新建映射文件
+                        await progress_callback(70, "正在保存句子映射...")
+                        mapping_path = audio_folder / 'sentences.json'
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
+                        await progress_callback(80, "句子映射已保存")
+                    else:
+                        # ZIP中已有sentences.json，直接保留（已通过extractall提取）
+                        await progress_callback(80, "已保留ZIP中原有的句子映射（含翻译和中文音频信息）")
 
                 # 保存到数据库
                 # 如果是覆盖导入且提供了existing_book_id，使用它作为book_id
@@ -2175,6 +2210,13 @@ class BookService:
                                 'text': text
                             })
                 
+                # 检查 ZIP 中是否已有 sentences.json（已通过 extractall 提取到 audio 目录）
+                zip_has_sentences = False
+                for zf_file in zf.namelist():
+                    if zf_file.endswith('sentences.json'):
+                        zip_has_sentences = True
+                        break
+
                 if generate_audio:
                     semaphore = asyncio.Semaphore(3)
                     generated_count = [0]
@@ -2267,13 +2309,25 @@ class BookService:
 
                     successful_results = [r for r in results if isinstance(r, dict) and r.get('audio_file')]
                     
-                    mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
+                    if not zip_has_sentences:
+                        # ZIP中没有sentences.json，新建映射文件
+                        mapping_path = audio_folder / 'sentences.json'
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': successful_results}, f, ensure_ascii=False, indent=2)
+                        await progress_callback(progress_base + 10, f"{safe_name} 句子映射已保存")
+                    else:
+                        # ZIP中已有sentences.json，直接保留
+                        await progress_callback(progress_base + 10, f"已保留 {safe_name} 中原有的句子映射")
                 else:
-                    mapping_path = audio_folder / 'sentences.json'
-                    with open(mapping_path, 'w', encoding='utf-8') as f:
-                        json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
+                    if not zip_has_sentences:
+                        # ZIP中没有sentences.json，从内容新建映射文件
+                        mapping_path = audio_folder / 'sentences.json'
+                        with open(mapping_path, 'w', encoding='utf-8') as f:
+                            json.dump({'sentences': sentences_mapping}, f, ensure_ascii=False, indent=2)
+                        await progress_callback(progress_base + 10, f"{safe_name} 句子映射已保存")
+                    else:
+                        # ZIP中已有sentences.json，直接保留
+                        await progress_callback(progress_base + 10, f"已保留 {safe_name} 中原有的句子映射")
                 
                 # 计算book_id（基于书名）
                 book_id = hashlib.md5(safe_name.encode()).hexdigest()

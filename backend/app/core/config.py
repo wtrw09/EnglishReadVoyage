@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     BOOKS_DIR: Optional[str] = None
     DATABASE_PATH: Optional[str] = None
+    IMPORT_TEMP_DIR: str = ""
+    IMPORT_TEMP_TTL_MINUTES: int = 30
 
     @property
     def DATABASE_URL(self) -> str:
@@ -98,6 +100,8 @@ class Settings(BaseSettings):
         # BASE_DIR 是 /app，Books 目录在 /app/Books
         self.BOOKS_DIR = self.BOOKS_DIR or os.path.join(self.BASE_DIR, "Books")
         self.DATABASE_PATH = self.DATABASE_PATH or os.path.join(self.BASE_DIR, "data", "data.db")
+        import tempfile
+        self.IMPORT_TEMP_DIR = self.IMPORT_TEMP_DIR or os.path.join(tempfile.gettempdir(), "erv_imports")
 
         # 处理 CORS_ORIGINS：从逗号分隔字符串转为列表
         if isinstance(self.CORS_ORIGINS, str):

@@ -162,6 +162,18 @@ export interface RenameResult {
   new_cover_path?: string
 }
 
+// 准备导入响应（一次上传+检查结果）
+export interface PrepareImportResponse {
+  token: string
+  file_type: string
+  original_filename: string
+  total_books: number
+  valid_books: string[]
+  invalid_books: { title: string; reason: string }[]
+  duplicate_books: { title: string; book_id: string }[]
+  message: string
+}
+
 // 上传结果
 export interface UploadResult {
   ok: boolean
