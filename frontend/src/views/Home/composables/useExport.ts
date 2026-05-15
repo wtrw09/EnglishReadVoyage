@@ -6,6 +6,7 @@ import { ref } from 'vue'
 import { showNotify } from 'vant'
 import { useAuthStore } from '@/store/auth'
 import { buildApiUrl } from '@/utils/apiBase'
+import { saveFile } from '@/utils/nativeDownload'
 
 export const useExport = () => {
   const authStore = useAuthStore()
@@ -106,7 +107,7 @@ export const useExport = () => {
           }
         })
 
-        xhr.addEventListener('load', () => {
+        xhr.addEventListener('load', async () => {
           clearInterval(progressInterval)
 
           if (xhr.status >= 200 && xhr.status < 300) {
@@ -124,14 +125,18 @@ export const useExport = () => {
             exportCurrentBook.value = filename
 
             const blob = xhr.response
-            const url = window.URL.createObjectURL(blob)
-            const link = document.createElement('a')
-            link.href = url
-            link.download = filename
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
-            window.URL.revokeObjectURL(url)
+            // 使用跨平台文件保存（await 确保保存完成后再关闭对话框）
+            try {
+              const saved = await saveFile(blob, filename)
+              if (saved) {
+                showNotify({ type: 'success', message: '文件已保存到本地', duration: 1500 })
+              } else {
+                showNotify({ type: 'warning', message: '保存失败，请检查存储权限', duration: 2000 })
+              }
+            } catch (e) {
+              console.error('文件保存失败:', e)
+              showNotify({ type: 'danger', message: '文件保存异常', duration: 2000 })
+            }
 
             setTimeout(() => {
               showExportProgressDialog.value = false

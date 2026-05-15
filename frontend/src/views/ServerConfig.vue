@@ -155,14 +155,31 @@ function isLoopbackHost(url: string): boolean {
 }
 
 async function testConnection(url: string): Promise<boolean> {
+  console.log('===== CORS DIAG =====')
+  console.log('Target URL:', url + '/api/v1/dictionary/status')
+  console.log('Page origin:', location.origin, '(hostname=' + location.hostname + ', protocol=' + location.protocol + ')')
+  console.log('User-Agent:', navigator.userAgent)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8000)
-    // 优先请求一个已知存在的轻量级端点，避免根路径 404 被误判为不联通
-    const res = await fetch(`${url}/api/v1/dictionary/status`, { signal: controller.signal })
+    const res = await fetch(url + '/api/v1/dictionary/status', { signal: controller.signal })
     clearTimeout(timer)
+    console.log('Response status:', res.status, res.statusText)
+    console.log('Access-Control-Allow-Origin:', res.headers.get('Access-Control-Allow-Origin'))
     return res.ok
-  } catch {
+  } catch (err: any) {
+    clearTimeout(timer)
+    console.error('Request FAILED - name:', err?.name, 'message:', err?.message)
+    if (err instanceof TypeError) {
+      // Could be CORS or network unreachable. Try no-cors probe to differentiate.
+      console.error('TypeError - possible CORS block or network unreachable, probing with no-cors...')
+      const probeCtrl = new AbortController()
+      setTimeout(() => probeCtrl.abort(), 5000)
+      fetch(url + '/', { mode: 'no-cors', signal: probeCtrl.signal })
+        .then(p => console.log('no-cors probe: status=' + p.status + ' type=' + p.type))
+        .catch(pe => console.error('no-cors probe also failed:', pe?.name, pe?.message))
+    }
     return false
   }
 }

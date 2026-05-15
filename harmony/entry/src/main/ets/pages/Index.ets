@@ -1,6 +1,7 @@
 import web_webview from '@ohos.web.webview';
 import { common } from '@kit.AbilityKit';
 import { HarmonyAudio } from '../bridge/HarmonyAudio';
+import { HarmonyFileSaver } from '../bridge/HarmonyFileSaver';
 import { AVSessionMgr } from '../bridge/AVSessionMgr';
 
 // 模拟 HTTP 基地址（用于绕过 resource:// 协议 CORS 限制）
@@ -30,8 +31,11 @@ struct Index {
   private controller: web_webview.WebviewController = new web_webview.WebviewController();
   private avSessionMgr: AVSessionMgr = new AVSessionMgr();
   private harmonyAudio: HarmonyAudio = new HarmonyAudio(this.controller, this.avSessionMgr);
+  private harmonyFileSaver: HarmonyFileSaver = new HarmonyFileSaver();
 
   aboutToAppear(): void {
+    // 开启 WebView 远程调试，可在 PC 浏览器 DevTools 中查看控制台日志
+    web_webview.WebviewController.setWebDebuggingAccess(true);
     const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
     this.avSessionMgr.create(ctx, this.harmonyAudio);
   }
@@ -48,6 +52,12 @@ struct Index {
             'setPlaylist', 'play', 'pause', 'resume', 'stop',
             'seekGlobal', 'seekLocal', 'seekToTrack', 'setRate', 'setMeta'
           ]
+        })
+        .javaScriptProxy({
+          controller: this.controller,
+          object: this.harmonyFileSaver,
+          name: 'HarmonyFileSaver',
+          methodList: ['saveFile']
         })
         .javaScriptAccess(true)
         .fileAccess(true)

@@ -414,6 +414,7 @@ import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { api } from '@/store/auth'
 import { buildStaticUrl } from '@/utils/apiBase'
+import { saveFile } from '@/utils/nativeDownload'
 
 interface VocabularyItem {
   id: number
@@ -842,20 +843,16 @@ const exportToAnki = async () => {
       responseType: 'blob'
     })
 
-    // 创建下载链接
     const blob = new Blob([response.data], {
       type: 'application/x-apkg'
     })
-    const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `生词本_${new Date().toISOString().slice(0, 10)}.apkg`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
-
-    showToast('导出成功')
+    const filename = `生词本_${new Date().toISOString().slice(0, 10)}.apkg`
+    const saved = await saveFile(blob, filename)
+    if (saved) {
+      showToast('导出成功，文件已保存到本地')
+    } else {
+      showToast('导出失败，请检查存储权限')
+    }
     showExportDialog.value = false
   } catch (error) {
     showToast('导出失败')
@@ -866,36 +863,32 @@ const exportToAnki = async () => {
 
 // 导出Word文档
 const exportToWord = async () => {
-  if (exportSelectedIds.value.length === 0) return;
+  if (exportSelectedIds.value.length === 0) return
 
-  exportLoading.value = true;
+  exportLoading.value = true
   try {
     const response = await api.post('/vocabulary/export', {
       ids: exportSelectedIds.value,
       hidden_fields: exportHiddenFields.value
     }, {
       responseType: 'blob'
-    });
+    })
 
-    // 创建下载链接
     const blob = new Blob([response.data], {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `生词本_${new Date().toISOString().slice(0, 10)}.docx`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-
-    showToast('导出成功');
-    showExportDialog.value = false;
+    })
+    const filename = `生词本_${new Date().toISOString().slice(0, 10)}.docx`
+    const saved = await saveFile(blob, filename)
+    if (saved) {
+      showToast('导出成功，文件已保存到本地')
+    } else {
+      showToast('导出失败，请检查存储权限')
+    }
+    showExportDialog.value = false
   } catch (error) {
-    showToast('导出失败');
+    showToast('导出失败')
   } finally {
-    exportLoading.value = false;
+    exportLoading.value = false
   }
 }
 

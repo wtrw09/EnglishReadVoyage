@@ -54,8 +54,6 @@ function getToken(): string | null {
 
 function setOnline(): void {
   if (status.value !== 'online') {
-    console.log(`[NetworkStatus] 状态恢复为 online`)
-    console.trace('[NetworkStatus] setOnline 调用栈')
     status.value = 'online'
   }
   lastCheckTime.value = Date.now()
@@ -63,8 +61,6 @@ function setOnline(): void {
 
 function setOffline(): void {
   if (status.value !== 'offline') {
-    console.log(`[NetworkStatus] 客户端网络断开 -> offline (navigator.onLine=${navigator.onLine})`)
-    console.trace('[NetworkStatus] setOffline 调用栈')
     status.value = 'offline'
   }
   lastCheckTime.value = Date.now()
@@ -72,7 +68,6 @@ function setOffline(): void {
 
 function setServerUnreachable(): void {
   if (status.value !== 'serverUnreachable') {
-    console.log('[NetworkStatus] 服务端不可达 -> serverUnreachable')
     status.value = 'serverUnreachable'
   }
   lastCheckTime.value = Date.now()
@@ -80,7 +75,6 @@ function setServerUnreachable(): void {
 
 function setTokenExpired(): void {
   if (status.value !== 'tokenExpired') {
-    console.log('[NetworkStatus] Token 失效 -> tokenExpired')
     status.value = 'tokenExpired'
   }
   lastCheckTime.value = Date.now()
@@ -154,13 +148,9 @@ async function checkConnection(): Promise<void> {
   const currentBaseUrl = getServerBaseUrl()
   // 仅当有进行中的请求且服务端地址未变化时才复用
   if (checkConnectionPromise && checkConnectionBaseUrl === currentBaseUrl) {
-    console.log('[NetworkStatus] checkConnection 复用已有请求')
     return checkConnectionPromise
   }
   // URL 已变化或没有进行中请求：启动新的检测
-  if (checkConnectionPromise) {
-    console.log('[NetworkStatus] 服务端地址已变化，忽略旧的 checkConnection')
-  }
   checkConnectionPromise = _doCheckConnection().finally(() => {
     checkConnectionPromise = null
     checkConnectionBaseUrl = ''
@@ -171,11 +161,9 @@ async function checkConnection(): Promise<void> {
 
 /** checkConnection 的真正实现 */
 async function _doCheckConnection(): Promise<void> {
-  console.log(`[NetworkStatus] checkConnection 开始 navigator.onLine=${navigator.onLine} status=${status.value}`)
   // 第一步：用真实网络请求确认服务器可达性（不完全依赖 navigator.onLine）
   // navigator.onLine 可能不可靠（浏览器/OS 误报），直接 pingServer 更准确
   const serverAlive = await pingServer()
-  console.log(`[NetworkStatus] pingServer 结果=${serverAlive}`)
   if (!serverAlive) {
     // 服务器不可达，用 navigator.onLine 区分是客户端断网还是仅服务端问题
     if (!navigator.onLine) {
@@ -189,7 +177,6 @@ async function _doCheckConnection(): Promise<void> {
   // 第二步：服务端可达，如果之前是异常状态，需要验证 token
   const previousStatus = status.value
   if (previousStatus !== 'online') {
-    console.log(`[NetworkStatus] 服务器可达，之前状态=${previousStatus}，验证 token`)
     // 之前断线过，检查 token 是否仍有效
     const token = getToken()
     if (token) {
@@ -211,13 +198,11 @@ async function _doCheckConnection(): Promise<void> {
       } else if (tokenResult === 'networkError') {
         // pingServer() 成功说明服务器可达，token 验证的网络错误可能是瞬时的
         // 设 serverUnreachable 而非保持离线，避免状态栏显示"网络已断开"（offline 横幅更严重）
-        console.log('[NetworkStatus] 验证 token 时网络异常，设为 serverUnreachable')
         setServerUnreachable()
         return
       }
       // tokenResult === 'valid'：继续执行，下面会 setOnline()
     } else {
-      console.log('[NetworkStatus] 服务器可达但无 token，跳过验证 → setOnline')
     }
   }
 
@@ -233,10 +218,7 @@ let offlineTimer: ReturnType<typeof setTimeout> | null = null
 function startHeartbeat(): void {
   if (heartbeatTimer) return
   isHeartbeatActive.value = true
-  console.log(`[NetworkStatus] 心跳启动，间隔=${HEARTBEAT_INTERVAL}ms`)
   heartbeatTimer = setInterval(() => {
-    // 心跳触发时记录关键状态
-    console.log(`[NetworkStatus] 心跳触发 navigator.onLine=${navigator.onLine} status=${status.value}`)
     // 每次都调用 checkConnection 用真实请求确认服务器状态
     checkConnection()
   }, HEARTBEAT_INTERVAL)
@@ -253,19 +235,16 @@ function stopHeartbeat(): void {
 // ---- 事件监听 ----
 
 function handleOnline(): void {
-  console.log(`[NetworkStatus] 浏览器 online 事件触发 navigator.onLine=${navigator.onLine}`)
   // 清除 pending 的离线确认，避免 online 后又被延迟的 timeout 设回 offline
   if (offlineTimer !== null) {
     clearTimeout(offlineTimer)
     offlineTimer = null
-    console.log('[NetworkStatus] 清除 pending 的 offline debounce timer')
   }
   // 客户端网络恢复，立即检查服务端和 token
   checkConnection()
 }
 
 function handleOffline(): void {
-  console.log(`[NetworkStatus] 浏览器 offline 事件触发 navigator.onLine=${navigator.onLine}`)
   // 延迟确认，避免瞬时的网络切换（如睡眠唤醒、接口变更）导致误报
   // 有些浏览器在睡眠唤醒时先 off 再 on，立即设 offline 会导致横幅闪烁
   // 清除前一个定时器，防止连续 offline 事件堆积
@@ -274,12 +253,9 @@ function handleOffline(): void {
   }
   offlineTimer = setTimeout(() => {
     offlineTimer = null
-    console.log(`[NetworkStatus] offline debounce 到期检查 navigator.onLine=${navigator.onLine}`)
     if (!navigator.onLine) {
-      console.log('[NetworkStatus] offline debounce 确认 -> setOffline')
       setOffline()
     } else {
-      console.log('[NetworkStatus] offline debounce 跳过：navigator.onLine 已恢复')
     }
   }, 2000)
 }
@@ -294,14 +270,11 @@ async function setupCapacitorListener(): Promise<void> {
     const { App } = await import('@capacitor/app')
     App.addListener('appStateChange', ({ isActive }: { isActive: boolean }) => {
       if (isActive) {
-        console.log('[NetworkStatus] App 回到前台，触发连接检查')
         checkConnection()
       }
     })
-    console.log('[NetworkStatus] Capacitor appStateChange 监听已注册')
   } catch {
     // Capacitor 插件不可用，忽略
-    console.log('[NetworkStatus] Capacitor 不可用，跳过 app 状态监听')
   }
 }
 
@@ -312,8 +285,6 @@ let initialized = false
 function initialize(): void {
   if (initialized) return
   initialized = true
-
-  console.log('[NetworkStatus] 初始化...')
 
   // 1. 初始状态检测：调用 checkConnection 用真实请求确认（不直接信任 navigator.onLine）
   checkConnection()

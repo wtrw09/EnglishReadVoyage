@@ -20,8 +20,12 @@
           <div class="nav-left" @click="goBack">
             <i class="fas fa-chevron-left"></i>
           </div>
-          <div class="nav-title">听书模式</div>
+          <div class="nav-title">{{ playerMode === 'standard' ? '听书模式' : '听力训练' }}</div>
           <div class="nav-right">
+            <!-- 模式切换按钮 -->
+            <div class="nav-icon-btn mode-toggle-btn" @click="togglePlayerMode" :title="playerMode === 'standard' ? '切换到训练模式' : '切换到听书模式'">
+              <i :class="['fas', playerMode === 'standard' ? 'fa-headphones' : 'fa-book-open']"></i>
+            </div>
             <div class="nav-icon-btn playlist-toggle-btn" @click="showPlaylist = true">
               <i class="fas fa-list"></i>
             </div>
@@ -31,8 +35,10 @@
           </div>
         </div>
 
-        <!-- 书籍封面区域 -->
-        <div class="book-cover-section">
+        <!-- 标准模式内容 -->
+        <template v-if="playerMode === 'standard'">
+          <!-- 书籍封面区域 -->
+          <div class="book-cover-section">
           <div class="cover-container">
             <img
               v-if="currentBook?.book_cover"
@@ -64,7 +70,7 @@
         </div>
 
         <!-- 播放控制区 -->
-        <div class="player-controls">
+          <div class="player-controls">
           <!-- 书籍整体进度 + 音频播放进度 -->
           <div v-if="currentBookTotalDuration > 0" class="book-progress-section">
             <div class="book-progress-info">
@@ -92,6 +98,8 @@
                 </template>
               </van-slider>
               <span class="audio-time total">{{ formatTime(currentBookTotalDuration) }}</span>
+              <!-- 进度条调试 -->
+              <div class="slider-debug">{{ sliderDebugInfo }}</div>
             </div>
           </div>
 
@@ -125,7 +133,42 @@
 
 
         </div>
-      </div>
+      </template>
+
+      <!-- 训练模式内容 -->
+      <template v-else>
+        <TrainingMode
+          :sentence-window="sentenceWindow"
+          :is-playing="isPlaying"
+          :is-waiting-after-reinforce="isWaitingAfterReinforce"
+          :playback-rate="playbackRate"
+          :display-mode="displayMode"
+          :training-mode="trainingMode"
+          :sentence-repeat-count="sentenceRepeatCount"
+          :shadow-gap-seconds="shadowGapSeconds"
+          :current-sentence-index="currentSentenceIndex"
+          :total-sentences="currentBookAudioList.length"
+          :sentence-window-size="sentenceWindowSize"
+          :after-play-behavior="afterPlayBehavior"
+          :dictation-active-sentence-index="dictationActiveSentenceIndex"
+          :dictation-show-translation="dictationShowTranslation"
+          :dictation-translation-duration="dictationTranslationDuration"
+          @prev-sentence="prevSentence"
+          @next-sentence="nextSentence"
+          @replay-sentence="replaySentence"
+          @toggle-play="togglePlay"
+          @seek-to-sentence="seekToSentence"
+          @update:display-mode="onDisplayModeChange"
+          @update:training-mode="(m) => { trainingMode = m as 'shadow' | 'dictation'; saveTrainingConfig() }"
+          @update:sentence-repeat-count="(c) => { sentenceRepeatCount = c as number; saveTrainingConfig() }"
+          @update:playback-rate="setPlaybackRate"
+          @update:sentence-window-size="(s) => { sentenceWindowSize = s; saveTrainingConfig() }"
+          @update:after-play-behavior="(b) => { afterPlayBehavior = b as 'wait' | 'auto'; saveTrainingConfig() }"
+          @update:dictation-show-translation="(v) => { dictationShowTranslation = v as boolean; saveTrainingConfig() }"
+          @update:dictation-translation-duration="(v) => { dictationTranslationDuration = v as number; saveTrainingConfig() }"
+        />
+      </template>
+    </div>
 
       <!-- 右侧区域：播放列表 -->
       <div v-if="playlist.items.length > 0" class="playlist-section">
@@ -412,7 +455,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   showToast,
@@ -420,15 +463,17 @@ import {
 } from 'vant'
 import { showErrorDialog } from '@/utils/message'
 import { api } from '@/store/auth'
-import { buildStaticUrl } from '@/utils/apiBase'
+import { buildStaticUrl, isCapacitorNative } from '@/utils/apiBase'
 import {
   createPlaylistPlayer,
   buildBilingualPlaylist,
+  hasHarmonyAudioBridge,
   type PlaylistPlayer,
   type BilingualSegmentConfig
 } from '@/utils/nativeAudio'
 import Playlist from '@/components/Playlist.vue'
 import BilingualModeDialog from '@/components/BilingualModeDialog.vue'
+import TrainingMode from '@/components/TrainingMode.vue'
 
 // 路由
 const router = useRouter()
@@ -540,6 +585,36 @@ const finishCurrentEnabled = ref(false) // 播完整集再停止
 const customHours = ref(0)
 const customMinutes = ref(30)
 const sleepTimerRemaining = ref(0) // 倒计时剩余秒数
+
+// ===== 双模式状态（标准模式 / 听力训练模式） =====
+const playerMode = ref<'standard' | 'training'>('standard')
+const displayMode = ref<'en' | 'en-zh' | 'zh'>('en-zh')
+const trainingMode = ref<'shadow' | 'dictation'>('shadow')
+const sentenceRepeatCount = ref(1) // 单句强化重复次数
+const currentSentencePlayCount = ref(0)
+const isWaitingAfterReinforce = ref(false) // 强化播完后等待用户操作
+const isAutoReinforceSeeking = ref(false) // 自动强化复读守卫，防止 trackchange 重置计数器
+const currentSentenceIndex = ref(0) // 当前句子在 audioList 中的索引
+let pendingAutoAdvanceTimer: ReturnType<typeof setTimeout> | null = null // 自动进度的待执行定时器
+
+// 取消任何待执行的自动进度定时器（用户手动 seek/nav 时防止残留 setTimeout 劫持）
+const cancelPendingAutoAdvance = () => {
+  if (pendingAutoAdvanceTimer !== null) {
+    clearTimeout(pendingAutoAdvanceTimer)
+    pendingAutoAdvanceTimer = null
+  }
+}
+const shadowGapSeconds = ref(1.5) // 影子跟读间隔
+const playbackRate = ref(1.0) // 播放倍速
+const sentenceWindowSize = ref(3) // 上下文窗口大小
+const afterPlayBehavior = ref<'wait' | 'auto'>('wait') // 播完行为
+const dictationActiveSentenceIndex = ref(-1) // 默写模式已揭示的句子索引，-1全隐藏
+const dictationShowTranslation = ref(true) // 默写模式播放完成后是否显示中文翻译
+const dictationTranslationDuration = ref(5) // 翻译停留秒数
+
+// 持久化键名
+const MODE_STORAGE_KEY = 'audiobook_player_mode'
+const RATE_STORAGE_KEY = 'audiobook_playback_rate'
 
 // 播放列表数据
 const playlist = ref({
@@ -714,42 +789,40 @@ const bookProgressPercent = computed(() => {
   return Math.min(100, Math.round((progressTime / currentBookTotalDuration.value) * 100))
 })
 
+// ===== 听力训练模式计算属性 =====
+// sentenceId → index 的 Map，O(1) 反查
+// 注意：Map 以 text_hash 为 key，若 audio list 中有重复文本（相同 text_hash），
+// Map.set 只保留最后一次出现的索引，导致从 track 反查句子索引时可能跳转到错误位置。
+const sentenceIndexMap = computed(() => {
+  const map = new Map<string, number>()
+  currentBookAudioList.value.forEach((a, i) => {
+    const sid = a.text_hash || ''
+    if (sid) map.set(sid, i)
+  })
+  return map
+})
+
+// 当前句上下文窗口（前后各显示几句）
+const sentenceWindow = computed(() => {
+  const list = currentBookAudioList.value
+  if (!list.length) return []
+  const center = currentSentenceIndex.value
+  const half = sentenceWindowSize.value
+  const start = Math.max(0, center - half)
+  const end = Math.min(list.length, center + half + 1)
+  return list.slice(start, end).map((item, i) => ({
+    index: start + i,
+    text: item.text,
+    translation: item.translation,
+    isCurrent: (start + i) === center
+  }))
+})
+
 // 方法
 const checkOrientation = () => {
   isLandscape.value = window.innerWidth > window.innerHeight
 }
 
-// === 调试辅助：排查 Capacitor Android 安全区域问题 ===
-const debugLayout = (source: string) => {
-  const el = document.querySelector('.audiobook-player')
-  const navEl = document.querySelector('.player-nav')
-  const rect = el?.getBoundingClientRect()
-  const navRect = navEl?.getBoundingClientRect()
-
-  // 从计算样式中读取 safe-area-inset-top
-  const dummy = document.createElement('div')
-  dummy.style.cssText = 'position:fixed;top:env(safe-area-inset-top, 0px);visibility:hidden'
-  document.body.appendChild(dummy)
-  const safeTop = parseFloat(getComputedStyle(dummy).top)
-  document.body.removeChild(dummy)
-
-  const info = {
-    source,
-    isNativeShell: document.getElementById('app-root')?.classList.contains('is-native-shell'),
-    windowInnerHeight: window.innerHeight,
-    documentClientHeight: document.documentElement.clientHeight,
-    screenHeight: screen.height,
-    playerTop: rect?.top,
-    playerHeight: rect?.height,
-    playerBottom: rect?.bottom,
-    navTop: navRect?.top,
-    navHeight: navRect?.height,
-    safeAreaInsetTop: safeTop,
-    currentBookTotalDuration: currentBookTotalDuration.value,
-  }
-  console.log('[AudiobookPlayer:debugLayout]', JSON.stringify(info, null, 2))
-}
-// ==================================================
 const goBack = () => {
   router.back()
 }
@@ -784,6 +857,27 @@ const currentTime = ref(0) // 当前播放时间（秒）
 const duration = ref(0) // 当前音频总时长（秒）
 const isDragging = ref(false) // 是否正在拖动进度条
 const seekProgressTime = ref(0) // 拖动时的临时进度时间（秒）
+const sliderDebugInfo = ref('') // 调试信息
+
+const logSlider = (msg: string, extra?: Record<string, unknown>) => {
+  const info = {
+    msg,
+    isDragging: isDragging.value,
+    seekProgressTime: seekProgressTime.value,
+    bookProgressTime: bookProgressTime.value,
+    currentBookTotalDuration: currentBookTotalDuration.value,
+    modelVal: isDragging.value ? seekProgressTime.value : bookProgressTime.value,
+    ...extra
+  }
+  console.warn('[Slider]', JSON.stringify(info, null, 2))
+  sliderDebugInfo.value = Object.entries({
+    drag: isDragging.value,
+    seek: seekProgressTime.value.toFixed(1),
+    book: bookProgressTime.value.toFixed(1),
+    total: currentBookTotalDuration.value.toFixed(1),
+    val: (isDragging.value ? seekProgressTime.value : bookProgressTime.value).toFixed(1)
+  }).map(([k, v]) => `${k}=${v}`).join(' | ')
+}
 
 // 根据当前书籍音频列表与双语配置重建 playlist tracks
 const rebuildTracksForCurrentBook = (): boolean => {
@@ -922,6 +1016,18 @@ const loadBookAudioInfo = async (bookId: string) => {
     // 重建 tracks（setTracks 同步 emit timelineupdate → 回调会立即更新 currentBookTotalDuration，
     // 后端 total_duration 不考虑用户朗读配置（英文×n），不要拿来做备胎，否则会覆盖正确值）
     rebuildTracksForCurrentBook()
+
+    // 恢复训练进度
+    const bookIdNum = parseInt(bookId, 10)
+    if (!isNaN(bookIdNum) && playerMode.value === 'training') {
+      const savedIdx = loadTrainingProgress(bookIdNum)
+      if (savedIdx !== undefined && savedIdx >= 0 && savedIdx < currentBookAudioList.value.length) {
+        // 需要等 tracks + player 就绪后才能 seek
+        void nextTick(() => {
+          seekToSentence(savedIdx)
+        })
+      }
+    }
   } catch (error) {
     console.error('加载音频信息失败:', error)
     currentBookAudioList.value = []
@@ -1522,21 +1628,284 @@ const handleAudioEnded = () => {
 
 // 已在文件顶部声明了 isSwitchingBook（用于 prev/next/playBookAtIndex 切书时屏蔽 error toast）
 
+// ===== 双模式核心方法 =====
+
+// 切换播放模式
+const togglePlayerMode = async () => {
+  // 停止当前播放
+  player.stop()
+  // 重置进度条拖动状态
+  isDragging.value = false
+  seekProgressTime.value = 0
+  // 切换模式
+  playerMode.value = playerMode.value === 'standard' ? 'training' : 'standard'
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, playerMode.value)
+  } catch { /* ignore */ }
+  // 重新载入当前书籍播放（不自动播放，保持暂停状态）
+  const book = currentBook.value
+  if (book) {
+    currentGlobalMs.value = 0
+    await loadBookAudioInfo(book.book_id)
+    // 清理训练状态
+    currentSentencePlayCount.value = 0
+    dictationActiveSentenceIndex.value = -1
+    dictationShowTranslation.value = true
+    dictationTranslationDuration.value = 5
+    isWaitingAfterReinforce.value = false
+  }
+}
+
+// 加载保存的模式
+const loadSavedMode = () => {
+  try {
+    const saved = localStorage.getItem(MODE_STORAGE_KEY)
+    if (saved === 'standard' || saved === 'training') {
+      playerMode.value = saved
+    }
+  } catch { /* ignore */ }
+}
+
+// 加载保存的倍速
+const loadSavedRate = () => {
+  try {
+    const saved = localStorage.getItem(RATE_STORAGE_KEY)
+    if (saved) {
+      const rate = parseFloat(saved)
+      if (rate >= 0.5 && rate <= 2.0) {
+        playbackRate.value = rate
+        player.setRate(rate)
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// 全量训练配置保存
+const TRAINING_CONFIG_KEY = 'audiobook_training_config'
+const TRAINING_PROGRESS_KEY = 'audiobook_training_progress'
+
+const saveTrainingConfig = () => {
+  try {
+    localStorage.setItem(TRAINING_CONFIG_KEY, JSON.stringify({
+      trainingMode: trainingMode.value,
+      displayMode: displayMode.value,
+      sentenceRepeatCount: sentenceRepeatCount.value,
+      sentenceWindowSize: sentenceWindowSize.value,
+      afterPlayBehavior: afterPlayBehavior.value,
+      playbackRate: playbackRate.value,
+      dictationShowTranslation: dictationShowTranslation.value,
+      dictationTranslationDuration: dictationTranslationDuration.value
+    }))
+  } catch { /* ignore */ }
+}
+
+const loadTrainingConfig = () => {
+  try {
+    const saved = localStorage.getItem(TRAINING_CONFIG_KEY)
+    if (saved) {
+      const cfg = JSON.parse(saved)
+      if (cfg.trainingMode === 'shadow' || cfg.trainingMode === 'dictation') {
+        trainingMode.value = cfg.trainingMode
+      }
+      if (cfg.displayMode === 'en' || cfg.displayMode === 'en-zh' || cfg.displayMode === 'zh') {
+        displayMode.value = cfg.displayMode
+      }
+      if (typeof cfg.sentenceRepeatCount === 'number' && cfg.sentenceRepeatCount >= 1 && cfg.sentenceRepeatCount <= 5) {
+        sentenceRepeatCount.value = cfg.sentenceRepeatCount
+      }
+      if (typeof cfg.sentenceWindowSize === 'number' && cfg.sentenceWindowSize >= 1 && cfg.sentenceWindowSize <= 5) {
+        sentenceWindowSize.value = cfg.sentenceWindowSize
+      }
+      if (cfg.afterPlayBehavior === 'wait' || cfg.afterPlayBehavior === 'auto') {
+        afterPlayBehavior.value = cfg.afterPlayBehavior
+      }
+      if (typeof cfg.playbackRate === 'number' && cfg.playbackRate >= 0.5 && cfg.playbackRate <= 2.0) {
+        playbackRate.value = cfg.playbackRate
+        player.setRate(cfg.playbackRate)
+      }
+      if (typeof cfg.dictationShowTranslation === 'boolean') {
+        dictationShowTranslation.value = cfg.dictationShowTranslation
+      }
+      if (typeof cfg.dictationTranslationDuration === 'number' && cfg.dictationTranslationDuration >= 1 && cfg.dictationTranslationDuration <= 30) {
+        dictationTranslationDuration.value = cfg.dictationTranslationDuration
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+// 保存训练进度（句子索引）
+const saveTrainingProgress = () => {
+  try {
+    const bookId = currentBook.value?.book_id
+    if (!bookId) return
+    localStorage.setItem(TRAINING_PROGRESS_KEY, JSON.stringify({
+      bookId,
+      sentenceIndex: currentSentenceIndex.value
+    }))
+  } catch { /* ignore */ }
+}
+
+// 加载训练进度
+const loadTrainingProgress = (bookId: number) => {
+  try {
+    const saved = localStorage.getItem(TRAINING_PROGRESS_KEY)
+    if (!saved) return
+    const data = JSON.parse(saved)
+    if (data.bookId === bookId && typeof data.sentenceIndex === 'number') {
+      return data.sentenceIndex as number
+    }
+  } catch { /* ignore */ }
+  return undefined
+}
+
+// 设置倍速
+const setPlaybackRate = (rate: number) => {
+  playbackRate.value = rate
+  player.setRate(rate)
+  try {
+    localStorage.setItem(RATE_STORAGE_KEY, String(rate))
+  } catch { /* ignore */ }
+  saveTrainingConfig()
+}
+
+// 句级导航：上一句
+const prevSentence = async () => {
+  cancelPendingAutoAdvance()
+  let current = player.getCurrentIndex()
+  if (current < 0) current = 0
+  if (current <= 0) return
+  if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
+  await player.seekToTrack(current - 1, 0)
+  try { await player.play() } catch { /* ignore */ }
+}
+
+// 句级导航：下一句
+const nextSentence = async () => {
+  cancelPendingAutoAdvance()
+  const timeline = player.getTimeline()
+  let current = player.getCurrentIndex()
+  if (current < 0) current = 0
+  if (current >= timeline.length - 1) return
+  if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
+  currentSentencePlayCount.value = 0
+  await player.seekToTrack(current + 1, 0)
+  try { await player.play() } catch { /* ignore */ }
+}
+
+// 复读当前句
+const replaySentence = async () => {
+  cancelPendingAutoAdvance()
+  let current = player.getCurrentIndex()
+  if (current < 0) {
+    // 未加载任何轨道时（如刚进入训练模式），回退到第 0 句
+    current = 0
+  }
+  if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
+  currentSentencePlayCount.value = 0
+  try {
+    await player.seekToTrack(current, 0)
+    // seekToTrack 仅在 wasPlaying=true 时自动播放，暂停态下需显式调用
+    await player.play()
+  } catch (e) {
+    console.error('[Replay] error:', e)
+  }
+}
+
+// 从 track 索引反查句子索引
+const updateCurrentSentence = (trackIndex: number) => {
+  const timeline = player.getTimeline()
+  const track = timeline[trackIndex]
+  if (!track?.sentenceId) return
+  // 非双语模式：track 和 sentence 为 1:1 映射，直接用 trackIndex 避免 text_hash 重复问题
+  if (timeline.length === currentBookAudioList.value.length) {
+    currentSentenceIndex.value = trackIndex
+    return
+  }
+  // 双语模式：通过 sentenceId 反查句子索引
+  const idx = sentenceIndexMap.value.get(track.sentenceId)
+  if (idx !== undefined) {
+    currentSentenceIndex.value = idx
+  }
+}
+
+// 点击句子跳转
+const seekToSentence = async (sentenceIndex: number) => {
+  cancelPendingAutoAdvance()
+  const timeline = player.getTimeline()
+  
+  // 非双语模式（1:1 映射）：直接使用 sentenceIndex 作为 trackIndex，
+  // 避免 text_hash 重复导致 findIndex 返回错误的轨道
+  if (timeline.length === currentBookAudioList.value.length) {
+    if (sentenceIndex >= 0 && sentenceIndex < timeline.length) {
+      if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
+      currentSentencePlayCount.value = 0
+      await player.seekToTrack(sentenceIndex, 0)
+      try { await player.play() } catch { /* ignore */ }
+      return
+    }
+  }
+  
+  // 双语模式：通过 sentenceId 查找对应的 track
+  const targetSid = currentBookAudioList.value[sentenceIndex]?.text_hash || ''
+  if (!targetSid) return
+  const trackIndex = timeline.findIndex(t => t.sentenceId === targetSid)
+  if (trackIndex < 0) return
+  if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
+  currentSentencePlayCount.value = 0
+  await player.seekToTrack(trackIndex, 0)
+  try { await player.play() } catch { /* ignore */ }
+}
+
+// 训练模式显示模式变更（持久化）
+const onDisplayModeChange = (mode: 'en' | 'en-zh' | 'zh') => {
+  displayMode.value = mode
+  try { localStorage.setItem('audiobook_display_mode', mode) } catch {}
+  saveTrainingConfig()
+}
+
+// PC 键盘快捷键
+const handleKeydown = (e: KeyboardEvent) => {
+  // 避免与输入框交互冲突
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  switch (e.key) {
+    case 'ArrowLeft':
+      e.preventDefault()
+      if (playerMode.value === 'training') replaySentence()
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      if (playerMode.value === 'training') prevSentence()
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      if (playerMode.value === 'training') nextSentence()
+      break
+    case ' ':
+      e.preventDefault()
+      togglePlay()
+      break
+  }
+}
+
 // 拖动开始 - 进入拖动状态，初始化拖动位置
-// 拖动期间允许 player 继续播放，由 progress 事件的 isDragging 分支避免覆盖 seekProgressTime
 const onSeekStart = () => {
+  logSlider('drag-start', { guard: isDragging.value })
   if (isDragging.value) return
   isDragging.value = true
   seekProgressTime.value = bookProgressTime.value
+  logSlider('after-start')
 }
 
 // 滑块值更新时触发（拖动过程中或点击轨道时）
 const onSliderUpdate = (value: number) => {
+  logSlider('update', { value, oldDragging: isDragging.value, oldSeek: seekProgressTime.value })
   if (!isDragging.value) {
     isDragging.value = true
     seekProgressTime.value = bookProgressTime.value
   }
   seekProgressTime.value = value
+  logSlider('after-update')
 }
 
 // 根据书籍进度时间跳转到对应位置
@@ -1556,20 +1925,24 @@ const seekToBookPosition = async (targetTime: number) => {
 
 // 拖动结束 - 更新播放位置
 const onSeekEnd = () => {
-  if (!isDragging.value) return
-  seekToBookPosition(seekProgressTime.value)
-  isDragging.value = false
+  logSlider('drag-end', { guard: isDragging.value, seekTime: seekProgressTime.value })
+  // isDragging 由 change 统一处理，不在这里重置，避免重复 seek
 }
 
 // 滑块值变化后触发（点击轨道或拖动结束时）
-// 注意：change 事件在 drag-end 之后触发，也在点击轨道时触发
+// 注意：change 在 drag-end 之前触发，统一在这里执行 seek
 const onSliderChange = (_value: number) => {
+  logSlider('change', { _value, isDragging: isDragging.value, seekTime: seekProgressTime.value })
   if (isDragging.value) {
-    // 拖动结束，执行跳转
+    // 拖动结束：执行跳转
     seekToBookPosition(seekProgressTime.value)
     isDragging.value = false
+    logSlider('change-seek-ok')
+  } else {
+    // 点击轨道（无拖动），直接跳转
+    seekToBookPosition(_value)
+    logSlider('change-click-ok')
   }
-  // 如果 isDragging 已经是 false，说明已经由其他方式处理过了
 }
 
 // 监听当前书籍变化，自动加载音频列表
@@ -1588,11 +1961,6 @@ onMounted(() => {
   window.addEventListener('resize', checkOrientation)
   setupMediaSession()
 
-  // === 调试信息：排查 Capacitor Android 安全区域问题 ===
-  debugLayout('mounted')
-  window.addEventListener('resize', () => debugLayout('resize'))
-  // ==================================================
-
   // 绑定 PlaylistPlayer 事件
   player.on('progress', ({ globalMs }) => {
     if (!isDragging.value) currentGlobalMs.value = globalMs
@@ -1601,11 +1969,125 @@ onMounted(() => {
     currentBookTotalDuration.value = Math.max(0, totalMs / 1000)
   })
   player.on('trackchange', ({ index }) => {
-    // 保留 currentAudioIndex 跟随底层 track 变化（仅在非双语模式下高度一致，双语模式下有序推进也合理）
+    // 保留 currentAudioIndex 跟随底层 track 变化
     currentAudioIndex.value = Math.max(0, index)
+    updateCurrentSentence(index)
+    // 每次切句时重置强化计数（仅当非自动强化复读时）
+    if (!isAutoReinforceSeeking.value) {
+      currentSentencePlayCount.value = 0
+    }
+    // 保存训练进度
+    if (playerMode.value === 'training') {
+      saveTrainingProgress()
+    }
+    // 默写模式：新句子开始时全部重新隐藏
+    if (trainingMode.value === 'dictation') {
+      dictationActiveSentenceIndex.value = -1
+    }
   })
   player.on('ended', ({ completed }) => {
-    if (completed) handleAudioEnded()
+    if (!completed) return
+    // 单句强化：未达设定次数时自动复读，达次数后按播完行为处理
+    if (sentenceRepeatCount.value > 1 && playerMode.value === 'training') {
+      currentSentencePlayCount.value++
+      if (currentSentencePlayCount.value < sentenceRepeatCount.value) {
+        // 自动复读，设置守卫标记防止 trackchange 重置计数器
+        isAutoReinforceSeeking.value = true
+        void (async () => {
+          try {
+            const ci = player.getCurrentIndex()
+            if (ci >= 0) {
+              await player.seekToTrack(ci, 0)
+              await player.play()
+            }
+          } catch (e) {
+            console.error('强化复读 seek 失败:', e)
+          } finally {
+            isAutoReinforceSeeking.value = false
+          }
+        })()
+        return
+      } else {
+        // 达设定次数，按播完行为处理（音频已自然结束，无需再 pause）
+        const shouldShowReinforceDictation = trainingMode.value === 'dictation' && dictationShowTranslation.value
+        if (shouldShowReinforceDictation) {
+          dictationActiveSentenceIndex.value = currentSentenceIndex.value
+        }
+        if (afterPlayBehavior.value === 'wait') {
+          isWaitingAfterReinforce.value = true
+        } else {
+          if (shouldShowReinforceDictation && dictationTranslationDuration.value > 0) {
+            // 显示翻译停留指定秒数后自动继续
+            cancelPendingAutoAdvance()
+            pendingAutoAdvanceTimer = setTimeout(() => {
+              pendingAutoAdvanceTimer = null
+              void nextSentence()
+              try { player.play() } catch { /* ignore */ }
+            }, dictationTranslationDuration.value * 1000)
+          } else {
+            // auto: 自动下一句
+            void nextSentence()
+            try { player.play() } catch { /* ignore */ }
+          }
+        }
+        return
+      }
+    }
+    // 非强化模式（sentenceRepeatCount === 1），按播完行为处理
+    if (playerMode.value === 'training') {
+      const shouldShowDictation = trainingMode.value === 'dictation' && dictationShowTranslation.value
+      if (shouldShowDictation) {
+        dictationActiveSentenceIndex.value = currentSentenceIndex.value
+      }
+      if (trainingMode.value === 'shadow') {
+        // 影子跟读：按播完行为处理（音频已自然结束，无需再 pause）
+        if (afterPlayBehavior.value === 'wait') {
+          isWaitingAfterReinforce.value = true
+          return
+        }
+        // 暂停 gap 秒后自动播下一句
+        const gap = shadowGapSeconds.value * 1000
+        cancelPendingAutoAdvance()
+        pendingAutoAdvanceTimer = setTimeout(() => {
+          pendingAutoAdvanceTimer = null
+          try {
+            const tl = player.getTimeline()
+            if (!tl || tl.length === 0) return
+          } catch { return }
+          void nextSentence()
+          try { player.play() } catch { /* ignore */ }
+        }, gap)
+        return
+      }
+      if (afterPlayBehavior.value === 'wait') {
+        isWaitingAfterReinforce.value = true
+        return
+      }
+      // auto
+      if (shouldShowDictation && dictationTranslationDuration.value > 0) {
+        cancelPendingAutoAdvance()
+        pendingAutoAdvanceTimer = setTimeout(() => {
+          pendingAutoAdvanceTimer = null
+          void nextSentence()
+          try { player.play() } catch { /* ignore */ }
+        }, dictationTranslationDuration.value * 1000)
+      } else {
+        void nextSentence()
+        try { player.play() } catch { /* ignore */ }
+      }
+      return
+    }
+    // 标准模式：自动切到下一轨（播放器不再自动切句）
+    const timeline = player.getTimeline()
+    const currentIdx = player.getCurrentIndex()
+    const nextIdx = currentIdx + 1
+    if (nextIdx < timeline.length) {
+      // 还有下一轨，自动播放
+      void player.seekToTrack(nextIdx, 0)
+      try { player.play() } catch { /* ignore */ }
+    } else {
+      handleAudioEnded()
+    }
   })
   player.on('state', (state) => {
     if (state === 'playing') isPlaying.value = true
@@ -1620,8 +2102,17 @@ onMounted(() => {
   // 先恢复用户双语配置（仅读 localStorage + 改 ref，此时 currentBookAudioList 为空，watch 被守卫拦住），
   // 再加载播放列表 → loadBookAudioInfo 里的 rebuildTracksForCurrentBook 将从第一次就用正确配置，避免重复 rebuild
   loadSavedReadConfig()
+  loadSavedMode()
+  loadSavedRate()
+  loadTrainingConfig()
   loadPlaylist()
   loadAvailableBooks()
+
+  // PC 键盘快捷键（仅在纯 Web 环境注册）
+  const isPcEnv = !isCapacitorNative && !hasHarmonyAudioBridge()
+  if (isPcEnv) {
+    document.addEventListener('keydown', handleKeydown)
+  }
 })
 
 // MediaSession API：在 Android Capacitor WebView 中提供锁屏/通知栏控件
@@ -1637,6 +2128,13 @@ function setupMediaSession() {
     })
     mediaSession.setActionHandler('previoustrack', () => { prevBook() })
     mediaSession.setActionHandler('nexttrack', () => { nextBook() })
+    // 训练模式下，快退 = 重复当前句，快进 = 下一句
+    mediaSession.setActionHandler('seekbackward', () => {
+      if (playerMode.value === 'training') replaySentence()
+    })
+    mediaSession.setActionHandler('seekforward', () => {
+      if (playerMode.value === 'training') nextSentence()
+    })
   } catch (e) {
     // 不支持时静默忽略
   }
@@ -1685,6 +2183,8 @@ onUnmounted(() => {
   } catch (e) {
     // 忽略
   }
+  // 移除 PC 键盘监听
+  document.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -1943,8 +2443,54 @@ onUnmounted(() => {
         }
       }
 
+      .slider-debug {
+        position: absolute;
+        bottom: -18px;
+        left: 0;
+        right: 0;
+        font-size: 10px;
+        color: #0a0;
+        background: rgba(0,0,0,0.85);
+        padding: 2px 4px;
+        font-family: monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .slider-debug {
+        position: absolute;
+        bottom: -18px;
+        left: 0;
+        right: 0;
+        font-size: 10px;
+        color: #0a0;
+        background: rgba(0,0,0,0.85);
+        padding: 2px 4px;
+        font-family: monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .slider-debug {
+        position: absolute;
+        bottom: -18px;
+        left: 0;
+        right: 0;
+        font-size: 10px;
+        color: #0a0;
+        background: rgba(0,0,0,0.85);
+        padding: 2px 4px;
+        font-family: monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
       .van-slider {
         flex: 1;
+        position: relative;
 
         .slider-button {
           width: 14px;

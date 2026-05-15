@@ -393,6 +393,7 @@
       @toggle-hide-read="toggleHideReadBooks"
       @rename="openRenameGroupDialog"
       @delete="confirmDeleteGroup"
+      @select-all-books="handleSelectAllInGroup"
     />
 
     <!-- 音频检查修复弹窗 -->
@@ -1135,6 +1136,37 @@ const toggleHideReadBooks = async () => {
     }
   }
   closeGroupContextMenu()
+}
+
+/**
+ * 选中分组内所有书籍
+ * 如果已在多选模式则追加，否则先切换到多选模式再选中
+ */
+const handleSelectAllInGroup = () => {
+  if (!contextMenuGroup.value) return
+
+  const groupId = contextMenuGroup.value.id
+  const group = bookGroups.value.find(g => g.id === groupId)
+  if (!group) return
+
+  const visibleBookIds = getVisibleBooks(group).map(b => b.id)
+  if (visibleBookIds.length === 0) {
+    showNotify({ type: 'warning', message: '该分组下没有可选的书籍' })
+    closeGroupContextMenu()
+    return
+  }
+
+  // 如果不在多选模式，先切换到多选模式
+  if (!isMultiSelect.value) {
+    isMultiSelect.value = true
+    selectedBooks.value = [...visibleBookIds]
+  } else {
+    // 已在多选模式，追加选中
+    selectedBooks.value = [...new Set([...selectedBooks.value, ...visibleBookIds])]
+  }
+
+  closeGroupContextMenu()
+  showNotify({ type: 'success', message: `已选中 ${visibleBookIds.length} 本书籍`, duration: 1000 })
 }
 
 // 编辑相关

@@ -19,6 +19,7 @@ declare module 'vue' {
     Playlist: typeof import('./src/components/Playlist.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    TrainingMode: typeof import('./src/components/TrainingMode.vue')['default']
     UserBookAssignment: typeof import('./src/components/UserBookAssignment.vue')['default']
     VanActionSheet: typeof import('vant/es')['ActionSheet']
     VanButton: typeof import('vant/es')['Button']

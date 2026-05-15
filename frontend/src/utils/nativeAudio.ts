@@ -378,15 +378,13 @@ function createWebPlaylistPlayer(options: PlaylistPlayerOptions = {}): PlaylistP
     })
   })
 
-  audio.addEventListener('ended', async () => {
-    const next = currentIndex + 1
-    if (next < timeline.length) {
-      await loadIndex(next, 0)
-      try { await audio.play() } catch { /* ignore autoplay reject */ }
-    } else {
+  audio.addEventListener('ended', () => {
+    // 不再自动切句，统一由外部 ended listener 决定行为
+    const isLastTrack = (currentIndex >= timeline.length - 1)
+    if (isLastTrack) {
       setState('stopped')
-      emit('ended', { completed: true })
     }
+    emit('ended', { completed: true })
   })
 
   audio.addEventListener('play', () => setState('playing'))

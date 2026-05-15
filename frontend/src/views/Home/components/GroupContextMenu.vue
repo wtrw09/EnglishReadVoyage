@@ -23,6 +23,7 @@
       />
       <van-cell title="修改名称" clickable @click="$emit('rename')" v-if="canRename" />
       <van-cell title="删除分组" clickable @click="$emit('delete')" v-if="canDelete" />
+      <van-cell title="选中分组内所有书籍" clickable @click="$emit('select-all-books')" />
     </van-cell-group>
   </van-popup>
 </template>
@@ -42,6 +43,7 @@ const emit = defineEmits<{
   (e: 'toggle-hide-read'): void
   (e: 'rename'): void
   (e: 'delete'): void
+  (e: 'select-all-books'): void
   (e: 'update:show', value: boolean): void
 }>()
 
