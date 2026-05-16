@@ -7,11 +7,11 @@
  * 前端调用：window.HarmonyFileSaver.saveFile(filename, base64Data)
  *
  * 实现方式：
- * - 通过 getContext() 获取应用沙箱文件目录（filesDir）
- * - 使用 @ohos.file.fs 将 Base64 数据写入文件
- * - 写入到沙箱 files/Downloads/ 子目录中
+ * 1. 同步阶段：将 Base64 数据写入沙箱 filesDir/Downloads/（始终可靠）
+ * 2. 异步阶段：弹出 DocumentViewPicker 系统保存对话框，让用户选择公开保存位置
+ *    - 若用户取消或出错，沙箱内的文件仍可作为兜底
  */
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { documentViewPicker, fileIo as fs } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 
@@ -30,10 +30,14 @@ export class HarmonyFileSaver {
   }
 
   /**
-   * 保存文件
+   * 保存文件（同步 + 异步双阶段）
+   *
+   * 阶段1 - 同步：写入沙箱 filesDir/Downloads/（应用私有目录，始终可靠）
+   * 阶段2 - 异步：弹出 DocumentViewPicker，让用户选择公开保存位置
+   *
    * @param filename 文件名（不含路径）
    * @param base64Data Base64 编码的文件内容（不含 data:xxx;base64, 前缀）
-   * @returns 'success' 表示成功，其他表示失败原因
+   * @returns 'success' 表示同步阶段成功，其他表示失败原因
    */
   saveFile(filename: string, base64Data: string): string {
     hilog.info(LOG_DOMAIN, LOG_TAG, 'saveFile 被调用: %{public}s', filename);
@@ -58,20 +62,55 @@ export class HarmonyFileSaver {
         return 'error: decode failed';
       }
 
-      // 使用 context 的 filesDir 获取应用沙箱目录，避免硬编码路径
-      const downloadDir: string = this.context_.filesDir + '/Downloads/';
-      this.ensureDir_(downloadDir);
+      // === 阶段1（同步）：写入沙箱目录（始终可靠） ===
+      const sandboxDir: string = this.context_.filesDir + '/Downloads/';
+      this.ensureDir_(sandboxDir);
 
-      const filePath: string = downloadDir + filename;
-      const file: fs.File = fs.openSync(filePath, fs.OpenMode.CREATE | fs.OpenMode.WRITE | fs.OpenMode.TRUNC);
+      const sandboxPath: string = sandboxDir + filename;
+      const file: fs.File = fs.openSync(sandboxPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE | fs.OpenMode.TRUNC);
       fs.writeSync(file.fd, dataArray);
       fs.closeSync(file.fd);
 
-      hilog.info(LOG_DOMAIN, LOG_TAG, '文件已保存到: %{public}s', filePath);
+      hilog.info(LOG_DOMAIN, LOG_TAG, '阶段1（沙箱）完成: %{public}s', sandboxPath);
+
+      // === 阶段2（异步）：弹出系统保存对话框 ===
+      // 用户可以在系统文件管理器中自由选择保存位置（如 Documents、Downloads）
+      // 此阶段失败不影响导出结果（沙箱内已有文件）
+      this.tryPublicSaveAsync_(sandboxPath, filename);
+
       return 'success';
     } catch (e) {
       hilog.error(LOG_DOMAIN, LOG_TAG, 'saveFile 异常: %{public}s', String(e));
       return 'error: ' + String(e);
+    }
+  }
+
+  /**
+   * 阶段2（异步）：通过 DocumentViewPicker 弹出系统保存对话框
+   * 将沙箱中的文件复制到用户选择的公开位置
+   */
+  private tryPublicSaveAsync_(sourcePath: string, filename: string): void {
+    try {
+      if (!this.context_) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, 'tryPublicSaveAsync_: context 为空，跳过');
+        return;
+      }
+
+      const picker: documentViewPicker = new documentViewPicker(this.context_);
+
+      picker.save({ files: [{ src: sourcePath }] }).then((uris: string[]) => {
+        if (uris && uris.length > 0) {
+          hilog.info(LOG_DOMAIN, LOG_TAG, '阶段2（公开）完成，用户选择的 URI: %{public}s', JSON.stringify(uris));
+        } else {
+          hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2（公开）完成，但未返回 URI');
+        }
+      }).catch((err: Error) => {
+        // 用户取消或系统错误：不视为导出失败
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2（公开）取消/失败: %{public}s', String(err));
+      });
+    } catch (e) {
+      // DocumentViewPicker 不可用（如 API 版本过低）时静默忽略
+      hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2（公开）不可用: %{public}s', String(e));
     }
   }
 

@@ -127,11 +127,12 @@ export const useExport = () => {
             const blob = xhr.response
             // 使用跨平台文件保存（await 确保保存完成后再关闭对话框）
             try {
-              const saved = await saveFile(blob, filename)
-              if (saved) {
-                showNotify({ type: 'success', message: '文件已保存到本地', duration: 1500 })
+              const result = await saveFile(blob, filename)
+              if (result.success) {
+                const msg = result.path ? `导出成功：${result.path}` : '导出成功'
+                showNotify({ type: 'success', message: msg, duration: 1500 })
               } else {
-                showNotify({ type: 'warning', message: '保存失败，请检查存储权限', duration: 2000 })
+                showNotify({ type: 'warning', message: '保存失败', duration: 2000 })
               }
             } catch (e) {
               console.error('文件保存失败:', e)

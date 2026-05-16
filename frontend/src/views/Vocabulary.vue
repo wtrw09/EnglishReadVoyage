@@ -415,6 +415,7 @@ import { showToast } from 'vant'
 import { api } from '@/store/auth'
 import { buildStaticUrl } from '@/utils/apiBase'
 import { saveFile } from '@/utils/nativeDownload'
+import type { SaveResult } from '@/utils/nativeDownload'
 
 interface VocabularyItem {
   id: number
@@ -847,11 +848,12 @@ const exportToAnki = async () => {
       type: 'application/x-apkg'
     })
     const filename = `生词本_${new Date().toISOString().slice(0, 10)}.apkg`
-    const saved = await saveFile(blob, filename)
-    if (saved) {
-      showToast('导出成功，文件已保存到本地')
+    const result: SaveResult = await saveFile(blob, filename)
+    if (result.success) {
+      const msg = result.path ? `导出成功：${result.path}` : '导出成功'
+      showToast(msg)
     } else {
-      showToast('导出失败，请检查存储权限')
+      showToast('导出失败')
     }
     showExportDialog.value = false
   } catch (error) {
@@ -878,11 +880,12 @@ const exportToWord = async () => {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     })
     const filename = `生词本_${new Date().toISOString().slice(0, 10)}.docx`
-    const saved = await saveFile(blob, filename)
-    if (saved) {
-      showToast('导出成功，文件已保存到本地')
+    const result: SaveResult = await saveFile(blob, filename)
+    if (result.success) {
+      const msg = result.path ? `导出成功：${result.path}` : '导出成功'
+      showToast(msg)
     } else {
-      showToast('导出失败，请检查存储权限')
+      showToast('导出失败')
     }
     showExportDialog.value = false
   } catch (error) {
