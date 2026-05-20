@@ -16,6 +16,7 @@ EnglishReadVoyage is a tool that helps English learners improve their English th
 - **Audiobook Mode**: Supports background playback for hands-free learning.
 - **Dictionary**: Supports both offline local dictionary and online dictionary lookup with definitions, example sentences, and pronunciations. Merriam-Webster provides more detailed definitions.
 - **Word Bank**: Save new words and review them in one place.
+- **Anki Export**: Export vocabulary to `.apkg` format for direct import into Anki. Each card shows the sentence with the target word highlighted in bold red on the front, and the sentence translation plus word definition on the back
 - **Book Grouping**: Create your own categories to organize books.
 - **Reading Progress**: Automatically records your reading position with cross-device sync.
 
