@@ -18,6 +18,12 @@ main:
           exports:
             info: IMAGE_TAG
 
+        # 创建 docker-container builder（默认 docker driver 不支持多架构 --push）
+        - name: create buildx builder
+          script: |
+            docker buildx create --name multiarch --driver docker-container --use
+            docker buildx inspect --bootstrap
+
         # 构建多架构镜像（amd64 + arm64），一次性推送
         # 注意：buildx 多架构构建时会自动选择对应架构的 base 镜像，无需指定 -arm64 后缀
         - name: build and push multi-arch image
@@ -30,3 +36,8 @@ main:
               --build-arg NODE_IMAGE=node:22-alpine \
               --push \
               .
+
+        # 清理 builder，释放资源
+        - name: cleanup buildx builder
+          script: |
+            docker buildx rm multiarch
