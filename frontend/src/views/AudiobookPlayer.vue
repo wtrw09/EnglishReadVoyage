@@ -99,7 +99,7 @@
               </van-slider>
               <span class="audio-time total">{{ formatTime(currentBookTotalDuration) }}</span>
               <!-- 进度条调试 -->
-              <div class="slider-debug">{{ sliderDebugInfo }}</div>
+              
             </div>
           </div>
 
@@ -138,7 +138,7 @@
       <!-- 训练模式内容 -->
       <template v-else>
         <TrainingMode
-          :sentence-window="sentenceWindow"
+          :sentences="currentBookAudioList"
           :is-playing="isPlaying"
           :is-waiting-after-reinforce="isWaitingAfterReinforce"
           :playback-rate="playbackRate"
@@ -148,7 +148,6 @@
           :shadow-gap-seconds="shadowGapSeconds"
           :current-sentence-index="currentSentenceIndex"
           :total-sentences="currentBookAudioList.length"
-          :sentence-window-size="sentenceWindowSize"
           :after-play-behavior="afterPlayBehavior"
           :dictation-active-sentence-index="dictationActiveSentenceIndex"
           :dictation-show-translation="dictationShowTranslation"
@@ -162,7 +161,6 @@
           @update:training-mode="(m) => { trainingMode = m as 'shadow' | 'dictation'; saveTrainingConfig() }"
           @update:sentence-repeat-count="(c) => { sentenceRepeatCount = c as number; saveTrainingConfig() }"
           @update:playback-rate="setPlaybackRate"
-          @update:sentence-window-size="(s) => { sentenceWindowSize = s; saveTrainingConfig() }"
           @update:after-play-behavior="(b) => { afterPlayBehavior = b as 'wait' | 'auto'; saveTrainingConfig() }"
           @update:dictation-show-translation="(v) => { dictationShowTranslation = v as boolean; saveTrainingConfig() }"
           @update:dictation-translation-duration="(v) => { dictationTranslationDuration = v as number; saveTrainingConfig() }"
@@ -606,11 +604,41 @@ const cancelPendingAutoAdvance = () => {
 }
 const shadowGapSeconds = ref(1.5) // 影子跟读间隔
 const playbackRate = ref(1.0) // 播放倍速
-const sentenceWindowSize = ref(3) // 上下文窗口大小
 const afterPlayBehavior = ref<'wait' | 'auto'>('wait') // 播完行为
 const dictationActiveSentenceIndex = ref(-1) // 默写模式已揭示的句子索引，-1全隐藏
 const dictationShowTranslation = ref(true) // 默写模式播放完成后是否显示中文翻译
 const dictationTranslationDuration = ref(5) // 翻译停留秒数
+
+// ===== 精准复读范围状态 =====
+const replayRange = ref<{
+  startGlobalMs: number   // 用户实际开始播放的全局时间戳
+  endGlobalMs: number     // 用户实际停止播放的全局时间戳
+  startSentenceIndex: number  // 起始句子索引
+  endSentenceIndex: number    // 结束句子索引
+  startTrackIndex: number     // 起始 track 索引
+  endTrackIndex: number        // 结束 track 索引
+  startOffsetMs: number        // 起始句内的偏移 ms
+  endOffsetMs: number          // 结束句内的偏移 ms
+} | null>(null)
+
+/** 精准复读的目标终点（全局 ms），由 progress 实时检测 */
+let replayTargetGlobalMs: number | null = null
+
+/** 复读进行中标记：同步设置，用于 state 事件区分复读/用户播放 */
+let isReplaying = false
+
+/** 精准复读的原始范围快照，到达目标后恢复，保持多次复读一致性 */
+let lastReplaySavedRange: {
+  startGlobalMs: number
+  endGlobalMs: number
+  startSentenceIndex: number
+  endSentenceIndex: number
+  startTrackIndex: number
+  endTrackIndex: number
+  startOffsetMs: number
+  endOffsetMs: number
+} | null = null
+
 
 // 持久化键名
 const MODE_STORAGE_KEY = 'audiobook_player_mode'
@@ -802,21 +830,7 @@ const sentenceIndexMap = computed(() => {
   return map
 })
 
-// 当前句上下文窗口（前后各显示几句）
-const sentenceWindow = computed(() => {
-  const list = currentBookAudioList.value
-  if (!list.length) return []
-  const center = currentSentenceIndex.value
-  const half = sentenceWindowSize.value
-  const start = Math.max(0, center - half)
-  const end = Math.min(list.length, center + half + 1)
-  return list.slice(start, end).map((item, i) => ({
-    index: start + i,
-    text: item.text,
-    translation: item.translation,
-    isCurrent: (start + i) === center
-  }))
-})
+
 
 // 方法
 const checkOrientation = () => {
@@ -857,27 +871,6 @@ const currentTime = ref(0) // 当前播放时间（秒）
 const duration = ref(0) // 当前音频总时长（秒）
 const isDragging = ref(false) // 是否正在拖动进度条
 const seekProgressTime = ref(0) // 拖动时的临时进度时间（秒）
-const sliderDebugInfo = ref('') // 调试信息
-
-const logSlider = (msg: string, extra?: Record<string, unknown>) => {
-  const info = {
-    msg,
-    isDragging: isDragging.value,
-    seekProgressTime: seekProgressTime.value,
-    bookProgressTime: bookProgressTime.value,
-    currentBookTotalDuration: currentBookTotalDuration.value,
-    modelVal: isDragging.value ? seekProgressTime.value : bookProgressTime.value,
-    ...extra
-  }
-  console.warn('[Slider]', JSON.stringify(info, null, 2))
-  sliderDebugInfo.value = Object.entries({
-    drag: isDragging.value,
-    seek: seekProgressTime.value.toFixed(1),
-    book: bookProgressTime.value.toFixed(1),
-    total: currentBookTotalDuration.value.toFixed(1),
-    val: (isDragging.value ? seekProgressTime.value : bookProgressTime.value).toFixed(1)
-  }).map(([k, v]) => `${k}=${v}`).join(' | ')
-}
 
 // 根据当前书籍音频列表与双语配置重建 playlist tracks
 const rebuildTracksForCurrentBook = (): boolean => {
@@ -916,7 +909,7 @@ const rebuildTracksForCurrentBook = (): boolean => {
   }
 
   const tracks = buildBilingualPlaylist(items, effectiveConfig)
-
+  
   player.setTracks(tracks)
   tracksLoadedForBookId = book.book_id
   return tracks.length > 0
@@ -1104,7 +1097,11 @@ const closeAudioCheck = () => {
 }
 
 const playAudio = async () => {
-  if (!currentBook.value) return
+  
+  if (!currentBook.value) {
+    
+    return
+  }
 
   // 检查是否有音频文件
   if (currentBookAudioList.value.length === 0) {
@@ -1118,11 +1115,34 @@ const playAudio = async () => {
 
     // 如果当前 player 的 tracks 不是本书，重建
     if (tracksLoadedForBookId !== currentBook.value.book_id) {
+      
       rebuildTracksForCurrentBook()
     }
 
     isPlaying.value = true
     await player.play()
+    // 在 state=playing 清空 replayRange 后，立即捕获当前准确起点
+    // 避免 progress ~250ms 时延导致的起点偏移（复读后播放短片段时尤为重要）
+    if (playerMode.value === 'training') {
+      const globalMs = currentGlobalMs.value
+      const trackIndex = player.getCurrentIndex()
+      const timeline = player.getTimeline()
+      const track = timeline[trackIndex]
+      if (track) {
+        const localMs = globalMs - track.startMs
+        console.log('[Replay] playAudio: 捕获起点, globalMs=', globalMs, ', localMs=', localMs, ', trackIndex=', trackIndex)
+        replayRange.value = {
+          startGlobalMs: globalMs,
+          endGlobalMs: globalMs,
+          startSentenceIndex: currentSentenceIndex.value,
+          endSentenceIndex: currentSentenceIndex.value,
+          startTrackIndex: trackIndex,
+          endTrackIndex: trackIndex,
+          startOffsetMs: localMs,
+          endOffsetMs: localMs
+        }
+      }
+    }
   } catch (error) {
     console.error('播放失败:', error)
     showErrorDialog('播放失败')
@@ -1167,12 +1187,15 @@ const prevBook = async () => {
   }
 }
 
-const nextBook = async () => {
+const nextBook = async (): Promise<boolean> => {
+  
   try {
     const res = await api.get('/audiobook/playlist/next?direction=next&force=true')
+    
     if (res.data.has_next) {
       // 记录当前播放状态
       const wasPlaying = isPlaying.value
+      
       // 标记正在切换书籍，避免显示错误提示
       isSwitchingBook.value = true
       // 先停止当前播放（player 会在 setTracks 时清理旧 track）
@@ -1183,18 +1206,21 @@ const nextBook = async () => {
       currentAudioIndex.value = 0
 
       // 始终加载新书籍音频信息（无论是否播放）
+      
       await loadBookAudioInfo(res.data.book_id)
 
       // 如果之前在播放，继续播放
       if (wasPlaying) {
-        await playAudio()
-      }
+        await playAudio()      }
       // 延迟重置切换标记
       setTimeout(() => { isSwitchingBook.value = false }, 100)
+      return true
     }
+    return false
   } catch (error) {
     console.error('切换书籍失败:', error)
     isSwitchingBook.value = false
+    return false
   }
 }
 
@@ -1599,7 +1625,16 @@ const handleAudioEnded = () => {
       executeSleepTimer()
       return
     }
-    nextBook()
+    void (async () => {
+      try {
+        const switched = await nextBook()
+        if (switched) {
+          await playAudio()
+        }
+      } catch (e) {
+        console.error('自动播放下一本书失败:', e)
+      }
+    })()
     return
   }
 
@@ -1610,6 +1645,7 @@ const handleAudioEnded = () => {
   }
 
   // 本书播完：单曲循环 → 重播本书；否则下一本
+  
   if (playlist.value.play_mode === 'single') {
     // 本书已播到末尾，player.currentIndex 停在最后一个 track
     // 必须先 seekToTrack(0, 0) 回到头部再 play()，否则 audio.play() 将从 duration 处启动会立即再次 ended
@@ -1622,11 +1658,19 @@ const handleAudioEnded = () => {
       }
     })()
   } else {
-    nextBook()
+    
+    void (async () => {
+      try {
+        const switched = await nextBook()
+        if (switched) {
+          await playAudio()
+        }
+      } catch (e) {
+        console.error('自动播放下一本书失败:', e)
+      }
+    })()
   }
 }
-
-// 已在文件顶部声明了 isSwitchingBook（用于 prev/next/playBookAtIndex 切书时屏蔽 error toast）
 
 // ===== 双模式核心方法 =====
 
@@ -1690,7 +1734,6 @@ const saveTrainingConfig = () => {
       trainingMode: trainingMode.value,
       displayMode: displayMode.value,
       sentenceRepeatCount: sentenceRepeatCount.value,
-      sentenceWindowSize: sentenceWindowSize.value,
       afterPlayBehavior: afterPlayBehavior.value,
       playbackRate: playbackRate.value,
       dictationShowTranslation: dictationShowTranslation.value,
@@ -1712,9 +1755,6 @@ const loadTrainingConfig = () => {
       }
       if (typeof cfg.sentenceRepeatCount === 'number' && cfg.sentenceRepeatCount >= 1 && cfg.sentenceRepeatCount <= 5) {
         sentenceRepeatCount.value = cfg.sentenceRepeatCount
-      }
-      if (typeof cfg.sentenceWindowSize === 'number' && cfg.sentenceWindowSize >= 1 && cfg.sentenceWindowSize <= 5) {
-        sentenceWindowSize.value = cfg.sentenceWindowSize
       }
       if (cfg.afterPlayBehavior === 'wait' || cfg.afterPlayBehavior === 'auto') {
         afterPlayBehavior.value = cfg.afterPlayBehavior
@@ -1771,6 +1811,9 @@ const setPlaybackRate = (rate: number) => {
 // 句级导航：上一句
 const prevSentence = async () => {
   cancelPendingAutoAdvance()
+  replayRange.value = null
+  lastReplaySavedRange = null  // 清除旧句复读范围，避免跨句残留
+  isReplaying = false  // 重置复读状态标志
   let current = player.getCurrentIndex()
   if (current < 0) current = 0
   if (current <= 0) return
@@ -1782,6 +1825,9 @@ const prevSentence = async () => {
 // 句级导航：下一句
 const nextSentence = async () => {
   cancelPendingAutoAdvance()
+  replayRange.value = null
+  lastReplaySavedRange = null  // 清除旧句复读范围，避免跨句残留
+  isReplaying = false  // 重置复读状态标志
   const timeline = player.getTimeline()
   let current = player.getCurrentIndex()
   if (current < 0) current = 0
@@ -1792,23 +1838,91 @@ const nextSentence = async () => {
   try { await player.play() } catch { /* ignore */ }
 }
 
-// 复读当前句
+// 复读当前句（精准复读：只重复用户实际播放的片段）
 const replaySentence = async () => {
   cancelPendingAutoAdvance()
-  let current = player.getCurrentIndex()
-  if (current < 0) {
-    // 未加载任何轨道时（如刚进入训练模式），回退到第 0 句
-    current = 0
+  replayTargetGlobalMs = null
+  isReplaying = true
+  
+  // 关键修复：优先使用 lastReplaySavedRange（一旦被用户首次播放记录，就不再被 progress 篡改）
+  let savedRange: typeof replayRange.value = null
+  if (lastReplaySavedRange) {
+    // 连续复读：始终使用首次记录的原始范围，彻底杜绝 progress 篡改的漂移
+    savedRange = lastReplaySavedRange
+    console.log('[Replay] 使用 lastReplaySavedRange（连续复读, endOffset 不变=', lastReplaySavedRange.endOffsetMs, '）')
+  } else if (replayRange.value) {
+    // 首次复读：从 replayRange 获取用户实际播放范围
+    savedRange = { ...replayRange.value }
+    console.log('[Replay] 首次从 replayRange 捕获, endOffset=', savedRange.endOffsetMs)
   }
+  replayRange.value = null
+  
+  // 之后任何 replayRange 的 progress 更新都不会影响 lastReplaySavedRange
+  // 只有用户新播放（非复读）时，state 事件会清除此变量
+  if (savedRange) {
+    lastReplaySavedRange = null  // 先清空再设置，避免深层引用
+    lastReplaySavedRange = savedRange
+  }
+  
+  console.log('[Replay] ===== 复读按钮点击 =====')
+  console.log('[Replay] 已保存 range:', JSON.parse(JSON.stringify(savedRange)))
+  console.log('[Replay] 当前 player.getCurrentIndex():', player.getCurrentIndex())
+  console.log('[Replay] 当前 currentGlobalMs:', currentGlobalMs.value)
+  
+  if (savedRange) {
+    if (savedRange.startTrackIndex === savedRange.endTrackIndex) {
+      // 同句子内部分播放：从起始偏移播放到结束偏移
+      console.log('[Replay] 同句内精准复读: trackIdx=', savedRange.startTrackIndex, ', startOffset=', savedRange.startOffsetMs, ', endOffset=', savedRange.endOffsetMs)
+      await player.seekToTrack(savedRange.startTrackIndex, savedRange.startOffsetMs)
+      
+      scheduleReplayEnd(savedRange.endTrackIndex, savedRange.endOffsetMs)
+      
+      // seekToTrack 仅在 wasPlaying=true 时自动播放，暂停态下需显式调用
+      try { await player.play() } catch { /* ignore */ }
+    } else {
+      // 跨句子播放：从结束句子的开头开始播放（用户实际是从 A 末尾播到 B 开头，复读从 B 句开头播到停止位置）
+      console.log('[Replay] 跨句精准复读: startTrack=', savedRange.startTrackIndex, ', endTrack=', savedRange.endTrackIndex, ', endOffset=', savedRange.endOffsetMs)
+      await player.seekToTrack(savedRange.endTrackIndex, 0)
+      // 设置终点，从 B 句开头播到用户实际停止位置
+      if (savedRange.endOffsetMs > 0) {
+        scheduleReplayEnd(savedRange.endTrackIndex, savedRange.endOffsetMs)
+      }
+      try { await player.play() } catch { /* ignore */ }
+    }
+  } else {
+    // 无历史范围，回退到原逻辑（从头播放当前句）
+    console.log('[Replay] 回退到原逻辑：从头播放当前句')
+    let current = player.getCurrentIndex()
+    if (current < 0) current = 0
+    try {
+      await player.seekToTrack(current, 0)
+      try { await player.play() } catch { /* ignore */ }
+    } catch (e) {
+      console.error('[Replay] error:', e)
+    }
+  }
+  
   if (isWaitingAfterReinforce.value) isWaitingAfterReinforce.value = false
   currentSentencePlayCount.value = 0
-  try {
-    await player.seekToTrack(current, 0)
-    // seekToTrack 仅在 wasPlaying=true 时自动播放，暂停态下需显式调用
-    await player.play()
-  } catch (e) {
-    console.error('[Replay] error:', e)
+}
+
+// 精准复读：设置目标终点（全局 ms），由 progress 事件实时检测位置并暂停
+const scheduleReplayEnd = (trackIndex: number, endOffsetMs: number) => {
+  const timeline = player.getTimeline()
+  const currentIdx = player.getCurrentIndex()
+  const track = timeline[trackIndex]
+  if (!track) {
+    console.log('[Replay] scheduleReplayEnd: track 不存在，trackIndex=', trackIndex)
+    return
   }
+  // 验证目标 track 与当前播放位置的一致性，避免快速点击导致的位置错乱
+  if (trackIndex !== currentIdx) {
+    console.log('[Replay] scheduleReplayEnd: track 不匹配，跳过, trackIndex=', trackIndex, ', currentIdx=', currentIdx)
+    return
+  }
+  const targetGlobalMs = track.startMs + endOffsetMs
+  console.log('[Replay] scheduleReplayEnd: 设置目标终点 globalMs=', targetGlobalMs, ', track.startMs=', track.startMs, ', endOffsetMs=', endOffsetMs)
+  replayTargetGlobalMs = targetGlobalMs
 }
 
 // 从 track 索引反查句子索引
@@ -1890,22 +2004,18 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 // 拖动开始 - 进入拖动状态，初始化拖动位置
 const onSeekStart = () => {
-  logSlider('drag-start', { guard: isDragging.value })
   if (isDragging.value) return
   isDragging.value = true
   seekProgressTime.value = bookProgressTime.value
-  logSlider('after-start')
 }
 
 // 滑块值更新时触发（拖动过程中或点击轨道时）
 const onSliderUpdate = (value: number) => {
-  logSlider('update', { value, oldDragging: isDragging.value, oldSeek: seekProgressTime.value })
   if (!isDragging.value) {
     isDragging.value = true
     seekProgressTime.value = bookProgressTime.value
   }
   seekProgressTime.value = value
-  logSlider('after-update')
 }
 
 // 根据书籍进度时间跳转到对应位置
@@ -1925,28 +2035,28 @@ const seekToBookPosition = async (targetTime: number) => {
 
 // 拖动结束 - 更新播放位置
 const onSeekEnd = () => {
-  logSlider('drag-end', { guard: isDragging.value, seekTime: seekProgressTime.value })
   // isDragging 由 change 统一处理，不在这里重置，避免重复 seek
 }
 
 // 滑块值变化后触发（点击轨道或拖动结束时）
 // 注意：change 在 drag-end 之前触发，统一在这里执行 seek
 const onSliderChange = (_value: number) => {
-  logSlider('change', { _value, isDragging: isDragging.value, seekTime: seekProgressTime.value })
   if (isDragging.value) {
     // 拖动结束：执行跳转
     seekToBookPosition(seekProgressTime.value)
     isDragging.value = false
-    logSlider('change-seek-ok')
   } else {
     // 点击轨道（无拖动），直接跳转
     seekToBookPosition(_value)
-    logSlider('change-click-ok')
   }
 }
 
 // 监听当前书籍变化，自动加载音频列表
 watch(currentBook, async (newBook: PlaylistItem | null) => {
+  // 切书过程中，nextBook/prevBook/playBookAtIndex 已自行调用 loadBookAudioInfo
+  if (isSwitchingBook.value) {
+    return
+  }
   if (newBook) {
     await loadBookAudioInfo(newBook.book_id)
   } else {
@@ -1962,8 +2072,48 @@ onMounted(() => {
   setupMediaSession()
 
   // 绑定 PlaylistPlayer 事件
-  player.on('progress', ({ globalMs }) => {
+  player.on('progress', ({ globalMs, localMs, trackIndex }) => {
     if (!isDragging.value) currentGlobalMs.value = globalMs
+    
+    // 精准复读目标检测：实时检查是否到达终点（优先执行，不受 replayRange 更新影响）
+    if (replayTargetGlobalMs !== null && globalMs >= replayTargetGlobalMs) {
+      console.log('[Replay] 到达目标终点: globalMs=', globalMs, ', target=', replayTargetGlobalMs, '，暂停播放')
+      replayTargetGlobalMs = null
+      pauseAudio()
+      replayRange.value = null  // 清空本次被 progress 初始化的范围，下次复读回退到 lastReplaySavedRange
+      return
+    }
+    
+    // 记录播放范围（用于精准复读）
+    if (isPlaying.value && playerMode.value === 'training') {
+      if (replayRange.value === null) {
+        // 开始新的播放范围
+        console.log('[Replay] progress: 初始化 replayRange, globalMs=', globalMs, ', localMs=', localMs, ', trackIndex=', trackIndex)
+        replayRange.value = {
+          startGlobalMs: globalMs,
+          endGlobalMs: globalMs,
+          startSentenceIndex: currentSentenceIndex.value,
+          endSentenceIndex: currentSentenceIndex.value,
+          startTrackIndex: trackIndex,
+          endTrackIndex: trackIndex,
+          startOffsetMs: localMs,
+          endOffsetMs: localMs
+        }
+      } else {
+        // 更新范围（扩展已播放区域）
+        // 调试：每5秒输出一次更新
+        const prevEndOffset = replayRange.value.endOffsetMs
+        replayRange.value.endGlobalMs = globalMs
+        replayRange.value.endSentenceIndex = currentSentenceIndex.value
+        replayRange.value.endTrackIndex = trackIndex
+        replayRange.value.endOffsetMs = localMs
+        
+        // 仅当结束位置变化超过100ms或有track切换时打印
+        if (localMs < 100 || localMs > prevEndOffset + 100 || trackIndex !== replayRange.value.startTrackIndex) {
+          console.log('[Replay] progress: 更新 replayRange, endOffsetMs:', prevEndOffset, '->', localMs, ', trackIndex:', trackIndex)
+        }
+      }
+    }
   })
   player.on('timelineupdate', ({ totalMs }) => {
     currentBookTotalDuration.value = Math.max(0, totalMs / 1000)
@@ -2090,9 +2240,21 @@ onMounted(() => {
     }
   })
   player.on('state', (state) => {
-    if (state === 'playing') isPlaying.value = true
-    else if (state === 'paused' || state === 'stopped') isPlaying.value = false
-  })
+  if (state === 'playing') {
+    isPlaying.value = true
+    // 新播放开始时，重置精准复读范围
+    replayRange.value = null
+    // 仅当这不是复读触发的播放时，才清除历史范围
+    if (!isReplaying) {
+      lastReplaySavedRange = null
+    }
+  }
+  else if (state === 'paused' || state === 'stopped') {
+    isPlaying.value = false
+    replayTargetGlobalMs = null
+    isReplaying = false  // 复读结束，下次用户播放时正确清除 lastReplaySavedRange
+  }
+})
   player.on('error', ({ message }) => {
     if (isSwitchingBook.value) return
     console.error('播放器错误:', message)

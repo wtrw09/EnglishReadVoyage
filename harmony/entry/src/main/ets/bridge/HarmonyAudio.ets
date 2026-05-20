@@ -6,12 +6,15 @@
  *
  * 前端调用：window.HarmonyAudio.setPlaylist(timeline) / play() / pause() 等
  * 回调前端：webviewController.runJavaScript('window.__harmonyAudioEvent(event, payload)')
+ *
+ * 注意：此文件保留作为纯前端场景的备用实现。新架构下音频实际由
+ * AudioServiceProxy + AudioServiceAbility（ServiceExtensionAbility）处理。
  */
 import { media } from '@kit.MediaKit';
 import { type BusinessError } from '@kit.BasicServicesKit';
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AVSessionMgr } from './AVSessionMgr';
+import { AVSessionMgr, IAudioController } from './AVSessionMgr';
 
 const LOG_DOMAIN: number = 0xA045;
 const LOG_TAG: string = 'HarmonyAudio';
@@ -29,7 +32,7 @@ interface MetaInfo {
   artist: string;
 }
 
-export class HarmonyAudio {
+export class HarmonyAudio implements IAudioController {
   private controller_: webview.WebviewController;
   private player_: media.AVPlayer | null = null;
   private timeline_: TimelineTrack[] = [];
@@ -64,7 +67,7 @@ export class HarmonyAudio {
         return;
       }
       this.timeline_ = raw as TimelineTrack[];
-    } catch {
+    } catch (_e) {
       this.timeline_ = [];
     }
     this.currentIndex_ = -1;

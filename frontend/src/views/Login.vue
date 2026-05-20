@@ -239,6 +239,8 @@ function prefillUsername() {
   const creds = getRememberedCredentials()
   if (creds) {
     form.username = creds.username
+    form.password = creds.password
+    rememberMe.value = true
   }
 }
 

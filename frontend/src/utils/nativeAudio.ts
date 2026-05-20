@@ -260,14 +260,24 @@ export function hasHarmonyAudioBridge(): boolean {
   return typeof window !== 'undefined' && !!(window as any).HarmonyAudio
 }
 
+/** 当前是否在 Android Capacitor 原生壳内且有 NativeAudio 插件 */
+export function hasAndroidNativeAudio(): boolean {
+  if (typeof window === 'undefined') return false
+  const cap = (window as any).Capacitor
+  if (!cap) return false
+  const isNative = typeof cap.isNativePlatform === 'function' ? cap.isNativePlatform() : !!cap.isNative
+  return isNative && !!(cap.Plugins && cap.Plugins.NativeAudio)
+}
+
 export interface PlaylistPlayerOptions {
   /** 是否由 player 自动接管 navigator.mediaSession（锁屏/通知栈控件）。
    *  外层自己管理跨专辑/跨书籍的 prev/next 时，应传 false。默认 true。 */
   manageMediaSession?: boolean
 }
 
-/** 创建跨端 playlist 播放器；鸿蒙壳下走原生桥，否则走 HTMLAudioElement */
+/** 创建跨端 playlist 播放器；Android 原生壳下走 Capacitor 插件，鸿蒙壳下走原生桥，否则走 HTMLAudioElement */
 export function createPlaylistPlayer(options: PlaylistPlayerOptions = {}): PlaylistPlayer {
+  if (hasAndroidNativeAudio()) return createAndroidPlaylistPlayer()
   if (hasHarmonyAudioBridge()) return createHarmonyPlaylistPlayer()
   return createWebPlaylistPlayer(options)
 }
@@ -519,6 +529,156 @@ function createWebPlaylistPlayer(options: PlaylistPlayerOptions = {}): PlaylistP
     getCurrentIndex: () => currentIndex,
     getState: () => state,
     destroy
+  }
+}
+
+// ---------- Android 原生桥（Capacitor NativeAudio 插件）----------
+//
+// 通过 Capacitor.Plugins.NativeAudio 与原生代码通信。
+// 方法：setPlaylist, play, pause, resume, stop, seekToTrack, seekLocal, setRate, setMeta, destroy
+// 事件：通过 Capacitor addListener('progress'|'trackchange'|'ended'|'error'|'state', callback) 接收
+
+function createAndroidPlaylistPlayer(): PlaylistPlayer {
+  const NA: any = (window as any).Capacitor?.Plugins?.NativeAudio
+  const { on, emit, clear } = createEmitter()
+
+  let timeline: TimelineTrack[] = []
+  let state: PlaylistPlayState = 'stopped'
+  let currentIndex = -1
+  const removeListeners: Array<() => void> = []
+
+  // 注册插件事件监听
+  function setupListeners() {
+    // 防止重复注册
+    teardownListeners()
+
+    if (!NA?.addListener) return
+
+    const listenerDefs: Array<{ event: string; handler: (data: any) => void }> = [
+      {
+        event: 'progress',
+        handler: (data: any) => {
+          const idx = typeof data.trackIndex === 'number' ? data.trackIndex : -1
+          if (idx < 0 || idx >= timeline.length) return
+          const track = timeline[idx]
+          const globalMs = typeof data.globalMs === 'number' ? data.globalMs : track.startMs
+          const localMs = typeof data.localMs === 'number' ? data.localMs : Math.max(0, globalMs - track.startMs)
+          currentIndex = idx
+          emit('progress', { globalMs, localMs, trackIndex: idx, track })
+        }
+      },
+      {
+        event: 'trackchange',
+        handler: (data: any) => {
+          const idx = typeof data.trackIndex === 'number' ? data.trackIndex : -1
+          if (idx >= 0 && idx < timeline.length) {
+            currentIndex = idx
+            emit('trackchange', { index: idx, track: timeline[idx] })
+          }
+        }
+      },
+      {
+        event: 'ended',
+        handler: (data: any) => {
+          state = 'stopped'
+          emit('state', state)
+          emit('ended', { completed: !!(data && data.completed) })
+        }
+      },
+      {
+        event: 'state',
+        handler: (payload: any) => {
+          const stateStr = typeof payload === 'string' ? payload : payload?.value
+          if (stateStr === 'playing' || stateStr === 'paused' || stateStr === 'stopped') {
+            state = stateStr
+            emit('state', state)
+          }
+        }
+      },
+      {
+        event: 'error',
+        handler: (data: any) => {
+          emit('error', { message: (data && data.message) || 'native audio error' })
+        }
+      }
+    ]
+
+    for (const def of listenerDefs) {
+      try {
+        const ret = NA.addListener(def.event, def.handler)
+        // Capacitor 3+: addListener 返回 Promise<PluginListenerHandle>
+        if (ret && typeof ret.then === 'function') {
+          ret.then((handle: any) => {
+            removeListeners.push(() => { try { handle.remove() } catch { /* ignore */ } })
+          }).catch(() => { /* ignore */ })
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  function teardownListeners() {
+    removeListeners.splice(0).forEach(fn => { try { fn() } catch { /* ignore */ } })
+  }
+
+  function totalMs(): number {
+    return timeline.length ? timeline[timeline.length - 1].endMs : 0
+  }
+
+  function setTracks(tracks: PlaylistTrack[]): void {
+    timeline = []  // 先清空再重建，避免事件回调中引用旧 timeline
+    const built = buildTimeline(tracks)
+    timeline = built
+    currentIndex = -1
+    if (NA?.setPlaylist) {
+      try { NA.setPlaylist({ timelineJson: JSON.stringify(built) }) } catch { /* ignore */ }
+    }
+    emit('timelineupdate', { timeline: timeline.slice(), totalMs: totalMs() })
+  }
+
+  async function call(method: string, ...args: any[]): Promise<void> {
+    if (!NA || typeof NA[method] !== 'function') return
+    try {
+      const r = NA[method](...args)
+      if (r && typeof r.then === 'function') await r
+    } catch (e: any) {
+      emit('error', { message: e?.message || `android ${method} failed` })
+    }
+  }
+
+  setupListeners()
+
+  return {
+    setTracks,
+    play: () => call('play'),
+    pause: () => { call('pause') },
+    resume: () => call('resume'),
+    stop: () => { call('stop') },
+    seekGlobal: async (ms: number) => {
+      // 在 TS 侧查找音轨索引，然后调用 native seekToTrack
+      if (!timeline.length) return
+      const clamped = Math.max(0, Math.min(totalMs(), ms))
+      let idx = timeline.findIndex(t => clamped >= t.startMs && clamped < t.endMs)
+      if (idx < 0) idx = timeline.length - 1
+      const offset = clamped - timeline[idx].startMs
+      await call('seekToTrack', { index: idx, offsetMs: Math.max(0, Math.round(offset)) })
+    },
+    seekLocal: (ms: number) => call('seekLocal', { ms: Math.max(0, Math.round(ms)) }),
+    seekToTrack: (index: number, offsetMs: number = 0) =>
+      call('seekToTrack', { index, offsetMs: Math.max(0, Math.round(offsetMs)) }),
+    setRate: (rate: number) => { call('setRate', { rate }) },
+    setMeta: (meta: MediaMeta) => { call('setMeta', { metaJson: JSON.stringify(meta) }) },
+    on,
+    getTimeline: () => timeline.slice(),
+    getTotalDurationMs: totalMs,
+    getCurrentIndex: () => currentIndex,
+    getState: () => state,
+    destroy: () => {
+      call('destroy')
+      teardownListeners()
+      timeline = []
+      currentIndex = -1
+      clear()
+    }
   }
 }
 

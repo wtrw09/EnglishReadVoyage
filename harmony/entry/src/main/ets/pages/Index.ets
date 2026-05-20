@@ -1,8 +1,7 @@
 import web_webview from '@ohos.web.webview';
-import { common } from '@kit.AbilityKit';
-import { HarmonyAudio } from '../bridge/HarmonyAudio';
+import { AudioServiceProxy } from '../bridge/AudioServiceProxy';
 import { HarmonyFileSaver } from '../bridge/HarmonyFileSaver';
-import { AVSessionMgr } from '../bridge/AVSessionMgr';
+import { common } from '@kit.AbilityKit';
 
 // 模拟 HTTP 基地址（用于绕过 resource:// 协议 CORS 限制）
 const MOCK_BASE: string = 'http://harmony.local/';
@@ -29,15 +28,12 @@ function mimeTypeOf(path: string): string {
 @Component
 struct Index {
   private controller: web_webview.WebviewController = new web_webview.WebviewController();
-  private avSessionMgr: AVSessionMgr = new AVSessionMgr();
-  private harmonyAudio: HarmonyAudio = new HarmonyAudio(this.controller, this.avSessionMgr);
-  private harmonyFileSaver: HarmonyFileSaver = new HarmonyFileSaver();
+  private audioProxy: AudioServiceProxy = new AudioServiceProxy(this.controller);
+  private harmonyFileSaver: HarmonyFileSaver = new HarmonyFileSaver(this.getUIContext().getHostContext() as common.UIAbilityContext);
 
   aboutToAppear(): void {
     // 开启 WebView 远程调试，可在 PC 浏览器 DevTools 中查看控制台日志
     web_webview.WebviewController.setWebDebuggingAccess(true);
-    const ctx: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-    this.avSessionMgr.create(ctx, this.harmonyAudio);
   }
 
   build() {
@@ -46,7 +42,7 @@ struct Index {
       Web({ src: MOCK_BASE + 'dist/index.html', controller: this.controller })
         .javaScriptProxy({
           controller: this.controller,
-          object: this.harmonyAudio,
+          object: this.audioProxy,
           name: 'HarmonyAudio',
           methodList: [
             'setPlaylist', 'play', 'pause', 'resume', 'stop',

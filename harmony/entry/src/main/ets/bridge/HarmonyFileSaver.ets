@@ -11,7 +11,8 @@
  * 2. 异步阶段：弹出 DocumentViewPicker 系统保存对话框，让用户选择公开保存位置
  *    - 若用户取消或出错，沙箱内的文件仍可作为兜底
  */
-import { documentViewPicker, fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
+import { picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 
@@ -21,12 +22,8 @@ const LOG_TAG: string = 'HarmonyFileSaver';
 export class HarmonyFileSaver {
   private context_: common.UIAbilityContext | null = null;
 
-  constructor() {
-    try {
-      this.context_ = getContext(this) as common.UIAbilityContext;
-    } catch (e) {
-      hilog.error(LOG_DOMAIN, LOG_TAG, '无法获取 UIAbilityContext: %{public}s', String(e));
-    }
+  constructor(ctx: common.UIAbilityContext) {
+    this.context_ = ctx;
   }
 
   /**
@@ -67,7 +64,7 @@ export class HarmonyFileSaver {
       this.ensureDir_(sandboxDir);
 
       const sandboxPath: string = sandboxDir + filename;
-      const file: fs.File = fs.openSync(sandboxPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE | fs.OpenMode.TRUNC);
+      const file: fs.File = fs.openSync(sandboxPath, fs.OpenMode.READ_WRITE);
       fs.writeSync(file.fd, dataArray);
       fs.closeSync(file.fd);
 
@@ -96,17 +93,32 @@ export class HarmonyFileSaver {
         return;
       }
 
-      const picker: documentViewPicker = new documentViewPicker(this.context_);
+      const pickerInstance = new picker.DocumentViewPicker(this.context_);
 
-      picker.save({ files: [{ src: sourcePath }] }).then((uris: string[]) => {
+      const options = new picker.DocumentSaveOptions();
+      options.newFileNames = [filename];
+      pickerInstance.save(options).then((uris: string[]) => {
         if (uris && uris.length > 0) {
-          hilog.info(LOG_DOMAIN, LOG_TAG, '阶段2（公开）完成，用户选择的 URI: %{public}s', JSON.stringify(uris));
+          // 将沙箱文件复制到用户选择的公开位置
+          try {
+            const srcFd: number = fs.openSync(sourcePath, fs.OpenMode.READ_ONLY).fd;
+            const stat = fs.statSync(sourcePath);
+            const buf: ArrayBuffer = new ArrayBuffer(stat.size);
+            fs.readSync(srcFd, buf);
+            fs.closeSync(srcFd);
+            const destFd: number = fs.openSync(uris[0], fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE).fd;
+            fs.writeSync(destFd, buf);
+            fs.closeSync(destFd);
+            hilog.info(LOG_DOMAIN, LOG_TAG, '阶段2（公开）完成: %{public}s', uris[0]);
+          } catch (copyErr) {
+            hilog.warn(LOG_DOMAIN, LOG_TAG, '复制到公开目录失败: %{public}s', String(copyErr));
+          }
         } else {
-          hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2（公开）完成，但未返回 URI');
+          hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2完成，但未返回 URI');
         }
       }).catch((err: Error) => {
         // 用户取消或系统错误：不视为导出失败
-        hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2（公开）取消/失败: %{public}s', String(err));
+        hilog.warn(LOG_DOMAIN, LOG_TAG, '阶段2取消/失败: %{public}s', String(err));
       });
     } catch (e) {
       // DocumentViewPicker 不可用（如 API 版本过低）时静默忽略

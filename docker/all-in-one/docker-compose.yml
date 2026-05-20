@@ -16,11 +16,15 @@ services:
       - ./backend/Books:/app/Books
       # 预编译缓存目录（书籍解析结果缓存，重启后保留）
       - ./backend/.cache:/app/.cache
-    # 直接设置环境变量（无需外部 .env 文件）
+    # 所有环境变量直接在此设置，无需外部 .env 文件
+    # SECRET_KEY 不设置时 entrypoint 自动生成临时密钥（重启后需重新登录）
+    # ACCESS_TOKEN_EXPIRE_MINUTES 代码默认 30 分钟，这里设为 7 天
     environment:
       - DEBUG=False
       - IS_PRODUCTION=True
-      # SECRET_KEY 可在执行目录的 .env 文件中设置（docker compose 自动读取），或由 entrypoint 自动生成
+      - ACCESS_TOKEN_EXPIRE_MINUTES=10080
+      # SECRET_KEY: 取消注释并重启容器即可使用固定密钥（避免重启后需重新登录）
+      # - SECRET_KEY=dv_9BtcjZADGK5fn3zCLvswWnuA1ggrs7H3bHWsV734
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/api/v1/dictionary/status"]

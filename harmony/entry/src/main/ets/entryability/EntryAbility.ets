@@ -1,13 +1,14 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, ConfigurationConstant, UIAbility, Want, common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import rpc from '@ohos.rpc';
+import { setServiceRemote } from '../bridge/AudioServiceProxy';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
-  private backgroundTaskStarted_: boolean = false;
+  private connection_: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -16,10 +17,11 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'Failed to set colorMode');
     }
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onCreate');
+    this.connectService_();
   }
 
   onDestroy(): void {
-    this.stopBackgroundTask_();
+    this.disconnectService_();
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
   }
 
@@ -41,41 +43,45 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
-    this.stopBackgroundTask_();
   }
 
   onBackground(): void {
+    // 后台任务由 AudioServiceAbility 接管，此处不需要手动处理
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
-    this.startBackgroundTask_();
   }
 
-  private startBackgroundTask_(): void {
-    if (this.backgroundTaskStarted_) return;
+  /** 连接到 AudioServiceAbility */
+  private connectService_(): void {
+    const want: Want = {
+      bundleName: this.context.abilityInfo.bundleName,
+      abilityName: 'AudioServiceAbility'
+    };
+    const connectOptions: common.ConnectOptions = {
+      onConnect: (elementName, remote: rpc.IRemoteObject): void => {
+        hilog.info(DOMAIN, TAG, '%{public}s', 'AudioService connected');
+        setServiceRemote(remote);
+      },
+      onDisconnect: (elementName): void => {
+        hilog.info(DOMAIN, TAG, '%{public}s', 'AudioService disconnected');
+      },
+      onFailed: (code: number): void => {
+        hilog.error(DOMAIN, TAG, 'AudioService connect failed: %{public}d', code);
+      }
+    };
     try {
-      backgroundTaskManager.startBackgroundRunning(
-        this.context,
-        backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK,
-        () => {
-          // 续期回调 - 音频播放任务通常不需要续期
-        }
-      );
-      this.backgroundTaskStarted_ = true;
-      hilog.info(DOMAIN, TAG, '%{public}s', 'Background task started');
-    } catch {
-      hilog.error(DOMAIN, TAG, 'startBackgroundRunning failed');
-      this.backgroundTaskStarted_ = false;
+      this.connection_ = this.context.connectServiceExtensionAbility(want, connectOptions);
+    } catch (_e) {
+      hilog.error(DOMAIN, TAG, 'connect service failed');
     }
   }
 
-  private stopBackgroundTask_(): void {
-    if (!this.backgroundTaskStarted_) return;
-    try {
-      backgroundTaskManager.stopBackgroundRunning(this.context);
-      this.backgroundTaskStarted_ = false;
-      hilog.info(DOMAIN, TAG, '%{public}s', 'Background task stopped');
-    } catch {
-      hilog.error(DOMAIN, TAG, 'stopBackgroundRunning failed');
-      this.backgroundTaskStarted_ = false;
+  /** 断开与 AudioServiceAbility 的连接 */
+  private disconnectService_(): void {
+    if (this.connection_ > 0) {
+      try {
+        this.context.disconnectServiceExtensionAbility(this.connection_);
+      } catch (_e) { /* ignore */ }
+      this.connection_ = 0;
     }
   }
 }

@@ -16,9 +16,6 @@
       },
       {
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
-      },
-      {
-        "name": "ohos.permission.FILE_ACCESS_MANAGER"
       }
     ],
     "pages": "$profile:main_pages",

@@ -6,10 +6,10 @@
  * - 极简控制栏（上一句/复读/播放暂停/下一句/倍速）
  * - 训练工具条（单句强化/影子跟读/默写模式）
  * - 倍速选择弹出面板
- * - 训练设置面板（显示模式、窗口大小等）
+ * - 训练设置面板（显示模式、播完行为等）
  *
  * Props：
- * - sentenceWindow: 当前显示的句子窗口
+ * - sentences: 句子完整列表（全量渲染，可自由滚动）
  * - isPlaying: 是否正在播放
  * - isWaitingAfterReinforce: 强化播完后是否等待用户操作
  * - playbackRate: 当前倍速
@@ -19,7 +19,6 @@
  * - shadowGapSeconds: 影子跟读间隔秒数
  * - currentSentenceIndex: 当前句子索引
  * - totalSentences: 总句子数
- * - sentenceWindowSize: 上下文窗口大小
  * - afterPlayBehavior: 播完行为 (wait/auto)
  *
  * Events：
@@ -32,7 +31,6 @@
  * - update:trainingMode: 训练模式变更
  * - update:sentenceRepeatCount: 重复次数变更
  * - update:playbackRate: 倍速变更
- * - update:sentenceWindowSize: 窗口大小变更
  * - update:afterPlayBehavior: 播完行为变更
  */
 <template>
@@ -40,30 +38,29 @@
     <!-- 句子列表区域（可垂直滚动） -->
     <div class="sentence-list-wrapper">
       <div class="sentence-list" ref="sentenceContainerRef">
-        <div v-for="item in sentenceWindow" :key="item.index"
+        <div v-for="(item, index) in sentences" :key="index"
              class="sentence-line"
-             :class="{ current: item.isCurrent }"
-             @click="$emit('seek-to-sentence', item.index)">
+             :class="{ current: index === currentSentenceIndex }"
+             @click="$emit('seek-to-sentence', index)">
           <div v-if="displayMode === 'en' || displayMode === 'en-zh'"
                class="sentence-text"
                :class="{
-                 'dictation-glass': trainingMode === 'dictation' && item.index !== dictationActiveSentenceIndex,
-                 'dictation-hidden': trainingMode === 'shadow' && !isRevealed && item.isCurrent
+                 'dictation-glass': trainingMode === 'dictation' && index !== dictationActiveSentenceIndex,
+                 'dictation-hidden': trainingMode === 'shadow' && !isRevealed && index === currentSentenceIndex
                }">
             {{ item.text }}
           </div>
           <div v-if="displayMode === 'en-zh' || displayMode === 'zh'"
                class="sentence-translation"
                :class="{
-                 'dictation-glass': trainingMode === 'dictation' && item.index !== dictationActiveSentenceIndex,
-                 'dictation-hidden': trainingMode === 'shadow' && !isRevealed && item.isCurrent
+                 'dictation-glass': trainingMode === 'dictation' && index !== dictationActiveSentenceIndex,
+                 'dictation-hidden': trainingMode === 'shadow' && !isRevealed && index === currentSentenceIndex
                }">
             {{ item.translation }}
           </div>
         </div>
       </div>
-      <!-- 固定于容器垂直中心的当前句指示线 -->
-      <div v-if="trainingMode !== 'dictation'" class="current-sentence-indicator"></div>
+
     </div>
 
     <!-- 句子进度条 -->
@@ -193,11 +190,6 @@
                   @click="toggleTrainingMode('dictation')">默写</span>
           </div>
         </div>
-        <!-- 上下文行数 -->
-        <div class="setting-row">
-          <span class="setting-label">上下文行数</span>
-          <van-stepper v-model="localWindowSize" :min="1" :max="5" integer @change="onWindowSizeChange" />
-        </div>
         <!-- 播完行为 -->
         <div class="setting-row">
           <span class="setting-label">播完行为</span>
@@ -232,7 +224,7 @@ import { ref, watch, nextTick, onMounted } from 'vue'
 
 // Props
 const props = defineProps<{
-  sentenceWindow: Array<{ index: number; text: string; translation: string; isCurrent: boolean }>
+  sentences: Array<{ text: string; translation: string }>
   isPlaying: boolean
   isWaitingAfterReinforce: boolean
   playbackRate: number
@@ -242,7 +234,6 @@ const props = defineProps<{
   shadowGapSeconds: number
   currentSentenceIndex: number
   totalSentences: number
-  sentenceWindowSize: number
   afterPlayBehavior: 'wait' | 'auto'
   dictationActiveSentenceIndex: number
   dictationShowTranslation: boolean
@@ -260,7 +251,6 @@ const emit = defineEmits<{
   (e: 'update:trainingMode', mode: 'shadow' | 'dictation'): void
   (e: 'update:sentenceRepeatCount', count: number): void
   (e: 'update:playbackRate', rate: number): void
-  (e: 'update:sentenceWindowSize', size: number): void
   (e: 'update:afterPlayBehavior', behavior: 'wait' | 'auto'): void
   (e: 'update:dictationShowTranslation', value: boolean): void
   (e: 'update:dictationTranslationDuration', value: number): void
@@ -271,7 +261,6 @@ const RATE_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 const showSpeedPicker = ref(false)
 const showTrainingSettings = ref(false)
 const isRevealed = ref(true) // 跟读模式手动隐藏开关，默认显示文字
-const localWindowSize = ref(props.sentenceWindowSize)
 
 // 训练模式进度条拖动状态
 const isTrainingDragging = ref(false)
@@ -307,40 +296,17 @@ const onTrainingDragEnd = () => {
   trainingDragIndex.value = -1
 }
 
-// 窗口大小变更
-const onWindowSizeChange = (val: number) => {
-  localWindowSize.value = val
-  emit('update:sentenceWindowSize', val)
-}
-
 // 句子容器引用，用于自动滚动到当前句
 const sentenceContainerRef = ref<HTMLElement | null>(null)
 
-/** 滚动当前句子底边到蓝色指示线 */
+/** 滚动当前句子到容器可视区中心 */
 function scrollToCurrentSentence(): void {
   nextTick(() => {
-    if (!sentenceContainerRef.value) return
     const container = sentenceContainerRef.value
+    if (!container) return
     const currentEl = container.querySelector('.sentence-line.current')
     if (!(currentEl instanceof HTMLElement)) return
-
-    const containerHeight = container.clientHeight
-    const elTop = currentEl.offsetTop
-    const elHeight = currentEl.offsetHeight
-
-    const wrapperEl = container.parentElement
-    const wrapperHeight = wrapperEl?.clientHeight ?? containerHeight
-
-    // 计算将当前句底边对齐到蓝线所需的 scrollTop
-    // 句子底边 = elTop + elHeight，蓝线 = scrollTop + wrapperHeight/2
-    // 对齐条件：elTop + elHeight = scrollTop + wrapperHeight/2
-    let targetScrollTop = elTop + elHeight - (wrapperHeight / 2)
-    const maxScrollTop = container.scrollHeight - containerHeight
-
-    // 截断到有效范围
-    targetScrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop))
-
-    container.scrollTo({ top: targetScrollTop, behavior: 'instant' })
+    currentEl.scrollIntoView({ block: 'center', behavior: 'instant' })
   })
 }
 
@@ -349,7 +315,7 @@ watch(() => props.currentSentenceIndex, () => {
   scrollToCurrentSentence()
 })
 
-// 监听显示模式切换，重新对齐蓝线（句子高度变化导致偏移）
+// 监听显示模式切换，重新滚动当前句到可视区中心（句子高度变化导致偏移）
 watch(() => props.displayMode, () => {
   scrollToCurrentSentence()
 })
@@ -360,7 +326,7 @@ onMounted(() => {
 })
 
 // 句子窗口数据到达后也触发滚动（解决首次数据延迟问题）
-watch(() => props.sentenceWindow.length, (len) => {
+watch(() => props.sentences.length, (len) => {
   if (len > 0) {
     scrollToCurrentSentence()
   }
@@ -407,34 +373,13 @@ const selectRate = (rate: number) => {
   touch-action: pan-y;
 }
 
-// 首尾垫片：确保第一个和最后一个句子也能滚动到容器中央
-.sentence-list::before,
-.sentence-list::after {
-  content: '';
-  display: block;
-  height: 30vh;
-}
-
-// 句子列表外层容器 + 固定位置指示器
+// 句子列表外层容器
 .sentence-list-wrapper {
   flex: 1;
-  position: relative;
   overflow: hidden;
 }
 
-.current-sentence-indicator {
-  position: absolute;
-  left: 10%;
-  right: 10%;
-  top: 50%;
-  height: 2px;
-  background: var(--van-primary-color, #07c160);
-  border-radius: 2px;
-  transform: translateY(-50%);
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0.5;
-}
+
 
 .sentence-progress {
   padding: 6px 16px;
@@ -486,7 +431,7 @@ const selectRate = (rate: number) => {
   opacity: 0.35;
   text-align: center;
 
-  // 句子当前句高亮（指示线由固定 .current-sentence-indicator 提供）
+  // 句子当前句高亮（通过 .current 类的样式指示）
   &.current {
     opacity: 1;
     transform: scale(1.03);

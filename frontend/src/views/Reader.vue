@@ -23,6 +23,32 @@
                 <div class="nav-icon-btn" :class="{ 'playing': isPlayingAll, 'disabled': loading }" @click="!loading && togglePlayAll()">
           <i :class="['fas', isPlayingAll ? 'fa-pause-circle' : 'fa-play-circle']"></i>
         </div>
+        <!-- 调速按钮及速度选择器 -->
+        <van-popover
+          v-model:show="showSpeedPicker"
+          placement="bottom-end"
+          :overlay="true"
+        >
+          <template #reference>
+            <div class="nav-icon-btn speed-btn" :class="{ 'disabled': loading }">
+              <span class="speed-label">{{ playbackSpeed }}x</span>
+            </div>
+          </template>
+          <div class="speed-picker">
+            <div class="speed-picker-title">播放速度</div>
+            <div class="speed-options">
+              <div
+                v-for="speed in speedOptions"
+                :key="speed"
+                class="speed-option"
+                :class="{ 'active': playbackSpeed === speed }"
+                @click="selectSpeed(speed)"
+              >
+                {{ speed }}x
+              </div>
+            </div>
+          </div>
+        </van-popover>
         <!-- 横屏直接显示的按钮 -->
                 <div class="nav-icon-btn nav-more-actions" :class="{ 'disabled': loading }" @click="!loading && openDictionaryDialog()">
           <i class="fas fa-search"></i>
@@ -273,6 +299,14 @@ const router = useRouter()
 const authStore = useAuthStore()
 const bookId = ref('')
 
+// 播放速度相关状态（必须在 watch 前定义）
+const playbackSpeed = ref(1.0)
+const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+const showSpeedPicker = ref(false)
+
+// audioPlayer 必须在 watch 前定义，因为 watch 回调中引用了它
+const audioPlayer = ref<HTMLAudioElement | null>(null)
+
 // 页面句子缓存：key = pageIndex, value = [{ index, text }]
 const pageSentencesCache = ref<Record<number, { index: number; text: string }[]>>({})
 
@@ -282,17 +316,32 @@ watch(() => route.params.id, (newId: string | string[] | undefined) => {
     // 清除页面句子缓存（切换书籍时）
     pageSentencesCache.value = {}
     bookId.value = Array.isArray(newId) ? newId[0] : newId
+    // 进入新书，播放速度重置为 1.0
+    playbackSpeed.value = 1.0
+    if (audioPlayer.value) {
+      audioPlayer.value.playbackRate = 1.0
+    }
   }
 }, { immediate: true })
 
 const bookTitle = ref('')
 const bookPath = ref('')
 const loading = ref(true)
-const audioPlayer = ref<HTMLAudioElement | null>(null)
 const currentSentence = ref<HTMLElement | null>(null)
 const isPlayingAll = ref(false)
 // 记录最后一次播放的句子（用于恢复播放）
 const lastPlayedSentence = ref<HTMLElement | null>(null)
+
+// 选择播放速度
+const selectSpeed = (speed: number) => {
+  playbackSpeed.value = speed
+  showSpeedPicker.value = false
+  showToast(`播放速度: ${speed}x`)
+  // 立即应用到当前播放
+  if (audioPlayer.value) {
+    audioPlayer.value.playbackRate = speed
+  }
+}
 
 // 更多菜单
 const showMorePopover = ref(false)
@@ -808,6 +857,15 @@ const playSentence = async (el: HTMLElement) => {
       // 添加时间戳防止音频缓存
       const timestamp = Date.now()
       audioPlayer.value.src = buildStaticUrl(`/books/${bookPath.value}/audio/${mapping.audio_file}`) + `?t=${timestamp}`
+      // 设置播放速度（必须在设置 src 之后，否则部分浏览器会重置为 1.0）
+      audioPlayer.value.playbackRate = playbackSpeed.value
+      // 监听 loadedmetadata 事件，确保速度设置生效
+      const onLoaded = () => {
+        if (audioPlayer.value) {
+          audioPlayer.value.playbackRate = playbackSpeed.value
+        }
+      }
+      audioPlayer.value.addEventListener('loadedmetadata', onLoaded, { once: true })
       // 使用 Promise 处理播放，避免中断错误
       const playPromise = audioPlayer.value.play()
       if (playPromise !== undefined) {
@@ -2402,5 +2460,62 @@ onUnmounted(() => {
   font-size: 12px;
   color: #1989fa;
   margin-top: 4px;
+}
+
+/* 播放速度选择器样式 */
+.speed-btn {
+  .speed-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #1989fa;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  &:hover .speed-label {
+    color: #1677d9;
+  }
+}
+
+.speed-picker {
+  padding: 12px;
+  background: #fff;
+  min-width: 160px;
+
+  .speed-picker-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+
+  .speed-options {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+
+    .speed-option {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 4px;
+      font-size: 13px;
+      color: #333;
+      background: #f5f5f5;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+
+      &:hover {
+        background: #e8e8e8;
+      }
+
+      &.active {
+        background: #1989fa;
+        color: #fff;
+        font-weight: 500;
+      }
+    }
+  }
 }
 </style>
