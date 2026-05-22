@@ -2,7 +2,7 @@
  * 导入功能 Composable
  * 集中管理所有导入相关的状态和方法
  */
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { showNotify, showToast, showConfirmDialog } from 'vant'
 import { useAuthStore } from '@/store/auth'
 import { buildApiUrl } from '@/utils/apiBase'
@@ -13,11 +13,34 @@ export const useImport = () => {
 
   // ========== 导入相关状态 ==========
 
+  // 导入模式
+  const importMode = ref<'normal' | 'mp3_lrc'>('normal')
+
   // 导入对话框显示状态
   const showImportDialog = ref(false)
 
   // 导入目标分类ID
   const importCategoryId = ref(0)
+
+  // MP3+LRC 导入相关状态
+  const showMp3LrcZhDialog = ref(false)
+  const importedBookIds = ref<string[]>([])
+  const needZhAudio = ref(false)
+
+  // MP3+LRC 检查返回的 token（避免重复上传 ZIP）
+  const lastMp3LrcCheckToken = ref<string | null>(null)
+
+  const mp3LrcCheckResult = ref<{
+    valid_pairs: { name: string }[]
+    invalid_pairs: { name: string; reason: string }[]
+    total: number
+    message: string
+  }>({
+    valid_pairs: [],
+    invalid_pairs: [],
+    total: 0,
+    message: ''
+  })
 
   // 文件输入引用
   const fileInput = ref<HTMLInputElement | null>(null)
@@ -62,6 +85,12 @@ export const useImport = () => {
 
   // 导入完成后选择对话框
   const showChoiceDialog = ref(false)
+
+  // 中文语音生成进度
+  const showZhAudioProgress = ref(false)
+  const zhAudioProgress = ref(0)
+  const zhAudioMessage = ref('')
+  const zhAudioLoading = ref(false)
 
   // 覆盖模式（已有书籍ID）
   const overwriteMode = ref('')
@@ -238,24 +267,84 @@ export const useImport = () => {
   /**
    * 带上传进度的流式请求函数（用于导入书籍）
    */
-  const uploadWithProgressAndStream = (
+ const uploadWithProgressAndStream = (
     url: string,
     formData: FormData,
     statusText: string = '正在上传'
   ): Promise<void> => {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
+      let lastProcessedLen = 0
+
+      // 处理增量 SSE 数据（使用按行分割，正确处理嵌套 JSON）
+      const processSseData = async () => {
+        const text = xhr.responseText
+        if (text.length <= lastProcessedLen) return
+
+        const chunk = text.slice(lastProcessedLen)
+        lastProcessedLen = text.length
+
+        // 按行分割，处理好 \n 和 \r\n
+        const lines = chunk.split(/\r?\n/)
+        for (const rawLine of lines) {
+          const line = rawLine.trim()
+          if (!line.startsWith('data: ')) continue
+          const jsonStr = line.slice(6)  // 去掉 "data: " 前缀
+          if (!jsonStr) continue
+          try {
+            const data = JSON.parse(jsonStr)
+            importProgress.value = data.percentage || 0
+            importStatus.value = data.message || ''
+
+            if (data.success === true) {
+              showNotify({ type: 'success', message: data.message, duration: 1500 })
+              if (!data.book_id && overwriteMode.value) {
+                currentBookId.value = overwriteMode.value
+              } else {
+                currentBookId.value = data.book_id || ''
+              }
+              if (data.book_ids) {
+                importedBookIds.value = data.book_ids
+              }
+              if (data.need_zh_audio) {
+                needZhAudio.value = true
+              }
+              importCompleted.value = true
+              if (!isZipImport.value && !isBatchImport.value && importMode.value !== 'mp3_lrc') {
+                showChoiceDialog.value = true
+              }
+            } else if (data.success === false) {
+              showNotify({ type: 'danger', message: data.message })
+            }
+            await nextTick()  // 每次消息后刷新 DOM
+            // 短暂延迟确保浏览器渲染
+            await new Promise(resolve => setTimeout(resolve, 20))
+          } catch (e) {
+            console.error('解析SSE数据失败:', e)
+          }
+        }
+      }
 
       xhr.upload.addEventListener('progress', (event) => {
         if (event.lengthComputable) {
           const percentComplete = Math.round((event.loaded / event.total) * 100)
           uploadProgress.value = percentComplete
-          if (percentComplete >= 95) {
-            uploadStatus.value = '后端处理中，请稍候...'
-          } else {
-            uploadStatus.value = `${statusText}... ${percentComplete}%`
-          }
+          uploadStatus.value = `${statusText}... ${percentComplete}%`
         }
+      })
+
+      xhr.addEventListener('progress', async () => {
+        if (xhr.readyState !== XMLHttpRequest.LOADING && xhr.readyState !== XMLHttpRequest.DONE) return
+        // 首次收到响应数据，切换到"导入中"状态
+        if (!importing.value) {
+          uploading.value = false
+          uploadProgress.value = 0
+          uploadStatus.value = ''
+          importing.value = true
+          importProgress.value = 0
+          importStatus.value = statusText
+        }
+        await processSseData()
       })
 
       xhr.addEventListener('load', async () => {
@@ -263,44 +352,23 @@ export const useImport = () => {
         uploadProgress.value = 0
         uploadStatus.value = ''
 
-        importing.value = true
-        importProgress.value = 0
-        importStatus.value = '正在处理...'
-
         if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const text = xhr.responseText
-            const matches = text.matchAll(/data: (\{.*?\})/g)
-            for (const match of matches) {
-              try {
-                const data = JSON.parse(match[1])
-                importProgress.value = data.percentage || 0
-                importStatus.value = data.message || ''
-
-                if (data.success === true) {
-                  showNotify({ type: 'success', message: data.message, duration: 1500 })
-                  if (!data.book_id && overwriteMode.value) {
-                    currentBookId.value = overwriteMode.value
-                  } else {
-                    currentBookId.value = data.book_id || ''
-                  }
-                  importCompleted.value = true
-                  if (!isZipImport.value && !isBatchImport.value) {
-                    showChoiceDialog.value = true
-                  }
-                } else if (data.success === false) {
-                  showNotify({ type: 'danger', message: data.message })
-                }
-              } catch (e) {
-                console.error('解析SSE数据失败:', e)
-              }
-            }
-            resolve()
-          } catch (e) {
-            resolve()
-          }
+          importing.value = true
+          importProgress.value = 0
+          importStatus.value = statusText
+          await processSseData()
+          resolve()
         } else {
-          reject(new Error('导入请求失败'))
+          let errMsg = '导入请求失败'
+          try {
+            const errData = JSON.parse(xhr.responseText)
+            errMsg = errData.detail || errData.message || errMsg
+          } catch {
+            if (xhr.responseText) {
+              errMsg = xhr.responseText.slice(0, 200)
+            }
+          }
+          reject(new Error(errMsg))
         }
       })
 
@@ -329,6 +397,97 @@ export const useImport = () => {
   }
 
   /**
+   * 基于 token 的流式导入函数（无需重复上传文件，直接 SSE 读取进度）
+   */
+  const streamImportWithToken = (
+    url: string
+  ): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      importing.value = true
+      importProgress.value = 0
+      importStatus.value = '正在导入...'
+
+      const xhr = new XMLHttpRequest()
+      let lastProcessedLen = 0
+
+      const processSseData = async () => {
+        const text = xhr.responseText
+        if (text.length <= lastProcessedLen) return
+
+        const chunk = text.slice(lastProcessedLen)
+        lastProcessedLen = text.length
+
+        const lines = chunk.split(/\r?\n/)
+        for (const rawLine of lines) {
+          const line = rawLine.trim()
+          if (!line.startsWith('data: ')) continue
+          const jsonStr = line.slice(6)
+          if (!jsonStr) continue
+          try {
+            const data = JSON.parse(jsonStr)
+            importProgress.value = data.percentage || 0
+            importStatus.value = data.message || ''
+
+            if (data.success === true) {
+              showNotify({ type: 'success', message: data.message, duration: 1500 })
+              if (data.book_ids) {
+                importedBookIds.value = data.book_ids
+              }
+              if (data.need_zh_audio) {
+                needZhAudio.value = true
+              }
+              importCompleted.value = true
+            } else if (data.success === false) {
+              showNotify({ type: 'danger', message: data.message })
+            }
+            await nextTick()
+            await new Promise(resolve => setTimeout(resolve, 20))
+          } catch (e) {
+            console.error('解析SSE数据失败:', e)
+          }
+        }
+      }
+
+      xhr.addEventListener('progress', async () => {
+        if (xhr.readyState !== XMLHttpRequest.LOADING && xhr.readyState !== XMLHttpRequest.DONE) return
+        await processSseData()
+      })
+
+      xhr.addEventListener('load', async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          await processSseData()
+          resolve()
+        } else {
+          let errMsg = '导入请求失败'
+          try {
+            const errData = JSON.parse(xhr.responseText)
+            errMsg = errData.detail || errData.message || errMsg
+          } catch {
+            if (xhr.responseText) {
+              errMsg = xhr.responseText.slice(0, 200)
+            }
+          }
+          reject(new Error(errMsg))
+        }
+      })
+
+      xhr.addEventListener('error', () => {
+        importing.value = false
+        reject(new Error('Import request failed'))
+      })
+
+      xhr.addEventListener('abort', () => {
+        importing.value = false
+        reject(new Error('Import request aborted'))
+      })
+
+      xhr.open('POST', url)
+      xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+      xhr.send()
+    })
+  }
+
+  /**
    * 通过 token 确认导入（SSE流式进度）
    */
   const confirmWithStream = (token: string, options?: {
@@ -337,47 +496,89 @@ export const useImport = () => {
   }): Promise<void> => {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
+      let lastProcessedLen = 0
+
+      const processSseData = async () => {
+        const text = xhr.responseText
+        if (text.length <= lastProcessedLen) return
+
+        const chunk = text.slice(lastProcessedLen)
+        lastProcessedLen = text.length
+
+        const lines = chunk.split(/\r?\n/)
+        for (const rawLine of lines) {
+          const line = rawLine.trim()
+          if (!line.startsWith('data: ')) continue
+          const jsonStr = line.slice(6)
+          if (!jsonStr) continue
+          try {
+            const data = JSON.parse(jsonStr)
+            importProgress.value = data.percentage || 0
+            importStatus.value = data.message || ''
+
+            if (data.success === true) {
+              showNotify({ type: 'success', message: data.message, duration: 1500 })
+              if (data.book_id) {
+                currentBookId.value = data.book_id
+              }
+              // MP3+LRC: 收集 book_ids 并标记需要中文语音
+              if (data.book_ids) {
+                importedBookIds.value = data.book_ids
+              }
+              if (data.need_zh_audio) {
+                needZhAudio.value = true
+              }
+              importCompleted.value = true
+              if (uploadFileType.value === 'md') {
+                showChoiceDialog.value = true
+              }
+            } else if (data.success === false) {
+              showNotify({ type: 'danger', message: data.message })
+              importing.value = false
+              resolve()  // 失败时 resolve，调用者通过状态判断结果
+            }
+            await nextTick()
+            await new Promise(resolve => setTimeout(resolve, 20))
+          } catch (e) {
+            console.error('解析SSE数据失败:', e)
+          }
+        }
+      }
+
+      xhr.addEventListener('progress', async () => {
+        if (xhr.readyState !== XMLHttpRequest.LOADING && xhr.readyState !== XMLHttpRequest.DONE) return
+        // 首次收到响应数据，切换到"导入中"状态
+        if (!importing.value) {
+          importing.value = true
+          importProgress.value = 0
+          importStatus.value = '正在处理事务...'
+        }
+        await processSseData()
+      })
 
       xhr.addEventListener('load', async () => {
-        importing.value = true
-        importProgress.value = 0
-        importStatus.value = '正在处理...'
-
         if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const text = xhr.responseText
-            const matches = text.matchAll(/data: (\{.*?\})/g)
-            for (const match of matches) {
-              try {
-                const data = JSON.parse(match[1])
-                importProgress.value = data.percentage || 0
-                importStatus.value = data.message || ''
-
-                if (data.success === true) {
-                  showNotify({ type: 'success', message: data.message, duration: 1500 })
-                  if (data.book_id) {
-                    currentBookId.value = data.book_id
-                  }
-                  importCompleted.value = true
-                  if (uploadFileType.value === 'md') {
-                    showChoiceDialog.value = true
-                  }
-                } else if (data.success === false) {
-                  showNotify({ type: 'danger', message: data.message })
-                  importing.value = false
-                }
-              } catch (e) {
-                console.error('解析SSE数据失败:', e)
-              }
-            }
-            resolve()
-          } catch (e) {
-            resolve()
+          if (!importing.value) {
+            importing.value = true
+            importProgress.value = 0
+            importStatus.value = '正在处理事务...'
           }
+          await processSseData()
+          importing.value = false
+          resolve()
         } else {
-          reject(new Error('导入请求失败'))
+          let errMsg = '导入请求失败'
+          try {
+            const errData = JSON.parse(xhr.responseText)
+            errMsg = errData.detail || errData.message || errMsg
+          } catch {
+            if (xhr.responseText) {
+              errMsg = xhr.responseText.slice(0, 200)
+            }
+          }
+          importing.value = false
+          reject(new Error(errMsg))
         }
-        importing.value = false
       })
 
       xhr.addEventListener('error', () => {
@@ -656,12 +857,42 @@ export const useImport = () => {
   }
 
   /**
+   * 切换导入模式
+   */
+  const switchImportMode = (mode: 'normal' | 'mp3_lrc') => {
+    importMode.value = mode
+    // 切换模式时清空已选文件
+    selectedFile.value = null
+    selectedFiles.value = []
+    isBatchImport.value = false
+    isBatchMdImport.value = false
+    importCompleted.value = false
+    importProgress.value = 0
+    importStatus.value = ''
+    // 重置 MP3+LRC 相关状态
+    needZhAudio.value = false
+    importedBookIds.value = []
+    showMp3LrcZhDialog.value = false
+    // 清空文件输入元素的值，确保下次 @change 事件可触发
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
+  }
+
+  /**
    * 处理文件
    */
   const handleFile = async (file: File) => {
-    if (!file.name.endsWith('.md') && !file.name.endsWith('.zip')) {
-      showNotify({ type: 'danger', message: '只支持 .md 或 .zip 格式的文件' })
-      return
+    if (importMode.value === 'mp3_lrc') {
+      if (!file.name.endsWith('.zip')) {
+        showNotify({ type: 'danger', message: 'MP3/LRC模式只支持 .zip 格式' })
+        return
+      }
+    } else {
+      if (!file.name.endsWith('.md') && !file.name.endsWith('.zip')) {
+        showNotify({ type: 'danger', message: '只支持 .md 或 .zip 格式的文件' })
+        return
+      }
     }
 
     if (!authStore.isLoggedIn) {
@@ -723,9 +954,14 @@ export const useImport = () => {
   }
 
   /**
-   * 确认导入（Token式：先prepare-upload，再confirm-import）
+   * 确认导入
    */
   const handleImportConfirm = async () => {
+    // MP3+LRC 模式：先检查重复，再决定导入策略
+    if (importMode.value === 'mp3_lrc') {
+      return handleMp3LrcCheckAndImport()
+    }
+
     // 批量导入模式
     if (isBatchImport.value && selectedFiles.value.length > 0) {
       isBatchMdImport.value = true
@@ -1012,6 +1248,194 @@ export const useImport = () => {
     }
   }
 
+  /**
+   * MP3+LRC 导入前置检查（检查重复，显示对话框，然后按用户选择导入）
+   */
+  const handleMp3LrcCheckAndImport = async () => {
+    if (!selectedFile.value) {
+      showNotify({ type: 'warning', message: '请先选择ZIP文件' })
+      return
+    }
+
+    uploading.value = true
+    uploadProgress.value = 0
+    uploadStatus.value = '正在检查文件...'
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile.value)
+
+      const result = await uploadWithProgress(
+        buildApiUrl('/books/check-mp3-lrc-duplicates'),
+        formData,
+        '正在检查重复'
+      )
+
+      uploading.value = false
+      uploadStatus.value = ''
+
+      if (!result.ok || !result.data) {
+        showNotify({ type: 'danger', message: '文件检查失败' })
+        return
+      }
+
+      const data = result.data
+      const token = data.check_token || null
+      lastMp3LrcCheckToken.value = token
+
+      if (data.has_duplicates && data.duplicate_books?.length > 0) {
+        // 有重复，显示对话框让用户选择
+        duplicateCheckResult.value = {
+          has_duplicates: true,
+          duplicate_books: data.duplicate_books || [],
+          new_books: (data.new_books || []).map((b: any) => ({ title: b.title, book_id: b.book_id || '' })),
+          total_books: data.total_books || 0
+        }
+        showDuplicateDialog.value = true
+        importStatus.value = ''
+        return
+      }
+
+      // 无重复，直接导入（使用 token 避免重复上传）
+      await handleMp3LrcImport({ checkToken: token })
+    } catch (error) {
+      console.error('检查MP3+LRC重复失败:', error)
+      showNotify({ type: 'danger', message: '检查失败，请重试' })
+    } finally {
+      uploading.value = false
+      uploadProgress.value = 0
+      uploadStatus.value = ''
+    }
+  }
+
+  /**
+   * 执行 MP3+LRC 导入（直接上传到 /books/import-mp3-lrc）
+   */
+  const handleMp3LrcImport = async (options?: {
+    skipDuplicates?: boolean
+    overwriteBookIds?: string[]
+    checkToken?: string | null
+  }) => {
+    if (!selectedFile.value && !options?.checkToken) {
+      showNotify({ type: 'warning', message: '请先选择ZIP文件' })
+      return
+    }
+
+    importing.value = true
+    importCompleted.value = false
+    importProgress.value = 0
+    importStatus.value = '正在解析MP3+LRC配对...'
+
+    try {
+      const categoryId = importCategoryId.value
+      let apiPath = buildApiUrl('/books/import-mp3-lrc')
+      const params = new URLSearchParams()
+
+      if (categoryId) {
+        params.append('category_id', categoryId.toString())
+      }
+
+      if (options?.skipDuplicates) {
+        params.append('skip_duplicates', 'true')
+      }
+
+      if (options?.overwriteBookIds && options.overwriteBookIds.length > 0) {
+        params.append('overwrite_book_ids', options.overwriteBookIds.join(','))
+      }
+
+      if (options?.checkToken) {
+        // 使用 token，无需重复上传文件
+        params.append('check_token', options.checkToken)
+        apiPath += `?${params.toString()}`
+        await streamImportWithToken(apiPath)
+      } else {
+        // 无 token，传统上传方式
+        const formData = new FormData()
+        formData.append('file', selectedFile.value!)
+        if (params.toString()) {
+          apiPath += `?${params.toString()}`
+        }
+        await uploadWithProgressAndStream(apiPath, formData, '正在导入MP3+LRC文件')
+      }
+
+      // 导入完成后检查是否需要显示中文语音提醒
+      if (needZhAudio.value && importedBookIds.value.length > 0) {
+        showMp3LrcZhDialog.value = true
+      }
+    } catch (error: any) {
+      console.error('MP3+LRC导入失败:', error)
+      const message = error.message || '导入失败，请确认ZIP包包含正确配对的MP3和LRC文件'
+      showNotify({ type: 'danger', message })
+    } finally {
+      importing.value = false
+      if (fileInput.value) {
+        fileInput.value.value = ''
+      }
+    }
+  }
+
+  /**
+   * 导入后生成中文语音
+   */
+  const handleGenerateChineseAudio = async () => {
+    showMp3LrcZhDialog.value = false
+    const bookIds = importedBookIds.value
+    if (bookIds.length === 0) return
+
+    // 显示进度弹窗
+    showZhAudioProgress.value = true
+    zhAudioLoading.value = true
+    zhAudioProgress.value = 0
+    zhAudioMessage.value = '准备生成中...'
+
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < bookIds.length; i++) {
+      const bookId = bookIds[i]
+      zhAudioProgress.value = Math.round(((i + 1) / bookIds.length) * 100)
+      zhAudioMessage.value = `正在为第 ${i + 1}/${bookIds.length} 本书生成中文语音...`
+
+      try {
+        const response = await fetch(buildApiUrl(`/books/${bookId}/generate-chinese-audio`), {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${authStore.token}`
+          }
+        })
+        if (response.ok) {
+          successCount++
+        } else {
+          failCount++
+          console.error(`生成中文语音失败: ${bookId}`, response.status)
+        }
+      } catch (e) {
+        failCount++
+        console.error(`生成中文语音请求失败: ${bookId}`, e)
+      }
+    }
+
+    zhAudioProgress.value = 100
+    zhAudioMessage.value = '生成完成'
+    zhAudioLoading.value = false
+
+    if (failCount === 0) {
+      showNotify({ type: 'success', message: `中文语音生成任务已启动 (${successCount}本)`, duration: 2000 })
+    } else if (successCount > 0) {
+      showNotify({ type: 'warning', message: `部分完成: ${successCount}本成功, ${failCount}本失败`, duration: 3000 })
+    } else {
+      showNotify({ type: 'danger', message: `中文语音生成失败 (${failCount}本)`, duration: 3000 })
+    }
+  }
+
+  /**
+   * 稍后生成中文语音
+   */
+  const handleMp3LrcZhLater = () => {
+    showMp3LrcZhDialog.value = false
+    showNotify({ type: 'warning', message: '可在书籍详情页的「补充中文语音」功能中生成', duration: 2000 })
+  }
+
   // ========== 重复书籍处理 ==========
 
   /**
@@ -1021,7 +1445,14 @@ export const useImport = () => {
     showDuplicateDialog.value = false
     importAction.value = 'overwrite'
 
-    if (isBatchMdImport.value) {
+    if (importMode.value === 'mp3_lrc') {
+      // 获取所有重复书籍的 ID，传递到后端以覆盖这些书籍
+      const allDuplicateIds = duplicateCheckResult.value.duplicate_books.map((b: any) => b.book_id)
+      handleMp3LrcImport({
+        overwriteBookIds: allDuplicateIds,
+        checkToken: lastMp3LrcCheckToken.value
+      })
+    } else if (isBatchMdImport.value) {
       doBatchImportWithAction()
     } else {
       doImportZipWithAction()
@@ -1036,7 +1467,12 @@ export const useImport = () => {
     importAction.value = 'skip'
     selectedDuplicateBooks.value = []
 
-    if (isBatchMdImport.value) {
+    if (importMode.value === 'mp3_lrc') {
+      handleMp3LrcImport({
+        skipDuplicates: true,
+        checkToken: lastMp3LrcCheckToken.value
+      })
+    } else if (isBatchMdImport.value) {
       doBatchImportWithAction()
     } else {
       doImportZipWithAction()
@@ -1050,7 +1486,12 @@ export const useImport = () => {
     showDuplicateDialog.value = false
     importAction.value = 'selected'
 
-    if (isBatchMdImport.value) {
+    if (importMode.value === 'mp3_lrc') {
+      handleMp3LrcImport({
+        overwriteBookIds: [...selectedDuplicateBooks.value],
+        checkToken: lastMp3LrcCheckToken.value
+      })
+    } else if (isBatchMdImport.value) {
       doBatchImportWithAction()
     } else {
       doImportZipWithAction()
@@ -1270,6 +1711,10 @@ export const useImport = () => {
     isZipImport.value = false
     isBatchImport.value = false
     isBatchMdImport.value = false
+    // 清空文件输入元素的值，确保下次 @change 事件可触发
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
     importAction.value = null
     selectedDuplicateBooks.value = []
     duplicateCheckResult.value = {
@@ -1282,6 +1727,18 @@ export const useImport = () => {
     uploadToken.value = ''
     uploadFileType.value = ''
     prepareResult.value = null
+
+    // 重置 MP3+LRC 状态
+    importMode.value = 'normal'
+    needZhAudio.value = false
+    importedBookIds.value = []
+    showMp3LrcZhDialog.value = false
+
+    // 重置中文语音生成进度
+    showZhAudioProgress.value = false
+    zhAudioProgress.value = 0
+    zhAudioMessage.value = ''
+    zhAudioLoading.value = false
   }
 
   // ========== 导出 ==========
@@ -1289,6 +1746,7 @@ export const useImport = () => {
     // 状态
     showImportDialog,
     importCategoryId,
+    importMode,
     fileInput,
     importing,
     importCompleted,
@@ -1310,6 +1768,17 @@ export const useImport = () => {
     duplicateCheckResult,
     importAction,
     selectedDuplicateBooks,
+
+    // MP3/LRC 导入
+    showMp3LrcZhDialog,
+    importedBookIds,
+    needZhAudio,
+
+    // 中文语音生成进度
+    showZhAudioProgress,
+    zhAudioProgress,
+    zhAudioMessage,
+    zhAudioLoading,
 
     // Token式导入
     uploadToken,
@@ -1366,5 +1835,12 @@ export const useImport = () => {
     // Token式方法
     confirmWithStream,
     cancelUploadByToken,
+
+    // MP3/LRC 方法
+    switchImportMode,
+    handleMp3LrcImport,
+    handleMp3LrcCheckAndImport,
+    handleGenerateChineseAudio,
+    handleMp3LrcZhLater,
   }
 }

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from app.schemas.book import BookInfo, BookDetail, BookImportResponse, BookUpdateRequest, BookUpdateResponse, BookPagesResponse, BookRenameRequest, BookRenameResponse, TranslationStatusResponse, RetryTranslateResponse, UpdateSentenceTranslationRequest, UpdateSentenceTranslationResponse, SentencePreviewResponse, SentenceUpdateRequest, SentenceUpdateResponse, BookSentencesResponse, PrepareImportResponse
 from app.services.book_service import book_service, get_effective_translation_api_config, get_cancel_event, clear_cancel_event
+from app.services.mp3_lrc_import_service import mp3_lrc_import_service
 from app.services.precompile_service import precompile_service
 from app.core.database import get_db
 from app.utils.sse_utils import format_sse_message
@@ -704,6 +705,141 @@ async def confirm_import(
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/import-mp3-lrc")
+async def import_mp3_lrc(
+    file: Optional[UploadFile] = File(None),
+    check_token: Optional[str] = Query(None, description="从check-mp3-lrc-duplicates获取的token，提供后无需重复上传文件"),
+    category_id: Optional[int] = Query(None),
+    skip_duplicates: Optional[bool] = Query(False, description="跳过已存在的书籍"),
+    overwrite_book_ids: Optional[str] = Query(None, description="指定要覆盖的书籍ID列表，逗号分隔"),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """
+    导入 MP3+LRC 配对的 ZIP 包（SSE流式进度）。
+
+    要求：
+    - ZIP 包内包含同名的 .mp3 和 .lrc 文件
+    - LRC 格式：[mm:ss.xx]英文句子|中文翻译
+    - 英文句子会切割为单独的音频片段
+    - 中文翻译写入 sentences.json 的 translation 字段
+    - 中文语音留空，用户可通过「补充中文语音」功能生成
+
+    重复处理：
+    - skip_duplicates=True 时跳过已存在的书籍
+    - overwrite_book_ids 指定要覆盖的书籍ID，其他重复书籍会被跳过
+    """
+    # 获取 ZIP 内容：优先从 token 读取（避免重复上传），其次从上传文件读取
+    if check_token:
+        meta = get_meta(check_token)
+        if not meta:
+            raise HTTPException(status_code=400, detail="Token已过期（超过30分钟未操作），请重新选择文件进行导入")
+        content, original_filename = await read_file(check_token)
+    else:
+        if not file or not file.filename:
+            raise HTTPException(status_code=400, detail="请提供文件或有效的check_token")
+        if not file.filename.endswith('.zip'):
+            raise HTTPException(status_code=400, detail="只支持 .zip 格式")
+        content = await file.read()
+        original_filename = file.filename
+
+    # 文件大小限制：500MB
+    MAX_FILE_SIZE = 500 * 1024 * 1024
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="文件大小超过 500MB 限制"
+        )
+
+    # 解析要覆盖的书籍ID列表
+    overwrite_ids = None
+    if overwrite_book_ids:
+        overwrite_ids = [id.strip() for id in overwrite_book_ids.split(",") if id.strip()]
+
+    async def event_generator():
+        queue = asyncio.Queue()
+        progress_callback = create_progress_callback(queue)
+
+        task = asyncio.create_task(
+            mp3_lrc_import_service.import_mp3_lrc_book(
+                db=db,
+                zip_bytes=content,
+                original_filename=original_filename,
+                progress_callback=progress_callback,
+                category_id=category_id,
+                user_id=admin.id,
+                skip_duplicates=skip_duplicates,
+                overwrite_book_ids=overwrite_ids
+            )
+        )
+
+        # 自定义 SSE 生成器：确保 book_ids 和 need_zh_audio 传递到前端
+        while True:
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=0.5)
+                extra = {k: v for k, v in data.items() if k not in ("percentage", "message")}
+                pct = data.get("percentage", 0)
+                msg = data.get("message", "")
+                logger.info(f"发送SSE: pct={pct}, msg={msg}")
+                sse_msg = format_sse_message(pct, msg, **extra)
+                yield sse_msg
+            except asyncio.TimeoutError:
+                if task.done():
+                    try:
+                        result = task.result()
+                        extra = {}
+                        if hasattr(result, "success"):
+                            extra["success"] = result.success
+                        if hasattr(result, "book_ids"):
+                            extra["book_ids"] = result.book_ids
+                        if hasattr(result, "success") and result.success:
+                            extra["need_zh_audio"] = True
+                        msg = getattr(result, "message", "导入完成")
+                        yield format_sse_message(100, msg, **extra)
+                    except Exception as e:
+                        yield format_sse_message(0, f"MP3+LRC导入失败: {str(e)}", False)
+                    finally:
+                        # 如果是通过 token 读取的，导入完成后清理临时文件
+                        if check_token:
+                            await cleanup(check_token)
+                    break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked",
+        }
+    )
+
+
+@router.post("/check-mp3-lrc-duplicates")
+async def check_mp3_lrc_duplicates(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    检查MP3+LRC ZIP包中的书籍是否已存在。
+    同时保存 ZIP 到临时存储，返回 check_token 后续导入使用（避免重复上传）。
+    """
+    if not file.filename or not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="只支持 .zip 格式")
+
+    content = await file.read()
+
+    # 保存文件到临时存储，后续导入可直接使用 token 无需重复上传
+    token = generate_token()
+    await save_file(token, content, file.filename)
+
+    result = await mp3_lrc_import_service.check_mp3_lrc_duplicates(db, content)
+    result["check_token"] = token
+    return result
 
 
 @router.post("/cancel-import")

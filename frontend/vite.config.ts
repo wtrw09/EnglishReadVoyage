@@ -64,6 +64,13 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            // 禁用 SSE 响应缓冲，确保 progress 事件实时触发
+            proxyRes.headers['x-accel-buffering'] = 'no'
+            proxyRes.headers['cache-control'] = 'no-cache'
+          })
+        }
       },
       // 使用正则，必须带尾斜杠才代理，避免误伤前端路由 /audiobook
       '^/books/': {
