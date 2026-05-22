@@ -1,5 +1,6 @@
 """MP3+LRC 书籍导入服务"""
 import os
+import sys
 import re
 import json
 import io
@@ -30,11 +31,14 @@ class Mp3LrcImportService:
 
     @staticmethod
     def _get_ffmpeg_path() -> str:
-        """获取 ffmpeg 可执行文件路径，优先使用项目目录下的 ffmpeg.exe"""
-        local_ffmpeg = Path(__file__).parent.parent.parent / "ffmpeg.exe"
-        if local_ffmpeg.exists():
-            return str(local_ffmpeg)
-        return "ffmpeg"  # 回退到系统 PATH
+        """获取 ffmpeg 可执行文件路径"""
+        # Windows 本地开发：优先使用项目目录下的 ffmpeg.exe
+        if sys.platform == "win32":
+            local_ffmpeg = Path(__file__).parent.parent.parent / "ffmpeg.exe"
+            if local_ffmpeg.exists():
+                return str(local_ffmpeg)
+        # Linux/Mac/Docker：使用系统 PATH 中的 ffmpeg
+        return "ffmpeg"
 
     @staticmethod
     def check_ffmpeg_available() -> bool:
