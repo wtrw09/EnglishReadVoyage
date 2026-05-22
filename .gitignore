@@ -36,6 +36,10 @@ ENV/
 # Environment variables
 .env
 
+# FFmpeg 本地二进制
+backend/ffmpeg.exe
+backend/ffmpeg
+
 # Model files
 *.pth
 *.pt

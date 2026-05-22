@@ -1130,7 +1130,6 @@ const playAudio = async () => {
       const track = timeline[trackIndex]
       if (track) {
         const localMs = globalMs - track.startMs
-        console.log('[Replay] playAudio: 捕获起点, globalMs=', globalMs, ', localMs=', localMs, ', trackIndex=', trackIndex)
         replayRange.value = {
           startGlobalMs: globalMs,
           endGlobalMs: globalMs,
@@ -1849,11 +1848,9 @@ const replaySentence = async () => {
   if (lastReplaySavedRange) {
     // 连续复读：始终使用首次记录的原始范围，彻底杜绝 progress 篡改的漂移
     savedRange = lastReplaySavedRange
-    console.log('[Replay] 使用 lastReplaySavedRange（连续复读, endOffset 不变=', lastReplaySavedRange.endOffsetMs, '）')
   } else if (replayRange.value) {
     // 首次复读：从 replayRange 获取用户实际播放范围
     savedRange = { ...replayRange.value }
-    console.log('[Replay] 首次从 replayRange 捕获, endOffset=', savedRange.endOffsetMs)
   }
   replayRange.value = null
   
@@ -1864,15 +1861,9 @@ const replaySentence = async () => {
     lastReplaySavedRange = savedRange
   }
   
-  console.log('[Replay] ===== 复读按钮点击 =====')
-  console.log('[Replay] 已保存 range:', JSON.parse(JSON.stringify(savedRange)))
-  console.log('[Replay] 当前 player.getCurrentIndex():', player.getCurrentIndex())
-  console.log('[Replay] 当前 currentGlobalMs:', currentGlobalMs.value)
-  
   if (savedRange) {
     if (savedRange.startTrackIndex === savedRange.endTrackIndex) {
       // 同句子内部分播放：从起始偏移播放到结束偏移
-      console.log('[Replay] 同句内精准复读: trackIdx=', savedRange.startTrackIndex, ', startOffset=', savedRange.startOffsetMs, ', endOffset=', savedRange.endOffsetMs)
       await player.seekToTrack(savedRange.startTrackIndex, savedRange.startOffsetMs)
       
       scheduleReplayEnd(savedRange.endTrackIndex, savedRange.endOffsetMs)
@@ -1881,7 +1872,6 @@ const replaySentence = async () => {
       try { await player.play() } catch { /* ignore */ }
     } else {
       // 跨句子播放：从结束句子的开头开始播放（用户实际是从 A 末尾播到 B 开头，复读从 B 句开头播到停止位置）
-      console.log('[Replay] 跨句精准复读: startTrack=', savedRange.startTrackIndex, ', endTrack=', savedRange.endTrackIndex, ', endOffset=', savedRange.endOffsetMs)
       await player.seekToTrack(savedRange.endTrackIndex, 0)
       // 设置终点，从 B 句开头播到用户实际停止位置
       if (savedRange.endOffsetMs > 0) {
@@ -1891,14 +1881,13 @@ const replaySentence = async () => {
     }
   } else {
     // 无历史范围，回退到原逻辑（从头播放当前句）
-    console.log('[Replay] 回退到原逻辑：从头播放当前句')
     let current = player.getCurrentIndex()
     if (current < 0) current = 0
     try {
       await player.seekToTrack(current, 0)
       try { await player.play() } catch { /* ignore */ }
-    } catch (e) {
-      console.error('[Replay] error:', e)
+    } catch {
+      // ignored
     }
   }
   
@@ -1912,16 +1901,13 @@ const scheduleReplayEnd = (trackIndex: number, endOffsetMs: number) => {
   const currentIdx = player.getCurrentIndex()
   const track = timeline[trackIndex]
   if (!track) {
-    console.log('[Replay] scheduleReplayEnd: track 不存在，trackIndex=', trackIndex)
     return
   }
   // 验证目标 track 与当前播放位置的一致性，避免快速点击导致的位置错乱
   if (trackIndex !== currentIdx) {
-    console.log('[Replay] scheduleReplayEnd: track 不匹配，跳过, trackIndex=', trackIndex, ', currentIdx=', currentIdx)
     return
   }
   const targetGlobalMs = track.startMs + endOffsetMs
-  console.log('[Replay] scheduleReplayEnd: 设置目标终点 globalMs=', targetGlobalMs, ', track.startMs=', track.startMs, ', endOffsetMs=', endOffsetMs)
   replayTargetGlobalMs = targetGlobalMs
 }
 
@@ -2077,7 +2063,6 @@ onMounted(() => {
     
     // 精准复读目标检测：实时检查是否到达终点（优先执行，不受 replayRange 更新影响）
     if (replayTargetGlobalMs !== null && globalMs >= replayTargetGlobalMs) {
-      console.log('[Replay] 到达目标终点: globalMs=', globalMs, ', target=', replayTargetGlobalMs, '，暂停播放')
       replayTargetGlobalMs = null
       pauseAudio()
       replayRange.value = null  // 清空本次被 progress 初始化的范围，下次复读回退到 lastReplaySavedRange
@@ -2088,7 +2073,6 @@ onMounted(() => {
     if (isPlaying.value && playerMode.value === 'training') {
       if (replayRange.value === null) {
         // 开始新的播放范围
-        console.log('[Replay] progress: 初始化 replayRange, globalMs=', globalMs, ', localMs=', localMs, ', trackIndex=', trackIndex)
         replayRange.value = {
           startGlobalMs: globalMs,
           endGlobalMs: globalMs,
@@ -2101,17 +2085,10 @@ onMounted(() => {
         }
       } else {
         // 更新范围（扩展已播放区域）
-        // 调试：每5秒输出一次更新
-        const prevEndOffset = replayRange.value.endOffsetMs
         replayRange.value.endGlobalMs = globalMs
         replayRange.value.endSentenceIndex = currentSentenceIndex.value
         replayRange.value.endTrackIndex = trackIndex
         replayRange.value.endOffsetMs = localMs
-        
-        // 仅当结束位置变化超过100ms或有track切换时打印
-        if (localMs < 100 || localMs > prevEndOffset + 100 || trackIndex !== replayRange.value.startTrackIndex) {
-          console.log('[Replay] progress: 更新 replayRange, endOffsetMs:', prevEndOffset, '->', localMs, ', trackIndex:', trackIndex)
-        }
       }
     }
   })

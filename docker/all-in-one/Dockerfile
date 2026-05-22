@@ -71,6 +71,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     libsqlite3-0 \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     # 删除 nginx 默认站点配置，避免覆盖我们的配置

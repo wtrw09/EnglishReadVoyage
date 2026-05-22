@@ -238,7 +238,7 @@
       v-model:show="showAddGroupDialog"
       title="添加分组"
       show-cancel-button
-      @confirm="handleAddGroup"
+      @confirm="handleAddGroupWithRefresh"
     >
       <van-field
         v-model="newGroupName"
@@ -298,7 +298,7 @@
       v-model:show="showRenameGroupDialog"
       title="修改分组名称"
       show-cancel-button
-      @confirm="handleRenameGroup"
+      @confirm="handleRenameGroupWithRefresh"
     >
       <van-field
         v-model="renameGroupName"
@@ -392,7 +392,7 @@
       :hide-read-books-map="hideReadBooksMap"
       @toggle-hide-read="toggleHideReadBooks"
       @rename="openRenameGroupDialog"
-      @delete="confirmDeleteGroup"
+      @delete="confirmDeleteGroupWithRefresh"
       @select-all-books="handleSelectAllInGroup"
     />
 
@@ -561,6 +561,24 @@ const {
   handleRenameGroup,
   confirmDeleteGroup,
 } = useGroupManagement()
+
+// 修改分组名称（带刷新）
+const handleRenameGroupWithRefresh = async () => {
+  await handleRenameGroup()
+  await loadGroups()
+}
+
+// 删除分组（带刷新）
+const confirmDeleteGroupWithRefresh = async () => {
+  await confirmDeleteGroup()
+  await loadGroups()
+}
+
+// 添加分组（带刷新）
+const handleAddGroupWithRefresh = async () => {
+  await handleAddGroup()
+  await loadGroups()
+}
 
 // 保存分组排序（带刷新）
 const handleSaveGroupOrder = async () => {
@@ -1085,15 +1103,14 @@ const confirmDeleteBook = async () => {
     message: `确定要删除《${contextMenuBook.value.title}》吗？此操作不可恢复！`
   }).catch(() => null)
   if (!confirm) return
+  showLoadingToast({ message: '删除中...', forbidClick: true, duration: 0 })
   try {
-    bookGroups.value = bookGroups.value.map(group => ({
-      ...group,
-      books: group.books.filter(book => book.id !== contextMenuBook.value!.id)
-    })).filter(group => group.books.length > 0)
     await api.delete(`/books/${contextMenuBook.value.id}`)
+    closeToast()
     showNotify({ type: 'success', message: '删除成功', duration: 1500 })
     await loadGroups()
   } catch (error: any) {
+    closeToast()
     showNotify({ type: 'danger', message: error.response?.data?.detail || '删除失败' })
     await loadGroups()
   }
@@ -1105,23 +1122,31 @@ const batchDeleteBooks = async () => {
     message: `确定要删除选中的 ${selectedBooks.value.length} 本书籍吗？此操作不可恢复！`
   }).catch(() => null)
   if (!confirm) return
-  try {
-    const deletedBookIds = new Set(selectedBooks.value)
-    bookGroups.value = bookGroups.value.map(group => ({
-      ...group,
-      books: group.books.filter(book => !deletedBookIds.has(book.id))
-    })).filter(group => group.books.length > 0)
-    for (const bookId of selectedBooks.value) {
+  showLoadingToast({ message: '删除中...', forbidClick: true, duration: 0 })
+  let successCount = 0
+  let failCount = 0
+  const targets = [...selectedBooks.value]
+  for (const bookId of targets) {
+    try {
       await api.delete(`/books/${bookId}`)
+      successCount++
+    } catch (error: any) {
+      failCount++
+      console.error(`删除书籍失败: ${bookId}`, error)
     }
-    showNotify({ type: 'success', message: '删除成功', duration: 1500 })
-    selectedBooks.value = []
-    isMultiSelect.value = false
-    await loadGroups()
-  } catch (error: any) {
-    showNotify({ type: 'danger', message: error.response?.data?.detail || '删除失败' })
-    await loadGroups()
   }
+  closeToast()
+  const total = targets.length
+  if (failCount === 0) {
+    showNotify({ type: 'success', message: `删除成功 (${total}本)`, duration: 1500 })
+  } else if (successCount > 0) {
+    showNotify({ type: 'warning', message: `部分完成: ${successCount}本成功, ${failCount}本失败`, duration: 3000 })
+  } else {
+    showNotify({ type: 'danger', message: '删除失败', duration: 2000 })
+  }
+  selectedBooks.value = []
+  isMultiSelect.value = false
+  await loadGroups()
 }
 
 // 分组右键菜单操作

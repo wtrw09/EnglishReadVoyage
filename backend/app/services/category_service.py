@@ -63,7 +63,7 @@ class CategoryService:
             Category.user_id == user_id
         ).order_by(Category.sort_order.desc())
         result_max = await db.execute(stmt_max)
-        max_category = result_max.scalar_one_or_none()
+        max_category = result_max.scalars().first()
         next_sort_order = (max_category.sort_order + 1) if max_category else 1
 
         # 创建新分类

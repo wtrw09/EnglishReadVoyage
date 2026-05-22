@@ -30,6 +30,92 @@ EnglishReadVoyage is a tool that helps English learners improve their English th
 - **Dictionary API Configuration**: Configure API keys for online dictionaries like Merriam-Webster.
 - **Voice Cache Management**: Generate and clean up voice caches.
 
+## Book Import Format Requirements
+
+The system supports two ways to import books: **Markdown/ZIP Import** and **MP3+LRC Import**.
+
+### Regular Import (Markdown/ZIP)
+
+Upload `.md` files or `.zip` packages with a complete book structure. ZIP structure example:
+
+```
+All_About_Coyotes.zip
+└── All_About_Coyotes/
+    ├── All_About_Coyotes.md        # Book content (Markdown)
+    ├── assets/                     # Image resources
+    │   ├── cover.jpg               # Cover image
+    │   └── image_01.jpg
+    └── audio/                      # Audio files
+        ├── sentences.json          # Sentence mapping
+        └── a1b2c3d4...mp3
+```
+
+### MP3+LRC Book Import
+
+For English learning materials with accompanying audio and subtitles (e.g., New Concept English, English listening textbooks).
+
+#### File Requirements
+
+- Package **MP3 audio** and **LRC bilingual lyrics** into a `.zip` file
+- MP3 and LRC must have **the same filename** (only extension differs)
+- Each pair = 1 book
+- A single ZIP can contain multiple pairs (batch import)
+
+#### ZIP Structure Example
+
+```
+my_books.zip
+├── Lesson_01.mp3
+├── Lesson_01.lrc
+├── Lesson_02.mp3
+├── Lesson_02.lrc
+└── Lesson_03.mp3
+   (Lesson_03.lrc missing, this pair is invalid)
+```
+
+#### LRC Format Requirements (Strict)
+
+Each line in the LRC file must follow this format:
+
+```
+[mm:ss.xx]English sentence|Chinese translation
+```
+
+**⚠ Key Rules:**
+
+- Use **`|` (pipe)** to separate English and Chinese — **do NOT** use `/`, `\t` (Tab), or other symbols
+- The **left side** of the pipe must be the English text
+- The **right side** is the corresponding Chinese translation
+- Timestamp format: `[mm:ss.xx]` (minutes:seconds.centiseconds)
+
+**Correct Example** (from New Concept English NCE1):
+
+```
+[00:05.61]Excuse me!|打扰一下！
+[00:10.80]Whose handbag is it?|这是谁的手提包？
+[00:15.11]Excuse me!|打扰一下！
+[00:16.66]Yes?|什么事？
+[00:18.26]Is this your handbag?|这是你的手提包吗？
+[00:21.44]Pardon?|什么？请再说一遍。
+[00:23.17]Is this your handbag?|这是你的手提包吗？
+[00:26.73]Yes it is.|是的，它是。
+[00:29.49]Thank you very much.|非常感谢您。
+```
+
+**Wrong Examples**:
+
+```lrc
+[00:05.61]Excuse me!/打扰一下！       # ❌ Do NOT use / as separator
+[00:10.80]Excuse me!\t打扰一下！        # ❌ Do NOT use Tab as separator
+[00:15.11]Excuse me!                     # ⚠ No | separator, Chinese translation will be missing
+```
+
+#### After Import
+
+- Only English audio is extracted and saved. Chinese translations from LRC are stored in the `translation` field of `sentences.json`
+- Chinese audio is empty by default — you'll be prompted to generate it via the "Generate Chinese Audio" feature after import
+- Embedded cover image (APIC frame) in the MP3 will be automatically extracted as the book cover
+
 ## Deploy Backend Service
 
 This project provides Docker image deployment without needing to install Python or Node.js.

@@ -30,6 +30,92 @@ EnglishReadVoyage 是一个帮助英语学习者通过**加强阅读**提升英�
 - **词典 API 配置**：配置韦氏词典等在线词典的 API Key
 - **语音缓存管理**：生成和清理语音缓存
 
+## 书籍导入格式要求
+
+系统支持两种书籍导入方式：**Markdown/ZIP 导入**和 **MP3+LRC 导入**。
+
+### 常规导入（Markdown/ZIP）
+
+支持上传 `.md` 文件或包含完整书籍结构的 `.zip` 包。ZIP 包目录结构示例：
+
+```
+All_About_Coyotes.zip
+└── All_About_Coyotes/
+    ├── All_About_Coyotes.md        # 书籍内容（Markdown格式）
+    ├── assets/                     # 图片资源
+    │   ├── cover.jpg               # 封面图
+    │   └── image_01.jpg
+    └── audio/                      # 语音文件
+        ├── sentences.json          # 句子映射
+        └── a1b2c3d4...mp3
+```
+
+### MP3+LRC 书籍导入
+
+适用于已有英语教材配套音频和字幕（如新概念英语、英语听力教材等）。
+
+#### 文件要求
+
+- 将 **MP3 音频**和 **LRC 双语歌词** 打包为 `.zip` 文件上传
+- MP3 和 LRC 必须**同名配对**（仅扩展名不同）
+- 每个配对 = 1 本书
+- 一个 ZIP 可包含多个配对（批量导入）
+
+#### ZIP 目录示例
+
+```
+my_books.zip
+├── Lesson_01.mp3
+├── Lesson_01.lrc
+├── Lesson_02.mp3
+├── Lesson_02.lrc
+└── Lesson_03.mp3
+   （Lesson_03.lrc 缺失，此配对无效）
+```
+
+#### LRC 格式要求（严格）
+
+LRC 文件每行格式必须为：
+
+```
+[mm:ss.xx]English sentence|中文翻译
+```
+
+**⚠ 关键规则：**
+
+- 使用 **`|`（竖线）** 分隔英文和中文，**不能用** `/`、`\t`（Tab）或其他符号
+- 竖线**左边**必须是英文原文
+- 竖线**右边**是对应的中文翻译
+- 每行时间戳格式为 `[mm:ss.xx]`（分:秒.百分秒）
+
+**正确示例**（来自新概念英语 NCE1）：
+
+```
+[00:05.61]Excuse me!|打扰一下！
+[00:10.80]Whose handbag is it?|这是谁的手提包？
+[00:15.11]Excuse me!|打扰一下！
+[00:16.66]Yes?|什么事？
+[00:18.26]Is this your handbag?|这是你的手提包吗？
+[00:21.44]Pardon?|什么？请再说一遍。
+[00:23.17]Is this your handbag?|这是你的手提包吗？
+[00:26.73]Yes it is.|是的，它是。
+[00:29.49]Thank you very much.|非常感谢您。
+```
+
+**错误示例**：
+
+```lrc
+[00:05.61]Excuse me!/打扰一下！       # ❌ 不能使用 / 分隔
+[00:10.80]Excuse me!\t打扰一下！        # ❌ 不能使用 Tab 分隔
+[00:15.11]Excuse me!                     # ⚠ 无|分隔符，中文翻译会缺失
+```
+
+#### 导入后说明
+
+- 仅英文音频会被切割保存，中文翻译从 LRC 提取后存入 `sentences.json` 的 `translation` 字段
+- 中文语音默认为空，导入完成后会提示用户通过「补充中文语音」功能生成
+- MP3 内嵌封面图（APIC 帧）会自动提取作为书籍封面
+
 ## 安装部署服务后端
 
 本项目提供 Docker 镜像部署方式，无需安装 Python 或 Node.js。

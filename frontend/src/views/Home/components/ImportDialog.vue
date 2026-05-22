@@ -18,6 +18,25 @@
     width="320px"
     @closed="onImportDialogClosed"
   >
+    <!-- 导入模式切换 -->
+    <div class="mode-tabs">
+      <div
+        class="mode-tab"
+        :class="{ active: importMode === 'normal' }"
+        @click="switchImportMode('normal')"
+      >
+        <i class="fas fa-file-lines"></i>
+        <span>导入书籍</span>
+      </div>
+      <div
+        class="mode-tab"
+        :class="{ active: importMode === 'mp3_lrc' }"
+        @click="switchImportMode('mp3_lrc')"
+      >
+        <i class="fas fa-headphones"></i>
+        <span>MP3/LRC</span>
+      </div>
+    </div>
     <div class="import-dialog-content">
       <div
         class="drop-zone"
@@ -36,20 +55,30 @@
           <p class="file-hint">点击更换文件</p>
         </template>
         <template v-else>
-          <i class="fas fa-plus" style="font-size: 40px; color: #969799;"></i>
-          <p>拖拽MD或ZIP文件到这里，或点击选择</p>
-          <p class="hint">支持 .md 和 .zip 格式，支持多选MD文件批量导入</p>
+          <template v-if="importMode === 'mp3_lrc'">
+            <i class="fas fa-headphones" style="font-size: 40px; color: #969799;"></i>
+            <p>拖拽ZIP文件到这里（内含mp3+lrc配对）</p>
+            <p class="hint">支持 .zip 格式，需包含同名的 .mp3 和 .lrc 文件</p>
+          </template>
+          <template v-else>
+            <i class="fas fa-plus" style="font-size: 40px; color: #969799;"></i>
+            <p>拖拽MD或ZIP文件到这里，或点击选择</p>
+            <p class="hint">支持 .md 和 .zip 格式，支持多选MD文件批量导入</p>
+          </template>
         </template>
       </div>
 
-      <input
-        ref="fileInput"
-        type="file"
-        accept=".md,.zip"
-        hidden
-        multiple
-        @change="onFileSelected"
-      />
+      <!-- 使用 teleport 将文件输入框移到 body 层级，避免 Windows 文件选择器焦点问题 -->
+      <teleport to="body">
+        <input
+          ref="fileInput"
+          type="file"
+          :accept="importMode === 'mp3_lrc' ? '.zip' : '.md,.zip'"
+          hidden
+          :multiple="importMode !== 'mp3_lrc'"
+          @change="onFileSelected"
+        />
+      </teleport>
 
       <!-- 导入进度 -->
       <div v-if="uploading || importing || importProgress === 100" class="import-progress">
@@ -166,7 +195,7 @@
   <van-dialog
     :show="showImportCheckDialog"
     title="导入检查结果"
-    :show-confirm-button="true"
+    :show-confirm-button="hasImportableBooks"
     :show-cancel-button="true"
     confirm-button-text="确定导入"
     cancel-button-text="取消"
@@ -258,7 +287,7 @@
 
   <!-- 导入完成后选择对话框 -->
   <van-dialog
-    :show="showChoiceDialog"
+    v-model:show="showChoiceDialog"
     title="导入完成"
     :show-confirm-button="false"
     :show-cancel-button="false"
@@ -271,9 +300,51 @@
       </van-button>
     </div>
   </van-dialog>
+
+  <!-- MP3+LRC 导入后中文语音提醒 -->
+  <van-dialog
+    v-model:show="showMp3LrcZhDialog"
+    title="中文语音提醒"
+    :show-confirm-button="false"
+    :show-cancel-button="false"
+    close-on-click-overlay
+  >
+    <div class="choice-dialog-content">
+      <p class="choice-hint">翻译已从LRC提取，但中文语音为空，是否立即生成？</p>
+      <van-button type="primary" size="large" @click="handleGenerateChineseAudio">
+        立即生成
+      </van-button>
+      <div style="height: 12px;"></div>
+      <van-button size="large" plain @click="handleMp3LrcZhLater">
+        稍后再说
+      </van-button>
+    </div>
+  </van-dialog>
+
+  <!-- 中文语音生成进度弹窗 -->
+  <van-dialog
+    v-model:show="showZhAudioProgress"
+    title="生成中文语音"
+    :close-on-click-overlay="false"
+    :show-cancel-button="false"
+    :show-confirm-button="!zhAudioLoading"
+    confirm-button-text="关闭"
+  >
+    <div class="supplement-progress-content">
+      <van-progress
+        :percentage="zhAudioProgress"
+        :stroke-width="8"
+        :show-pivot="true"
+      />
+      <div class="progress-message">
+        {{ zhAudioMessage }}
+      </div>
+    </div>
+  </van-dialog>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useImport } from '../composables/useImport'
 
 // 接收从父组件传入的 useImport 状态
@@ -287,6 +358,7 @@ const state = props.importState || useImport()
 const {
   // 状态
   showImportDialog,
+  importMode,
   fileInput,
   importing,
   importCompleted,
@@ -315,6 +387,16 @@ const {
   toggleDuplicateBookForMerge,
   handleSelectAllToggle,
 
+  // MP3/LRC
+  showMp3LrcZhDialog,
+  importedBookIds,
+
+  // 中文语音生成进度
+  showZhAudioProgress,
+  zhAudioProgress,
+  zhAudioMessage,
+  zhAudioLoading,
+
   // 方法
   triggerFileInput,
   onFileDrop,
@@ -329,7 +411,17 @@ const {
   handleImportSkipDuplicates,
   handleImportSelected,
   cancelImport,
+
+  // MP3/LRC 方法
+  switchImportMode,
+  handleGenerateChineseAudio,
+  handleMp3LrcZhLater,
 } = state
+
+// 是否有可导入的书籍（新书籍或选中的重复书籍）
+const hasImportableBooks = computed(() => {
+  return importCheckResult.value.valid_books.length > 0 || selectedDuplicateBooksForMerge.value.length > 0
+})
 
 // 编辑文件并生成语音
 const handleEditAndGenerate = () => {
@@ -566,5 +658,50 @@ const handleEditAndGenerate = () => {
 .choice-hint {
   margin-bottom: 20px;
   color: #646566;
+}
+
+/* 进度弹窗样式 */
+.supplement-progress-content {
+  padding: 24px 16px;
+}
+
+.progress-message {
+  text-align: center;
+  font-size: 14px;
+  color: #646566;
+  word-break: break-all;
+  min-height: 20px;
+}
+
+/* 模式切换标签 */
+.mode-tabs {
+  display: flex;
+  border-bottom: 1px solid #ebedf0;
+  padding: 0;
+}
+
+.mode-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: #969799;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.mode-tab:hover {
+  color: #1989fa;
+  background: #f7f8fa;
+}
+
+.mode-tab.active {
+  color: #1989fa;
+  border-bottom-color: #1989fa;
+  font-weight: 500;
 }
 </style>

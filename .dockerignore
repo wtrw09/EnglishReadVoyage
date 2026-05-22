@@ -44,6 +44,9 @@ backend/data/
 backend/Books/
 backend/voices/
 
+# 本地开发工具（Docker 中通过 apt-get 安装）
+backend/ffmpeg.exe
+
 # 平台无关文件和测试数据
 harmony/
 test/
