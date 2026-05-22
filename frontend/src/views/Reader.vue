@@ -816,8 +816,10 @@ const loadSentencesMap = async (baseUrl: string, signal?: AbortSignal) => {
       const sentences: SentenceMapping[] = Array.isArray(data) ? data : data.sentences || []
       // 构建映射: key = "text_hash"（与音频文件名一致）
       sentences.forEach((item) => {
-        // 根据文本计算哈希值
-        const hash = md5Hash(item.text.trim())
+        // 归一化空格，匹配 parser.py 的 normalize_text_for_tts 行为
+        // 确保 LRC 导入的双空格等非标准空白不会导致哈希不匹配
+        const normalizedText = item.text.trim().replace(/\s+/g, ' ')
+        const hash = md5Hash(normalizedText)
         // 如果后端没有返回 audio_file，则根据 hash 生成
         if (!item.audio_file) {
           item.audio_file = `${hash}.mp3`

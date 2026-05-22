@@ -131,6 +131,11 @@ class Mp3LrcImportService:
             # 用 | 分隔中英文
             en_text, zh_text = Mp3LrcImportService._parse_line(text_content)
 
+            # 归一化空白字符，匹配 parser.py normalize_text_for_tts 行为
+            # 避免 LRC 中的多余空格（如"It's green  too."）导致前端哈希匹配失败
+            en_text = re.sub(r'\s+', ' ', en_text).strip()
+            zh_text = re.sub(r'\s+', ' ', zh_text).strip() if zh_text else zh_text
+
             # 跳过纯中文行（无英文内容）
             if not en_text:
                 continue
