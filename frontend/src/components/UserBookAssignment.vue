@@ -51,7 +51,11 @@
             class="category-item"
           >
             <template #title>
-              <div class="category-title">
+              <div
+                class="category-title"
+                @contextmenu.prevent.stop="showCategoryGroupContextMenu($event, category)"
+              >
+                <!-- 多选分组全选框（仅在"未添加书籍"区域显示） -->
                 <span>{{ category.name }}</span>
                 <span class="book-count">({{ getCategoryBookCount(category.id) }} 本)</span>
               </div>
@@ -95,14 +99,6 @@
                   @touchmove="handleBookTouchEnd"
                   @touchcancel="handleBookTouchEnd"
                 >
-                  <!-- 多选复选框 -->
-                  <div v-if="isMultiSelect" class="book-checkbox" @click.stop>
-                    <input
-                      type="checkbox"
-                      :checked="selectedBooks.includes(book.id)"
-                      @change="toggleBookSelect(book.id)"
-                    />
-                  </div>
                   <div class="book-cover" @click.stop="handleCoverClick(book)">
                     <img
                       v-if="book.cover_path"
@@ -167,6 +163,14 @@
                 @touchmove.stop="handleUnaddedGroupTouchEnd"
                 @touchcancel.stop="handleUnaddedGroupTouchEnd"
               >
+                <!-- 多选分组全选框 -->
+                <div v-if="isMultiSelect" class="group-checkbox" @click.stop>
+                  <input
+                    type="checkbox"
+                    :checked="isUnaddedGroupAllSelected(group.id)"
+                    @change.stop="toggleUnaddedGroupSelect(group.id)"
+                  />
+                </div>
                 <span>{{ group.name }}</span>
                 <span class="book-count">({{ group.books.length }} 本)</span>
               </div>
@@ -232,27 +236,13 @@
 
     <!-- 批量操作栏（根据当前展开的区域显示不同操作） -->
     <div v-if="isMultiSelect" class="batch-actions">
-      <template v-if="activeUnadded !== undefined && activeCategoryNames === undefined">
-        <!-- 未添加书籍区域 -->
-        <van-button type="primary" size="small" plain @click="selectAllUnaddedBooks">
-          {{ isAllUnaddedSelected ? '取消全选' : '全选' }}
-        </van-button>
-        <van-button type="primary" size="small" @click="batchAssignUnaddedBooks" :disabled="selectedBooks.length === 0">
-          添加到分组 ({{ selectedBooks.length }})
-        </van-button>
-      </template>
-      <template v-else>
-        <!-- 用户书籍区域 -->
-        <van-button type="primary" size="small" plain @click="selectAllBooks">
-          {{ isAllSelected ? '取消全选' : '全选' }}
-        </van-button>
-        <van-button type="primary" size="small" @click="batchAssignBooks" :disabled="selectedBooks.length === 0">
-          分配到分组 ({{ selectedBooks.length }})
-        </van-button>
-        <van-button type="danger" size="small" @click="batchDeleteBooks" :disabled="selectedBooks.length === 0">
-          删除 ({{ selectedBooks.length }})
-        </van-button>
-      </template>
+      <!-- 仅在未添加书籍区域显示批量操作栏 -->
+      <van-button type="primary" size="small" plain @click="selectAllUnaddedBooks">
+        {{ isAllUnaddedSelected ? '取消全选' : '全选' }}
+      </van-button>
+      <van-button type="primary" size="small" @click="batchAssignUnaddedBooks" :disabled="selectedBooks.length === 0">
+        添加到分组 ({{ selectedBooks.length }})
+      </van-button>
       <van-button size="small" @click="cancelMultiSelect">
         取消
       </van-button>
@@ -376,6 +366,18 @@
       </van-cell-group>
     </van-popup>
 
+    <!-- 用户分组右键菜单（针对分组标题） -->
+    <van-popup
+      v-model:show="showCategoryGroupContextMenuPopup"
+      :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
+      round
+      class="book-context-menu"
+    >
+      <van-cell-group>
+        <van-cell title="选中分组内所有书籍" clickable @click="selectAllBooksInCategory" />
+      </van-cell-group>
+    </van-popup>
+
     <!-- 选择分组对话框（底部弹出） -->
     <van-popup v-model:show="showSelectCategoryPopup" position="bottom" round>
       <div class="select-category-dialog">
@@ -398,9 +400,9 @@
                   <van-radio :name="0" />
                 </template>
               </van-cell>
-              <!-- 用户创建的分组 -->
+             <!-- 用户创建的分组（排除"未分组"，因为上面已有硬编码选项） -->
               <van-cell
-                v-for="category in userCategories"
+                v-for="category in userCategories.filter(c => c.name !== '未分组')"
                 :key="category.id"
                 clickable
                 @click="selectedCategoryForBook = category.id"
@@ -523,6 +525,10 @@ const categoryNameError = ref('')
 const showBookContextMenuPopup = ref(false)
 const contextMenuPos = ref({ x: 0, y: 0 })
 const contextMenuBook = ref<{ id: string; categoryId: number } | null>(null)
+
+// 分组右键菜单
+const showCategoryGroupContextMenuPopup = ref(false)
+const contextMenuCategory = ref<Category | null>(null)
 
 // 选择分组对话框
 const showSelectCategoryPopup = ref(false)
@@ -769,6 +775,45 @@ const selectAllBooks = () => {
   }
 }
 
+// 判断未添加分组是否已全选
+const isUnaddedGroupAllSelected = (groupId: number | string): boolean => {
+  const group = unaddedBookGroups.value.find(g => g.id === groupId)
+  if (!group || group.books.length === 0) return false
+  return group.books.every((b: Book) => selectedBooks.value.includes(b.id))
+}
+
+// 切换未添加分组全选/取消
+const toggleUnaddedGroupSelect = (groupId: number | string) => {
+  const group = unaddedBookGroups.value.find(g => g.id === groupId)
+  if (!group) return
+  const groupBookIds = group.books.map((b: Book) => b.id)
+  const isAllSelected = groupBookIds.every(id => selectedBooks.value.includes(id))
+  if (isAllSelected) {
+    selectedBooks.value = selectedBooks.value.filter(id => !groupBookIds.includes(id))
+  } else {
+    selectedBooks.value = [...new Set([...selectedBooks.value, ...groupBookIds])]
+  }
+}
+
+// 判断用户分组是否已全选
+const isUserCategoryAllSelected = (categoryId: number): boolean => {
+  const books = getCategoryBooks(categoryId)
+  if (books.length === 0) return false
+  return books.every((b: Book) => selectedBooks.value.includes(b.id))
+}
+
+// 切换用户分组全选/取消
+const toggleUserCategorySelect = (categoryId: number) => {
+  const books = getCategoryBooks(categoryId)
+  const groupBookIds = books.map((b: Book) => b.id)
+  const isAllSelected = groupBookIds.every(id => selectedBooks.value.includes(id))
+  if (isAllSelected) {
+    selectedBooks.value = selectedBooks.value.filter(id => !groupBookIds.includes(id))
+  } else {
+    selectedBooks.value = [...new Set([...selectedBooks.value, ...groupBookIds])]
+  }
+}
+
 // 是否全选（用户已有书籍分组）
 const isAllSelected = computed(() => {
   let books: Book[] = []
@@ -813,7 +858,7 @@ const handleUnaddedBookClick = (bookId: string) => {
 const showUnaddedGroupContextMenu = (event: MouseEvent | { clientX: number; clientY: number }, group: BookGroup) => {
   contextMenuUnaddedGroup.value = group
   const menuWidth = 180
-  const menuHeight = 60
+  const menuHeight = 120
   let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
   let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
   x = Math.max(x, 10)
@@ -826,8 +871,7 @@ const showUnaddedGroupContextMenu = (event: MouseEvent | { clientX: number; clie
 const handleUnaddedGroupTouchStart = (event: TouchEvent, group: BookGroup) => {
   const touch = event.touches[0]
   if (!touch) return
-  // 使用 Touch 点作为定位依据
-  const touchPoint = { clientX: touch.clientX, clientY: touch.clientY } as Touch
+  const touchPoint = { clientX: touch.clientX, clientY: touch.clientY }
   if (unaddedGroupLongPressTimer) clearTimeout(unaddedGroupLongPressTimer)
   unaddedGroupLongPressTimer = setTimeout(() => {
     showUnaddedGroupContextMenu(touchPoint, group)
@@ -914,7 +958,7 @@ const showUnaddedBookContextMenu = (event: MouseEvent | { clientX: number; clien
   contextMenuBook.value = { id: book.id, categoryId: -1 } // -1 表示未添加
   // 计算菜单位置
   const menuWidth = 150
-  const menuHeight = 80
+  const menuHeight = 120
   let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
   let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
   x = Math.max(x, 10)
@@ -928,7 +972,7 @@ const showBookContextMenu = (event: MouseEvent | { clientX: number; clientY: num
   contextMenuBook.value = { id: book.id, categoryId }
   // 计算菜单位置，确保不超出屏幕
   const menuWidth = 150
-  const menuHeight = 100
+  const menuHeight = 120
   let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
   let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
   // 确保菜单位置不小于0
@@ -1001,6 +1045,30 @@ const batchAssignUnaddedBooks = () => {
 const cancelMultiSelect = () => {
   isMultiSelect.value = false
   selectedBooks.value = []
+}
+
+// 显示分类分组右键菜单
+const showCategoryGroupContextMenu = (event: MouseEvent, category: Category) => {
+  contextMenuCategory.value = category
+  const menuWidth = 150
+  const menuHeight = 60
+  let x = Math.min(event.clientX, window.innerWidth - menuWidth - 20)
+  let y = Math.min(event.clientY, window.innerHeight - menuHeight - 20)
+  x = Math.max(x, 10)
+  y = Math.max(y, 10)
+  contextMenuPos.value = { x, y }
+  showCategoryGroupContextMenuPopup.value = true
+}
+
+// 选中分组内所有书籍
+const selectAllBooksInCategory = () => {
+  showCategoryGroupContextMenuPopup.value = false
+  if (!contextMenuCategory.value) return
+
+  const books = getCategoryBooks(contextMenuCategory.value.id)
+  isMultiSelect.value = true
+  selectedBooks.value = books.map((b: Book) => b.id)
+  contextMenuCategory.value = null
 }
 
 // 批量分配书籍到分组
@@ -1410,5 +1478,19 @@ onMounted(() => {
 .sort-drag {
   opacity: 0.8;
   background: #e8f0fe;
+}
+
+/* 分组多选全选框 */
+.group-checkbox {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+.group-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #1989fa;
 }
 </style>
