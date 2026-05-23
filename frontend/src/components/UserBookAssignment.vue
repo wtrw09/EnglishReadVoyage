@@ -449,7 +449,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { showNotify, showConfirmDialog } from 'vant'
+import { showNotify, showConfirmDialog, showLoadingToast, closeToast } from 'vant'
 import { api } from '@/store/auth'
 import { buildStaticUrl } from '@/utils/apiBase'
 import draggable from 'vuedraggable'
@@ -900,6 +900,13 @@ const addAllBooksFromUnaddedGroup = async () => {
   }
 
   addingGroupBooks.value = true
+  // 显示加载提示
+  showLoadingToast({
+    message: '正在添加书籍，请勿关闭...',
+    duration: 0,
+    forbidClick: true,
+    overlay: true
+  })
   try {
     // 查找用户已有同名分组
     let targetCategoryId: number | null = null
@@ -915,13 +922,23 @@ const addAllBooksFromUnaddedGroup = async () => {
     }
 
     if (targetCategoryId === null) {
+      closeToast()
       throw new Error('目标分组ID获取失败')
     }
 
+    const total = group.books.length
     // 批量将书籍分配到目标分组
     let successCount = 0
     const failedBooks: string[] = []
-    for (const book of group.books) {
+    for (let i = 0; i < total; i++) {
+      const book = group.books[i]
+      // 更新进度提示
+      showLoadingToast({
+        message: `正在添加书籍 (${i + 1}/${total})，请勿关闭...`,
+        duration: 0,
+        forbidClick: true,
+        overlay: true
+      })
       try {
         await api.post(`/admin/users/${userId.value}/categories/books`, {
           book_id: book.id,
@@ -933,6 +950,8 @@ const addAllBooksFromUnaddedGroup = async () => {
       }
     }
 
+    closeToast()
+
     if (failedBooks.length === 0) {
       showNotify({ type: 'success', message: `成功添加 ${successCount} 本书籍到分组「${group.name}」` })
     } else {
@@ -943,6 +962,7 @@ const addAllBooksFromUnaddedGroup = async () => {
     }
     await loadData()
   } catch (error: any) {
+    closeToast()
     showNotify({
       type: 'danger',
       message: error.response?.data?.detail || error.message || '添加分组所有书籍失败'

@@ -763,9 +763,13 @@ const loadGroups = async () => {
     if (seq !== loadGroupsSeq) return
     console.error('加载分组失败:', error)
     loadError.value = true
-    // 网络相关错误由全局拦截器和网络状态栏处理，不再重复弹 toast
-    // 仅在正常在线但接口出错时才弹提示
-    if (axios.isAxiosError(error) && error.response) {
+    // 对于网络不可达（无响应），确保用户能看到明确提示
+    // 不仅依赖全局横幅，也给出即时反馈
+    if (axios.isAxiosError(error) && !error.response) {
+      const { setServerUnreachable } = useNetworkStatus()
+      setServerUnreachable()
+      showNotify({ type: 'danger', message: '无法连接到服务器，请稍后重试' })
+    } else if (axios.isAxiosError(error) && error.response) {
       // 如果全局网络横幅已显示异常（serverUnreachable/offline），不再重复提示
       if (networkStatus.value === 'online') {
         showNotify({ type: 'danger', message: '加载分组失败，请稍后重试' })

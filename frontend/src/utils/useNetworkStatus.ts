@@ -2,10 +2,10 @@
  * useNetworkStatus - 全局网络连接状态管理
  *
  * 职责：
- * - 客户端网络状态检测（navigator.onLine）
- * - 服务端可达性心跳检测
- * - 连接恢复后自动验证 Token 有效性
+ * - 被动检测网络连接状态（axios 请求结果驱动）
+ * - 浏览器 online/offline 事件监听
  * - Capacitor 前后台切换自动检测
+ * - 提供手动重试连接方法
  *
  * 使用方式：模块级单例，任意位置导入 useNetworkStatus() 获取同一个状态实例
  * 可在 axios 拦截器、Vue 组件、Pinia store 中安全使用
@@ -25,7 +25,6 @@ export type ConnectionStatus =
 
 const status = ref<ConnectionStatus>('online')
 const lastCheckTime = ref(0)
-const isHeartbeatActive = ref(false)
 
 // 计算属性
 const isOnline = computed(() => status.value === 'online')
@@ -134,9 +133,9 @@ async function verifyToken(): Promise<'valid' | 'expired' | 'networkError'> {
 }
 
 /**
- * 执行一次完整的连接检查：
+ * 执行一次完整的连接检查（手动触发）：
  * 1. 检查客户端网络
- * 2. 心跳检测服务端
+ * 2. 检测服务端可达性
  * 3. 恢复连接后验证 token
  *
  * 带并发防护 + URL 变化检测：服务端地址变更后自动启动新检查
@@ -209,30 +208,9 @@ async function _doCheckConnection(): Promise<void> {
   setOnline()
 }
 
-// ---- 心跳定时器 ----
-
-const HEARTBEAT_INTERVAL = 30000 // 30 秒
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null
-let offlineTimer: ReturnType<typeof setTimeout> | null = null
-
-function startHeartbeat(): void {
-  if (heartbeatTimer) return
-  isHeartbeatActive.value = true
-  heartbeatTimer = setInterval(() => {
-    // 每次都调用 checkConnection 用真实请求确认服务器状态
-    checkConnection()
-  }, HEARTBEAT_INTERVAL)
-}
-
-function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer)
-    heartbeatTimer = null
-    isHeartbeatActive.value = false
-  }
-}
-
 // ---- 事件监听 ----
+
+let offlineTimer: ReturnType<typeof setTimeout> | null = null
 
 function handleOnline(): void {
   // 清除 pending 的离线确认，避免 online 后又被延迟的 timeout 设回 offline
@@ -293,10 +271,7 @@ function initialize(): void {
   window.addEventListener('online', handleOnline)
   window.addEventListener('offline', handleOffline)
 
-  // 3. 启动心跳
-  startHeartbeat()
-
-  // 4. 如果是原生壳，设置 Capacitor 监听
+  // 3. 如果是原生壳，设置 Capacitor 监听
   if (isNativeShell()) {
     setupCapacitorListener()
   }
@@ -317,8 +292,6 @@ export function useNetworkStatus() {
     isOffline,
     /** 上次检测时间戳 */
     lastCheckTime,
-    /** 心跳是否活跃 */
-    isHeartbeatActive,
 
     // 状态设置方法（供 axios 拦截器等外部模块调用）
     setOnline,
