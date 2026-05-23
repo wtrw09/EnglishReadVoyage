@@ -188,6 +188,13 @@ class MarkdownParser:
                     sentences.append(paragraph.strip())
                 continue
 
+            # 检测 ⟨⟩ 包裹标记，跳过 spaCy 断句（用于 LRC 导入的句子）
+            if paragraph.startswith('\u27e8') and paragraph.endswith('\u27e9'):
+                text = paragraph[1:-1].strip()
+                if text:
+                    sentences.append(text)
+                continue
+
             # 移除段落中的换行
             paragraph = re.sub(r'\n+', ' ', paragraph)
 
@@ -254,6 +261,13 @@ class MarkdownParser:
             if re.match(r'^[a-z]+(?:\s+[a-z]+)*$', paragraph):
                 if paragraph.strip():
                     sentences.append((paragraph.strip(), para_idx))
+                continue
+
+            # 检测 ⟨⟩ 包裹标记，跳过 spaCy 断句（用于 LRC 导入的句子）
+            if paragraph.startswith('\u27e8') and paragraph.endswith('\u27e9'):
+                text = paragraph[1:-1].strip()
+                if text:
+                    sentences.append((text, para_idx))
                 continue
 
             # 移除段落中的换行，替换为空格

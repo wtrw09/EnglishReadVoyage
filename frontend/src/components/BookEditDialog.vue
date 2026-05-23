@@ -1759,7 +1759,18 @@ const continueGenerateChineseAudio = async (forceRegenerate: boolean) => {
           if (data.percentage !== undefined) {
             // 修复：限制进度最大为100，防止异常值导致进度条显示超过100%
             audioProgress.value = Math.min(100, data.percentage)
-            audioProgressMsg.value = data.message || ''
+            // 从消息中提取句子进度，显示为更清晰的中文格式
+            if (data.message) {
+              const match = data.message.match(/\((\d+)\/(\d+)\)/)
+              if (match) {
+                const action = data.message.replace(/\s*\(\d+\/\d+\)/, '')
+                audioProgressMsg.value = `第${match[1]}句/共${match[2]}句 - ${action}`
+              } else {
+                audioProgressMsg.value = data.message
+              }
+            } else {
+              audioProgressMsg.value = ''
+            }
           }
 
           if (data.message && (

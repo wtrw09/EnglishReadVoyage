@@ -457,7 +457,7 @@ class Mp3LrcImportService:
 
                     # 生成 markdown 文件（纯英文，单页）
                     all_texts = [s["text"] for s in sentence_items]
-                    md_content = "\n\n".join(all_texts)
+                    md_content = "\n\n".join(f"⟨{text}⟩" for text in all_texts)
                     md_path = book_dir / f"{book_name}.md"
                     with open(md_path, 'w', encoding='utf-8') as f:
                         f.write(md_content)

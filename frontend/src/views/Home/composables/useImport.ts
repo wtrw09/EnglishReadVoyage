@@ -1375,7 +1375,7 @@ export const useImport = () => {
   }
 
   /**
-   * 导入后生成中文语音
+   * 导入后生成中文语音（SSE流式进度）
    */
   const handleGenerateChineseAudio = async () => {
     showMp3LrcZhDialog.value = false
@@ -1394,24 +1394,82 @@ export const useImport = () => {
     for (let i = 0; i < bookIds.length; i++) {
       const bookId = bookIds[i]
       zhAudioProgress.value = Math.round(((i + 1) / bookIds.length) * 100)
-      zhAudioMessage.value = `正在为第 ${i + 1}/${bookIds.length} 本书生成中文语音...`
+      zhAudioMessage.value = `第${i + 1}/${bookIds.length}本书 - 准备中...`
 
       try {
-        const response = await fetch(buildApiUrl(`/books/${bookId}/generate-chinese-audio`), {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${authStore.token}`
+        // 使用 SSE 流式响应，实时更新进度直到生成完成
+        const xhr = new XMLHttpRequest()
+        let lastProcessedLen = 0
+        let bookSuccess = false
+
+        const processSseData = () => {
+          const text = xhr.responseText
+          if (text.length <= lastProcessedLen) return
+
+          const chunk = text.slice(lastProcessedLen)
+          lastProcessedLen = text.length
+
+          const lines = chunk.split(/\r?\n/)
+          for (const rawLine of lines) {
+            const line = rawLine.trim()
+            if (!line.startsWith('data: ')) continue
+            const jsonStr = line.slice(6)
+            if (!jsonStr) continue
+            try {
+              const data = JSON.parse(jsonStr)
+              if (data.percentage !== undefined) {
+                // 更新当前书籍的生成进度（基于整体进度桶叠加当前书籍内的百分比）
+                const baseProgress = Math.round((i / bookIds.length) * 100)
+                const bookProgress = Math.round((data.percentage / 100) * (100 / bookIds.length))
+                zhAudioProgress.value = baseProgress + bookProgress
+              }
+              if (data.message) {
+                zhAudioMessage.value = `第${i + 1}/${bookIds.length}本书 - ${data.message}`
+              }
+              if (data.success === true) {
+                bookSuccess = true
+              } else if (data.success === false) {
+                bookSuccess = false
+              }
+            } catch (e) {
+              // ignore parse errors
+            }
           }
-        })
-        if (response.ok) {
-          successCount++
-        } else {
-          failCount++
-          console.error(`生成中文语音失败: ${bookId}`, response.status)
         }
+
+        xhr.addEventListener('progress', () => {
+          if (xhr.readyState !== XMLHttpRequest.LOADING && xhr.readyState !== XMLHttpRequest.DONE) return
+          processSseData()
+        })
+
+        // 等待该书籍生成完成（在 readystatechange 中处理数据并 resolve）
+        await new Promise<void>((resolve) => {
+          xhr.addEventListener('readystatechange', () => {
+            if (xhr.readyState === XMLHttpRequest.LOADING) {
+              processSseData()
+            } else if (xhr.readyState === XMLHttpRequest.DONE) {
+              processSseData()
+              if (xhr.status >= 200 && xhr.status < 300 && bookSuccess) {
+                successCount++
+              } else {
+                failCount++
+              }
+              resolve()
+            }
+          })
+
+          xhr.addEventListener('error', () => {
+            failCount++
+            resolve()
+          })
+
+          xhr.open('POST', buildApiUrl(`/books/${bookId}/generate-chinese-audio`))
+          xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
+          xhr.send()
+        })
       } catch (e) {
         failCount++
-        console.error(`生成中文语音请求失败: ${bookId}`, e)
+        console.error(`生成中文语音失败: ${bookId}`, e)
       }
     }
 
@@ -1420,7 +1478,7 @@ export const useImport = () => {
     zhAudioLoading.value = false
 
     if (failCount === 0) {
-      showNotify({ type: 'success', message: `中文语音生成任务已启动 (${successCount}本)`, duration: 2000 })
+      showNotify({ type: 'success', message: `中文语音生成完成 (${successCount}本)`, duration: 2000 })
     } else if (successCount > 0) {
       showNotify({ type: 'warning', message: `部分完成: ${successCount}本成功, ${failCount}本失败`, duration: 3000 })
     } else {
