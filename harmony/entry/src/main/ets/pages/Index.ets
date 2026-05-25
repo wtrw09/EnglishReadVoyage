@@ -58,6 +58,7 @@ struct Index {
         .javaScriptAccess(true)
         .fileAccess(true)
         .domStorageAccess(true)
+        .zoomAccess(false)
         .onInterceptRequest((event) => {
           if (!event) {
             return null;

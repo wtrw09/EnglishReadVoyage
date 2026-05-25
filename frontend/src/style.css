@@ -34,6 +34,9 @@ html {
   overflow-y: scroll;
   overflow-x: hidden;
   scrollbar-gutter: stable;
+  /* 禁止触摸缩放（手指双指缩放、滚轮缩放） */
+  touch-action: pan-x pan-y;
+  -ms-touch-action: pan-x pan-y;
 }
 
 body {
