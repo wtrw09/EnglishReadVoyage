@@ -1393,7 +1393,6 @@ export const useImport = () => {
 
     for (let i = 0; i < bookIds.length; i++) {
       const bookId = bookIds[i]
-      zhAudioProgress.value = Math.round(((i + 1) / bookIds.length) * 100)
       zhAudioMessage.value = `第${i + 1}/${bookIds.length}本书 - 准备中...`
 
       try {

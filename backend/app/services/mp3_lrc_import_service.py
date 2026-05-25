@@ -394,6 +394,9 @@ class Mp3LrcImportService:
 
                     # 创建书籍目录
                     book_dir.mkdir(parents=True, exist_ok=True)
+                    # 创建assets文件夹（即使没有图片，也要保证导出后可以重新导入）
+                    assets_dir = book_dir / "assets"
+                    assets_dir.mkdir(parents=True, exist_ok=True)
                     audio_dir = book_dir / "audio"
                     audio_dir.mkdir(parents=True, exist_ok=True)
 
