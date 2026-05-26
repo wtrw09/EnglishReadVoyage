@@ -359,7 +359,6 @@ const {
   // 状态
   showImportDialog,
   importMode,
-  fileInput,
   importing,
   importCompleted,
   selectedFile,

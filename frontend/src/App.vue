@@ -62,7 +62,7 @@
         </div>
         <div class="diag-row">
           <span class="diag-label">检测方式</span>
-          <span class="diag-value">心跳检测间隔 30 秒</span>
+          <span class="diag-value">被动检测 + 手动重试</span>
         </div>
       </div>
 

@@ -165,7 +165,8 @@ async function _doCheckConnection(): Promise<void> {
   const serverAlive = await pingServer()
   if (!serverAlive) {
     // 服务器不可达，用 navigator.onLine 区分是客户端断网还是仅服务端问题
-    if (!navigator.onLine) {
+    // 原生壳中 navigator.onLine 不可靠，统一设为 serverUnreachable（可操作提示）
+    if (!navigator.onLine && !isNativeShell()) {
       setOffline()
     } else {
       setServerUnreachable()
@@ -229,11 +230,18 @@ function handleOffline(): void {
   if (offlineTimer !== null) {
     clearTimeout(offlineTimer)
   }
-  offlineTimer = setTimeout(() => {
+  offlineTimer = setTimeout(async () => {
     offlineTimer = null
     if (!navigator.onLine) {
+      // 原生壳中 navigator.onLine 不可靠，用真实 ping 验证
+      if (isNativeShell()) {
+        const alive = await pingServer()
+        if (alive) {
+          // 服务器可达，忽略浏览器的 offline 误报
+          return
+        }
+      }
       setOffline()
-    } else {
     }
   }, 2000)
 }
