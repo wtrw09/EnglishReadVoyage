@@ -93,6 +93,10 @@ export const useImport = () => {
   const zhAudioProgress = ref(0)
   const zhAudioMessage = ref('')
   const zhAudioLoading = ref(false)
+  
+  // 中文语音生成结果详情（展示哪些书籍有失败）
+  const showZhAudioResultDialog = ref(false)
+  const zhAudioResults = ref<{bookIndex: number; success: boolean; message: string}[]>([])
 
   // 覆盖模式（已有书籍ID）
   const overwriteMode = ref('')
@@ -1461,16 +1465,19 @@ export const useImport = () => {
 
     let successCount = 0
     let failCount = 0
+    const bookResults: {bookIndex: number; success: boolean; message: string}[] = []
 
     for (let i = 0; i < bookIds.length; i++) {
       const bookId = bookIds[i]
       zhAudioMessage.value = `第${i + 1}/${bookIds.length}本书 - 准备中...`
 
+      let bookSuccess = false
+
       try {
         // 使用 SSE 流式响应，实时更新进度直到生成完成
         const xhr = new XMLHttpRequest()
         let lastProcessedLen = 0
-        let bookSuccess = false
+        bookSuccess = false
 
         const processSseData = () => {
           const text = xhr.responseText
@@ -1540,19 +1547,41 @@ export const useImport = () => {
       } catch (e) {
         failCount++
         console.error(`生成中文语音失败: ${bookId}`, e)
+        bookResults.push({bookIndex: i, success: false, message: `请求异常: ${e}`})
+      }
+
+      // 抓取当前书的最后显示消息作为结果（替换前可能被下本书覆盖）
+      const lastMsg = zhAudioMessage.value.replace(/^第\d+\/\d+本书 - /, '')
+      // 重新计算 bookSuccess 状态（如果 DONE 回调已执行）
+      // bookResults 在上面的 DONE/error 回调中未及时推入，在 catch 后通过 push 补充
+      // 对于正常完成但未推入的情况，循环中此处捕获
+      if (i < bookResults.length) {
+        // 已在 DONE/error 回调中推入
+      } else {
+        bookResults.push({bookIndex: i, success: bookSuccess, message: lastMsg})
       }
     }
 
     zhAudioProgress.value = 100
-    zhAudioMessage.value = '生成完成'
     zhAudioLoading.value = false
 
-    if (failCount === 0) {
+    // 构建最终摘要消息
+    const failBooks = bookResults.filter(r => !r.success)
+    if (failBooks.length === 0) {
+      zhAudioMessage.value = `全部完成 (${successCount}本)`
       showNotify({ type: 'success', message: `中文语音生成完成 (${successCount}本)`, duration: 2000 })
-    } else if (successCount > 0) {
-      showNotify({ type: 'warning', message: `部分完成: ${successCount}本成功, ${failCount}本失败`, duration: 3000 })
     } else {
-      showNotify({ type: 'danger', message: `中文语音生成失败 (${failCount}本)`, duration: 3000 })
+      let summary = failBooks.length === 1
+        ? `1本有失败: ${failBooks[0].message}`
+        : `${failBooks.length}本有失败`
+      // 截断过长消息
+      if (summary.length > 80) summary = summary.slice(0, 77) + '...'
+      zhAudioMessage.value = `已完成，${failBooks.length}本有失败`
+      showNotify({ type: 'warning', message: summary, duration: 4000 })
+
+      // 填充结果，给用户查看详情
+      zhAudioResults.value = bookResults
+      showZhAudioResultDialog.value = true
     }
   }
 
@@ -1868,6 +1897,8 @@ export const useImport = () => {
     showZhAudioProgress.value = false
     zhAudioProgress.value = 0
     zhAudioMessage.value = ''
+    showZhAudioResultDialog.value = false
+    zhAudioResults.value = []
     zhAudioLoading.value = false
   }
 
@@ -1912,6 +1943,10 @@ export const useImport = () => {
     zhAudioProgress,
     zhAudioMessage,
     zhAudioLoading,
+
+    // 中文语音生成结果详情
+    showZhAudioResultDialog,
+    zhAudioResults,
 
     // Token式导入
     uploadToken,

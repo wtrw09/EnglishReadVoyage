@@ -372,6 +372,30 @@
       </div>
     </div>
   </van-dialog>
+
+  <!-- 中文语音生成结果详情弹窗 -->
+  <van-dialog
+    v-model:show="showZhAudioResultDialog"
+    title="生成结果"
+    :close-on-click-overlay="true"
+    :show-cancel-button="false"
+    confirm-button-text="关闭"
+  >
+    <div class="supplement-progress-content">
+      <div v-if="zhAudioResults.length === 0" class="progress-message">无结果</div>
+      <div
+        v-for="(item, idx) in zhAudioResults"
+        :key="idx"
+        class="zh-result-item"
+      >
+        <span :class="item.success ? 'zh-result-ok' : 'zh-result-fail'">
+          {{ item.success ? '✓' : '✗' }}
+        </span>
+        <span class="zh-result-idx">第{{ item.bookIndex + 1 }}本</span>
+        <span class="zh-result-msg">{{ item.message }}</span>
+      </div>
+    </div>
+  </van-dialog>
 </template>
 
 <script setup lang="ts">
@@ -428,6 +452,10 @@ const {
   zhAudioProgress,
   zhAudioMessage,
   zhAudioLoading,
+  
+  // 中文语音生成结果详情
+  showZhAudioResultDialog,
+  zhAudioResults,
 
   // 响应式引用
   fileInput,
@@ -740,5 +768,41 @@ const handleEditAndGenerate = () => {
   color: #1989fa;
   border-bottom-color: #1989fa;
   font-weight: 500;
+}
+
+/* 中文语音生成结果列表 */
+.zh-result-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  border-bottom: 1px solid #f0f0f0;
+}
+.zh-result-item:last-child {
+  border-bottom: none;
+}
+.zh-result-ok {
+  color: #07c160;
+  flex-shrink: 0;
+}
+.zh-result-fail {
+  color: #ee0a24;
+  flex-shrink: 0;
+}
+.zh-result-idx {
+  color: #969799;
+  flex-shrink: 0;
+  min-width: 3em;
+}
+.zh-result-msg {
+  color: #323233;
+  word-break: break-all;
+  flex: 1;
+}
+.supplement-progress-content {
+  max-height: 60vh;
+  overflow-y: auto;
 }
 </style>
