@@ -3454,7 +3454,18 @@ class BookService:
                 # 检查是否已取消（支持两种取消机制）
                 if (cancelled and cancelled[0]) or is_cancelled(book_id):
                     logger.info(f"[取消] 检测到取消信号，跳过句子: {sent_info['text'][:30]}...")
-                    return {**sent_info, 'translation': existing_map.get(sent_info['text'], {}).get('translation', ''), 'audio_file_zh': existing_map.get(sent_info['text'], {}).get('audio_file_zh', ''), 'cancelled': True}
+                    existing_item = existing_map.get(sent_info['text'], {})
+                    result = {
+                        **sent_info,
+                        'translation': existing_item.get('translation', ''),
+                        'audio_file_zh': existing_item.get('audio_file_zh', ''),
+                        'audio_file': existing_item.get('audio_file', ''),
+                        'duration': existing_item.get('duration', 0.0),
+                        'cancelled': True
+                    }
+                    if existing_item.get('audio_file_zh'):
+                        result['duration_zh'] = existing_item.get('duration_zh', 0.0)
+                    return result
 
                 text = sent_info['text']
                 text_hash = hashlib.md5(text.encode()).hexdigest()
@@ -3479,7 +3490,14 @@ class BookService:
                     progress = 10 + int((current / total_count) * 85)
                     await update_progress_local(progress, f"跳过已有 ({current}/{total_count})")
                     await asyncio.sleep(0)
-                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file}
+                    return {
+                        **sent_info,
+                        'translation': translation,
+                        'audio_file_zh': audio_file_zh,
+                        'audio_file': audio_file,
+                        'duration': existing.get('duration', 0.0),
+                        'duration_zh': existing.get('duration_zh', 0.0),
+                    }
 
                 # 更新处理进度（统一使用 total_count 作为分母，避免进度超过100%）
                 updated_count[0] += 1
@@ -3490,28 +3508,55 @@ class BookService:
 
                 # 检查是否已取消
                 if (cancelled and cancelled[0]) or is_cancelled(book_id):
-                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file, 'cancelled': True}
+                    result = {
+                        **sent_info,
+                        'translation': translation,
+                        'audio_file_zh': audio_file_zh,
+                        'audio_file': audio_file,
+                        'duration': existing.get('duration', 0.0),
+                        'cancelled': True
+                    }
+                    if existing.get('audio_file_zh'):
+                        result['duration_zh'] = existing.get('duration_zh', 0.0)
+                    return result
 
-                # 需要翻译
+                # 需要翻译（带重试机制，避免 rate-limit 导致永久失败）
                 if need_translate and not translation:
-                    try:
-                        trans_result = await translation_service.translate_with_baidu(
-                            text=text,
-                            app_id=translation_api.app_id,
-                            app_key=translation_api.app_key
-                        )
-                        if trans_result:
-                            translation = trans_result
-                    except Exception as e:
-                                    logger.error(f"翻译失败: {text[:30]}... - {e}")
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            trans_result = await translation_service.translate_with_baidu(
+                                text=text,
+                                app_id=translation_api.app_id,
+                                app_key=translation_api.app_key
+                            )
+                            if trans_result:
+                                translation = trans_result
+                                break
+                        except Exception as e:
+                            logger.error(f"翻译失败(第{attempt+1}次): {text[:30]}... - {e}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.0)  # 等待1秒后重试
 
                 # 检查是否已取消（翻译后、TTS前）
                 if (cancelled and cancelled[0]) or is_cancelled(book_id):
-                    return {**sent_info, 'translation': translation, 'audio_file_zh': audio_file_zh, 'audio_file': audio_file, 'cancelled': True}
+                    result = {
+                        **sent_info,
+                        'translation': translation,
+                        'audio_file_zh': audio_file_zh,
+                        'audio_file': audio_file,
+                        'duration': existing.get('duration', 0.0),
+                        'cancelled': True
+                    }
+                    if existing.get('audio_file_zh'):
+                        result['duration_zh'] = existing.get('duration_zh', 0.0)
+                    return result
 
                 # 需要生成中文音频
                 audio_generated = False  # 标记是否成功生成音频
                 duration_zh = 0.0
+                if need_chinese_audio and not translation:
+                    logger.warning(f"跳过中文音频生成（翻译为空）: {text[:50]}...")
                 if need_chinese_audio and translation:
                     try:
                         tts_result = await tts_service.generate_speech(
@@ -3607,6 +3652,13 @@ class BookService:
         # 检查有多少句子有中文音频
         sentences_with_zh_audio = sum(1 for r in successful_results if r.get('audio_file_zh'))
         sentences_without_zh_audio = len(sentences_mapping) - sentences_with_zh_audio
+
+        # 统计翻译失败的句子
+        sentences_without_translation = [r for r in successful_results if not r.get('translation')]
+        if sentences_without_translation:
+            logger.warning(f"书籍 {book.title} 有 {len(sentences_without_translation)} 个句子翻译为空:")
+            for item in sentences_without_translation[:5]:
+                logger.warning(f"  - {item.get('text', '')[:60]}...")
 
         # 保存更新的 sentences.json
         mapping_data = {

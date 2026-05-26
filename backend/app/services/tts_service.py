@@ -36,6 +36,10 @@ class TTSService:
         self._azure_semaphore = asyncio.Semaphore(1)
         self._azure_last_request_time = 0.0
         self._azure_min_interval = 0.005  # 最小请求间隔（秒），确保 200 QPS
+        # Siliconflow TTS 限速：约 3 QPS
+        self._siliconflow_semaphore = asyncio.Semaphore(3)
+        self._siliconflow_last_request_time = 0.0
+        self._siliconflow_min_interval = 0.35  # 最小请求间隔（秒），约 3 QPS
 
     def _validate_edge_voice(self, voice: str, default_voice: str) -> str:
         """
@@ -354,32 +358,68 @@ class TTSService:
         logger.info(f"调用硅基流动TTS API: {url}, model={model}, voice={full_voice}")
         logger.debug(f"  text={text[:50]}...")
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # 使用 stream 方法进行流式请求
-                async with client.stream("POST", url, headers=headers, json=payload) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        logger.warning(f"硅基流动TTS API错误: {response.status_code}, {error_text}")
-                        raise Exception(f"硅基流动TTS API returned {response.status_code}: {error_text}")
+        # 重试配置 - 针对 429/503 限流错误和网络错误
+        max_retries = 3
+        base_retry_delay = 3
+        last_error = None
 
-                    # 流式读取音频数据
-                    audio_data = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        if chunk:
-                            audio_data.extend(chunk)
+        for attempt in range(max_retries):
+            # 每次请求前进行限流控制：确保约3 QPS
+            async with self._siliconflow_semaphore:
+                current_time = asyncio.get_event_loop().time()
+                time_since_last = current_time - self._siliconflow_last_request_time
+                if time_since_last < self._siliconflow_min_interval:
+                    wait_time = self._siliconflow_min_interval - time_since_last
+                    logger.debug(f"Siliconflow TTS 限流等待 {wait_time:.2f} 秒")
+                    await asyncio.sleep(wait_time)
+                self._siliconflow_last_request_time = asyncio.get_event_loop().time()
 
-                    if audio_data:
-                        # 返回音频数据（base64编码）
-                        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                        logger.info(f"硅基流动TTS生成成功, 大小: {len(audio_data)} bytes")
-                    else:
-                        raise Exception("未收到音频数据")
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # 使用 stream 方法进行流式请求
+                    async with client.stream("POST", url, headers=headers, json=payload) as response:
+                        if response.status_code in (429, 503):
+                            error_text = await response.aread()
+                            last_error = Exception(f"硅基流动TTS限流 ({response.status_code}): {error_text[:200]}")
+                            retry_delay = min(base_retry_delay * (2 ** attempt), 20)
+                            logger.warning(f"Siliconflow TTS 限流，第 {attempt + 1} 次尝试失败，{retry_delay}s后重试...")
+                            await asyncio.sleep(retry_delay)
+                            continue
 
-        except httpx.RequestError as e:
-            raise Exception(f"硅基流动TTS网络请求失败: {str(e)}")
+                        if response.status_code != 200:
+                            error_text = await response.aread()
+                            logger.warning(f"硅基流动TTS API错误: {response.status_code}, {error_text}")
+                            raise Exception(f"硅基流动TTS API returned {response.status_code}: {error_text}")
 
-        return TTSResponse(audio_data=audio_base64)
+                        # 流式读取音频数据
+                        audio_data = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if chunk:
+                                audio_data.extend(chunk)
+
+                        if audio_data:
+                            # 返回音频数据（base64编码）
+                            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                            logger.info(f"硅基流动TTS生成成功, 大小: {len(audio_data)} bytes")
+                            return TTSResponse(audio_data=audio_base64)
+                        else:
+                            raise Exception("未收到音频数据")
+
+            except httpx.RequestError as e:
+                last_error = Exception(f"硅基流动TTS网络请求失败: {str(e)}")
+                retry_delay = min(base_retry_delay * (2 ** attempt), 20)
+                logger.warning(f"Siliconflow TTS 网络错误，第 {attempt + 1} 次尝试失败，{retry_delay}s后重试... - {e}")
+                await asyncio.sleep(retry_delay)
+                continue
+            except Exception as e:
+                # 非限流/网络错误，直接抛出
+                raise
+
+        # 所有重试都失败
+        if last_error:
+            logger.error(f"Siliconflow TTS 所有 {max_retries} 次重试均失败")
+            raise last_error
+        raise Exception("硅基流动TTS生成失败")
 
     async def generate_edge_tts_speech(
         self,
@@ -673,62 +713,83 @@ class TTSService:
             """对字符串进行 XML 转义，防止特殊字符破坏 SSML 结构"""
             return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
 
-        try:
-            # 构建 SSML（统一使用 SSML 以支持语速控制）
-            rate_percent = int((speed - 1.0) * 100)
-            rate_str = f"{rate_percent:+d}%"
-            voice_lang = '-'.join(voice.split('-')[:2]) if voice else 'en-US'
+        # 构建 SSML（统一使用 SSML 以支持语速控制）
+        rate_percent = int((speed - 1.0) * 100)
+        rate_str = f"{rate_percent:+d}%"
+        voice_lang = '-'.join(voice.split('-')[:2]) if voice else 'en-US'
 
-            # 对 text 进行 XML 转义，防止 & < > 等字符破坏 SSML 结构
-            escaped_text = _xml_escape(text)
+        # 对 text 进行 XML 转义，防止 & < > 等字符破坏 SSML 结构
+        escaped_text = _xml_escape(text)
 
-            ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{voice_lang}'>
+        ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{voice_lang}'>
     <voice name='{voice}'>
         <prosody rate='{rate_str}'>{escaped_text}</prosody>
     </voice>
 </speak>"""
 
-            # REST API endpoint
-            url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
-            headers = {
-                "Ocp-Apim-Subscription-Key": subscription_key,
-                "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
-            }
+        # REST API endpoint
+        url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        headers = {
+            "Ocp-Apim-Subscription-Key": subscription_key,
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+        }
 
-            # 使用 httpx.AsyncClient 进行异步请求（非阻塞，支持取消）
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(url, headers=headers, content=ssml.encode('utf-8'))
+        # 重试配置 - 针对 429/503 限流错误使用指数退避
+        max_retries = 3
+        base_retry_delay = 5
+        last_error = None
 
-                if response.status_code != 200:
-                    error_text = response.text
-                    logger.error(f"Azure TTS REST API 错误: HTTP {response.status_code}, {error_text[:200]}")
-                    logger.error(f"  SSML前200字符: {ssml[:200]}")
-                    raise Exception(f"Azure TTS API返回 {response.status_code}: {error_text[:200]}")
+        for attempt in range(max_retries):
+            try:
+                # 使用 httpx.AsyncClient 进行异步请求（非阻塞，支持取消）
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(url, headers=headers, content=ssml.encode('utf-8'))
 
-                audio_data = response.content
-                if not audio_data or len(audio_data) == 0:
-                    raise Exception("未收到Azure TTS音频数据")
+                    if response.status_code in (429, 503):
+                        error_text = response.text
+                        last_error = Exception(f"Azure TTS限流 ({response.status_code}): {error_text[:200]}")
+                        retry_delay = min(base_retry_delay * (2 ** attempt), 30)
+                        logger.warning(f"Azure TTS 限流，第 {attempt + 1} 次尝试失败，{retry_delay}s后重试...")
+                        await asyncio.sleep(retry_delay)
+                        continue
 
-                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-                logger.info(f"Azure TTS生成成功, 大小: {len(audio_data)} bytes")
+                    if response.status_code != 200:
+                        error_text = response.text
+                        logger.error(f"Azure TTS REST API 错误: HTTP {response.status_code}, {error_text[:200]}")
+                        logger.error(f"  SSML前200字符: {ssml[:200]}")
+                        raise Exception(f"Azure TTS API返回 {response.status_code}: {error_text[:200]}")
 
-                return TTSResponse(audio_data=audio_base64)
+                    audio_data = response.content
+                    if not audio_data or len(audio_data) == 0:
+                        raise Exception("未收到Azure TTS音频数据")
 
-        except httpx.RequestError as e:
-            # httpx 会自动处理取消（httpx.ConnectError, httpx.TimeoutException 等）
-            error_msg = f"Azure TTS网络请求失败: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Azure TTS 异常详情: {error_msg}")
-            # 打印更详细的错误信息
-            import traceback
-            logger.error(f"异常堆栈: {traceback.format_exc()}")
-            if "Azure" not in error_msg:
-                error_msg = f"Azure TTS生成失败: {error_msg}"
-            raise Exception(error_msg)
+                    audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                    logger.info(f"Azure TTS生成成功, 大小: {len(audio_data)} bytes")
+
+                    return TTSResponse(audio_data=audio_base64)
+
+            except httpx.RequestError as e:
+                last_error = Exception(f"Azure TTS网络请求失败: {str(e)}")
+                retry_delay = min(base_retry_delay * (2 ** attempt), 30)
+                logger.warning(f"Azure TTS 网络错误，第 {attempt + 1} 次尝试失败，{retry_delay}s后重试... - {e}")
+                await asyncio.sleep(retry_delay)
+                continue
+            except Exception as e:
+                # 非限流/网络错误，直接抛出
+                error_msg = str(e)
+                logger.error(f"Azure TTS 异常详情: {error_msg}")
+                import traceback
+                logger.error(f"异常堆栈: {traceback.format_exc()}")
+                if "Azure" not in error_msg:
+                    error_msg = f"Azure TTS生成失败: {error_msg}"
+                raise Exception(error_msg)
+
+        # 所有重试都失败
+        if last_error:
+            logger.error(f"Azure TTS 所有 {max_retries} 次重试均失败")
+            raise last_error
+        raise Exception("Azure TTS生成失败")
 
     async def generate_batch_speech(
         self,
