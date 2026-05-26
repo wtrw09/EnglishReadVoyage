@@ -1593,6 +1593,16 @@ async def export_books(
                         logger.error(f"[Export Error] file_path={file_path}, arc_name={arc_name}, error={e}")
                         raise
 
+                # os.walk 不处理空目录，但 assets/ audio/ 即使为空也要保留（重新导入时需要）
+                # 此处检查当前层 dirs 中的空子目录，写入 ZIP 目录条目
+                for d in dirs:
+                    dir_path = Path(root) / d
+                    # 仅处理空目录（非空目录的文件已被上方循环处理）
+                    if not any(True for _ in dir_path.iterdir()):
+                        rel = dir_path.relative_to(book_folder).as_posix()
+                        arc_name = prefix + rel + "/"
+                        zf.write(dir_path, arc_name)
+
     # 准备响应
     zip_buffer.seek(0)
 

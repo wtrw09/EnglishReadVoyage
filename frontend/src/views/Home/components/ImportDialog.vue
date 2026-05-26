@@ -429,6 +429,9 @@ const {
   zhAudioMessage,
   zhAudioLoading,
 
+  // 响应式引用
+  fileInput,
+
   // 方法
   triggerFileInput,
   onFileDrop,
