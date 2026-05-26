@@ -26,6 +26,8 @@ export const useImport = () => {
   const showMp3LrcZhDialog = ref(false)
   const importedBookIds = ref<string[]>([])
   const needZhAudio = ref(false)
+  const needTranslation = ref(false)  // 是否有书籍缺少翻译
+  const showMp3LrcCheckDialog = ref(false)  // MP3+LRC 校验结果对话框
 
   // MP3+LRC 检查返回的 token（避免重复上传 ZIP）
   const lastMp3LrcCheckToken = ref<string | null>(null)
@@ -309,6 +311,9 @@ export const useImport = () => {
               if (data.need_zh_audio) {
                 needZhAudio.value = true
               }
+              if (data.need_translation) {
+                needTranslation.value = true
+              }
               importCompleted.value = true
               if (!isZipImport.value && !isBatchImport.value && importMode.value !== 'mp3_lrc') {
                 showChoiceDialog.value = true
@@ -435,6 +440,9 @@ export const useImport = () => {
               }
               if (data.need_zh_audio) {
                 needZhAudio.value = true
+              }
+              if (data.need_translation) {
+                needTranslation.value = true
               }
               importCompleted.value = true
             } else if (data.success === false) {
@@ -871,8 +879,10 @@ export const useImport = () => {
     importStatus.value = ''
     // 重置 MP3+LRC 相关状态
     needZhAudio.value = false
+    needTranslation.value = false
     importedBookIds.value = []
     showMp3LrcZhDialog.value = false
+    showMp3LrcCheckDialog.value = false
     // 清空文件输入元素的值，确保下次 @change 事件可触发
     if (fileInput.value) {
       fileInput.value.value = ''
@@ -1283,8 +1293,23 @@ export const useImport = () => {
       const token = data.check_token || null
       lastMp3LrcCheckToken.value = token
 
+      // 保存校验结果，用于显示校验对话框
+      mp3LrcCheckResult.value = {
+        valid_pairs: data.new_books || [],
+        invalid_pairs: data.invalid_pairs || [],
+        total: data.total_books || 0,
+        message: data.message || ''
+      }
+
+      // 如果有无效配对，先显示校验结果对话框
+      if (data.invalid_pairs && data.invalid_pairs.length > 0) {
+        showMp3LrcCheckDialog.value = true
+        importStatus.value = ''
+        return
+      }
+
+      // 有重复，显示对话框让用户选择
       if (data.has_duplicates && data.duplicate_books?.length > 0) {
-        // 有重复，显示对话框让用户选择
         duplicateCheckResult.value = {
           has_duplicates: true,
           duplicate_books: data.duplicate_books || [],
@@ -1358,9 +1383,11 @@ export const useImport = () => {
         await uploadWithProgressAndStream(apiPath, formData, '正在导入MP3+LRC文件')
       }
 
-      // 导入完成后检查是否需要显示中文语音提醒
-      if (needZhAudio.value && importedBookIds.value.length > 0) {
-        showMp3LrcZhDialog.value = true
+      // 导入完成后检查是否需要显示中文语音/翻译提醒
+      if (importedBookIds.value.length > 0) {
+        if (needZhAudio.value || needTranslation.value) {
+          showMp3LrcZhDialog.value = true
+        }
       }
     } catch (error: any) {
       console.error('MP3+LRC导入失败:', error)
@@ -1372,6 +1399,50 @@ export const useImport = () => {
         fileInput.value.value = ''
       }
     }
+  }
+
+  /**
+   * MP3+LRC 校验结果对话框 - 跳过无效配对继续导入
+   */
+  const handleMp3LrcCheckContinue = async () => {
+    showMp3LrcCheckDialog.value = false
+
+    // 从之前 API 响应中获取有效配对和重复信息
+    const data = mp3LrcCheckResult.value
+    const validBooks = data.valid_pairs || []
+
+    if (validBooks.length === 0) {
+      showNotify({ type: 'warning', message: '没有可导入的有效配对' })
+      return
+    }
+
+    // 如果有有效配对但没有检查过重复，需要检查
+    // 之前 handleMp3LrcCheckAndImport 已经拿到了重复数据，但没用保存完整
+    // 这里直接调用后端检查重复
+    const token = lastMp3LrcCheckToken.value
+    if (!token) {
+      showNotify({ type: 'warning', message: '导入会话已过期，请重新选择文件' })
+      return
+    }
+
+    await handleMp3LrcImport({
+      checkToken: token,
+      skipDuplicates: false
+    })
+  }
+
+  /**
+   * MP3+LRC 校验结果对话框 - 取消导入
+   */
+  const handleMp3LrcCheckCancel = () => {
+    showMp3LrcCheckDialog.value = false
+    // 清理临时文件
+    if (lastMp3LrcCheckToken.value) {
+      cancelUploadByToken(lastMp3LrcCheckToken.value)
+      lastMp3LrcCheckToken.value = null
+    }
+    selectedFile.value = null
+    importStatus.value = ''
   }
 
   /**
@@ -1788,8 +1859,10 @@ export const useImport = () => {
     // 重置 MP3+LRC 状态
     importMode.value = 'normal'
     needZhAudio.value = false
+    needTranslation.value = false
     importedBookIds.value = []
     showMp3LrcZhDialog.value = false
+    showMp3LrcCheckDialog.value = false
 
     // 重置中文语音生成进度
     showZhAudioProgress.value = false
@@ -1828,8 +1901,11 @@ export const useImport = () => {
 
     // MP3/LRC 导入
     showMp3LrcZhDialog,
+    showMp3LrcCheckDialog,
+    mp3LrcCheckResult,
     importedBookIds,
     needZhAudio,
+    needTranslation,
 
     // 中文语音生成进度
     showZhAudioProgress,
@@ -1897,6 +1973,8 @@ export const useImport = () => {
     switchImportMode,
     handleMp3LrcImport,
     handleMp3LrcCheckAndImport,
+    handleMp3LrcCheckContinue,
+    handleMp3LrcCheckCancel,
     handleGenerateChineseAudio,
     handleMp3LrcZhLater,
   }

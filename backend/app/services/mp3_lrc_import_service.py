@@ -352,6 +352,7 @@ class Mp3LrcImportService:
             fail_count = 0
             skipped_count = 0
             total = len(valid_pairs)
+            has_need_translation = False  # 是否有书籍缺少翻译
 
             for idx, pair in enumerate(valid_pairs):
                 try:
@@ -447,6 +448,11 @@ class Mp3LrcImportService:
                             "duration": round(duration, 2)
                         })
 
+                    # 检查该书是否有句子缺少翻译
+                    book_no_translation = any(not s["translation"] for s in sentence_items)
+                    if book_no_translation:
+                        has_need_translation = True
+
                     if not sentence_items:
                         shutil.rmtree(book_dir, ignore_errors=True)
                         fail_count += 1
@@ -510,13 +516,19 @@ class Mp3LrcImportService:
                        f"{f', 失败 {fail_count} 本' if fail_count > 0 else ''}"
                        f"{f', {len(missing_lrc)} 个缺LRC' if missing_lrc else ''}"
                        f"{f', {len(missing_mp3)} 个缺MP3' if missing_mp3 else ''}"
-                       f"。翻译已从LRC提取，中文语音可通过「补充中文语音」功能生成")
+                       f"。")
+                # 根据是否有翻译决定后续提示
+                if has_need_translation:
+                    msg += "部分书籍缺少中文翻译，可通过「补充中文翻译和语音」功能处理"
+                else:
+                    msg += "翻译已从LRC提取，中文语音可通过「补充中文语音」功能生成"
                 return BookImportResponse(
                     success=True,
                     message=msg,
                     book_id=book_ids[0] if len(book_ids) == 1 else "",
                     book_ids=book_ids,
-                    title=valid_pairs[0]["mp3"].stem if valid_pairs else ""
+                    title=valid_pairs[0]["mp3"].stem if valid_pairs else "",
+                    need_translation=has_need_translation
                 )
             elif skipped_count > 0 and success_count == 0:
                 return BookImportResponse(
@@ -537,6 +549,37 @@ class Mp3LrcImportService:
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    @staticmethod
+    def validate_lrc_timings(mp3_path: Path, lrc_entries: list) -> Optional[str]:
+        """
+        验证 LRC 时间戳是否超出 MP3 音频总时长。
+        返回错误原因字符串，或 None 表示通过。
+        """
+        try:
+            audio = MP3(str(mp3_path))
+            mp3_duration_ms = audio.info.length * 1000
+
+            if not lrc_entries:
+                return None
+
+            # 用最后一条的 start_ms 而非 end_ms 判断
+            # 因为 end_ms 对最后一条是估算值（start_ms + 5000），可能造成误判
+            last_start_ms = lrc_entries[-1].get("start_ms", 0)
+            if last_start_ms > mp3_duration_ms + 2000:
+                excess_sec = (last_start_ms - mp3_duration_ms) / 1000
+                return f"LRC时间戳超出音频总时长 {excess_sec:.0f} 秒"
+
+            # 检查是否有某一条的开始时间超出总时长
+            for entry in lrc_entries:
+                if entry["start_ms"] > mp3_duration_ms:
+                    return f"LRC时间戳({entry['start_ms']//1000}s)超出音频总时长({int(mp3_duration_ms//1000)}s)"
+
+        except Exception as e:
+            logger.warning(f"验证LRC时间戳失败 {mp3_path}: {e}")
+            return None
+
+        return None
+
     async def check_mp3_lrc_duplicates(
         self,
         db: AsyncSession,
@@ -544,13 +587,13 @@ class Mp3LrcImportService:
     ) -> dict:
         """
         检查MP3+LRC ZIP包中的书籍是否已存在。
-        与 check_zip_all / check_md_duplicates 返回格式一致。
 
         返回:
         {
             "has_duplicates": bool,
             "duplicate_books": [{"title": str, "book_id": str}, ...],
             "new_books": [{"title": str, "book_id": str}, ...],
+            "invalid_pairs": [{"name": str, "reason": str}, ...],
             "total_books": int,
             "message": str
         }
@@ -559,6 +602,7 @@ class Mp3LrcImportService:
             "has_duplicates": False,
             "duplicate_books": [],
             "new_books": [],
+            "invalid_pairs": [],
             "total_books": 0,
             "message": ""
         }
@@ -588,10 +632,65 @@ class Mp3LrcImportService:
 
             # 扫描MP3/LRC配对
             pairs = self._scan_mp3_lrc_pairs(temp_dir)
-            valid_pairs = pairs["valid"]
+            valid_pairs = list(pairs["valid"])  # 深拷贝避免后续修改影响
+
+            # 收集缺失配对的书籍
+            for mp3_path in pairs["missing_lrc"]:
+                name = mp3_path.stem.replace(" ", "_")
+                result["invalid_pairs"].append({
+                    "name": name,
+                    "reason": "缺少对应的LRC文件"
+                })
+            for lrc_path in pairs["missing_mp3"]:
+                name = lrc_path.stem.replace(" ", "_")
+                result["invalid_pairs"].append({
+                    "name": name,
+                    "reason": "缺少对应的MP3文件"
+                })
+
+            # 对有效配对做 LRC 时间校验
+            still_valid = []
+            for pair in valid_pairs:
+                mp3_path = pair["mp3"]
+                lrc_path = pair["lrc"]
+                book_name = mp3_path.stem.replace(" ", "_")
+
+                # 先读 LRC 解析时间戳
+                try:
+                    lrc_content = lrc_path.read_text(encoding='utf-8', errors='ignore')
+                    lrc_entries = self.parse_lrc_with_translation(lrc_content)
+                except Exception as e:
+                    result["invalid_pairs"].append({
+                        "name": book_name,
+                        "reason": f"LRC文件解析失败: {e}"
+                    })
+                    continue
+
+                if not lrc_entries:
+                    result["invalid_pairs"].append({
+                        "name": book_name,
+                        "reason": "LRC内容为空或无有效句子"
+                    })
+                    continue
+
+                # 校验 LRC 时间戳
+                timing_error = self.validate_lrc_timings(mp3_path, lrc_entries)
+                if timing_error:
+                    result["invalid_pairs"].append({
+                        "name": book_name,
+                        "reason": timing_error
+                    })
+                    continue
+
+                still_valid.append(pair)
+
+            valid_pairs = still_valid
 
             if not valid_pairs:
-                return {**result, "message": "未找到有效的MP3+LRC配对"}
+                msg = "未找到有效的MP3+LRC配对"
+                if result["invalid_pairs"]:
+                    msg += f"，{len(result['invalid_pairs'])} 个无效配对"
+                return {**result, "message": msg}
 
             result["total_books"] = len(valid_pairs)
 
@@ -614,7 +713,7 @@ class Mp3LrcImportService:
             result["has_duplicates"] = len(result["duplicate_books"]) > 0
 
             if result["has_duplicates"]:
-                result["message"] = f"共 {result['total_books']} 个配对，{len(result['duplicate_books'])} 个已存在"
+                result["message"] = f"共 {result['total_books']} 个有效配对，{len(result['duplicate_books'])} 个已存在"
             else:
                 result["message"] = "所有书籍均可导入（无重复）"
 

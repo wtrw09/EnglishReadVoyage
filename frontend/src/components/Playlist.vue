@@ -75,9 +75,7 @@
                 loading="lazy"
                 decoding="async"
               />
-              <div v-else class="playlist-item-placeholder">
-                <i class="fas fa-book" />
-              </div>
+              <div v-else class="playlist-item-placeholder">{{ element.book_title }}</div>
               <span class="playlist-item-title">{{ element.book_title }}</span>
             </div>
             <i
@@ -105,9 +103,7 @@
               loading="lazy"
               decoding="async"
             />
-            <div v-else class="playlist-item-placeholder">
-              <i class="fas fa-book" />
-            </div>
+            <div v-else class="playlist-item-placeholder">{{ item.book_title }}</div>
             <span class="playlist-item-title">{{ item.book_title }}</span>
             <!-- 播放按钮：悬停或当前播放时显示 -->
             <div
@@ -306,15 +302,27 @@ const handleSortSelect = (sortType: SortType) => {
     }
 
     .playlist-item-placeholder {
+      width: 32px;
+      height: 44px;
+      border-radius: 4px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #f5f5f5;
-
-      i {
-        font-size: 24px;
-        color: #ccc;
-      }
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      font-size: 8px;
+      font-weight: 600;
+      text-align: center;
+      padding: 2px;
+      box-sizing: border-box;
+      word-break: break-all;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      line-height: 1.2;
+      flex-shrink: 0;
     }
 
     .playlist-item-title {

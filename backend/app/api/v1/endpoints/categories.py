@@ -23,14 +23,20 @@ async def list_categories(
     return await category_service.list_categories(db, current_user.id)
 
 
-@router.post("", response_model=CategoryResponse)
+@router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_category(
     category: CategoryCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """创建新分类"""
-    return await category_service.create_category(db, current_user.id, category.name)
+    try:
+        return await category_service.create_category(db, current_user.id, category.name)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
 
 @router.put("/reorder")

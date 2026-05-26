@@ -93,7 +93,13 @@ async def create_user_category(
         )
 
     # 使用被管理用户的ID创建分组
-    return await category_service.create_category(db, user_id, category.name)
+    try:
+        return await category_service.create_category(db, user_id, category.name)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
 
 @router.put("/users/{user_id}/categories/{category_id}", response_model=CategoryResponse)

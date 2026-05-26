@@ -42,7 +42,7 @@
           />
         </template>
         <template v-else>
-          <i class="fas fa-book" style="font-size: 32px; color: #dcdee0;"></i>
+          <div class="cover-placeholder">{{ book.title }}</div>
         </template>
         <!-- 已读标记 -->
         <div v-if="book.is_read" class="read-badge">
@@ -195,6 +195,28 @@ const handleCoverError = (event: Event) => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.cover-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px;
+  box-sizing: border-box;
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
 }
 
 .book-cover.landscape {

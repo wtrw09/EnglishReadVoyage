@@ -62,6 +62,7 @@ class BookImportResponse(BaseModel):
     title: str = Field(None, description="导入的书籍标题")
     book_ids: List[str] = Field(default_factory=list, description="导入的书籍ID列表（批量导入时）")
     failed_sentences: List[dict] = Field(default_factory=list, description="翻译失败的句子列表")
+    need_translation: bool = Field(False, description="是否有句子缺少翻译，需要补充")
 
 
 class PrepareImportResponse(BaseModel):

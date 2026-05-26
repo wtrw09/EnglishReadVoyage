@@ -794,8 +794,13 @@ async def import_mp3_lrc(
                             extra["success"] = result.success
                         if hasattr(result, "book_ids"):
                             extra["book_ids"] = result.book_ids
+                        if hasattr(result, "need_translation"):
+                            extra["need_translation"] = result.need_translation
                         if hasattr(result, "success") and result.success:
-                            extra["need_zh_audio"] = True
+                            # 仅当有翻译（不需要补充翻译）时才提示生成中文语音
+                            # 如果缺少翻译，前端会显示"翻译+语音"组合对话框
+                            if not getattr(result, "need_translation", False):
+                                extra["need_zh_audio"] = True
                         msg = getattr(result, "message", "导入完成")
                         yield format_sse_message(100, msg, **extra)
                     except Exception as e:

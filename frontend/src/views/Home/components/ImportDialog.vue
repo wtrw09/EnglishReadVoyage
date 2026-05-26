@@ -285,6 +285,37 @@
     </div>
   </van-dialog>
 
+  <!-- MP3+LRC 校验结果对话框 -->
+  <van-dialog
+    :show="showMp3LrcCheckDialog"
+    title="MP3/LRC 校验结果"
+    :show-confirm-button="false"
+    :show-cancel-button="false"
+    :close-on-click-overlay="false"
+  >
+    <div class="duplicate-dialog-content">
+      <p class="duplicate-hint skip">以下配对无效，将自动跳过：</p>
+      <div class="duplicate-list">
+        <div
+          v-for="pair in mp3LrcCheckResult.invalid_pairs"
+          :key="pair.name"
+          class="duplicate-item"
+        >
+          <span class="duplicate-title">《{{ pair.name }}》</span>
+          <span class="duplicate-status error">{{ pair.reason }}</span>
+        </div>
+      </div>
+      <div class="duplicate-actions">
+        <van-button type="primary" size="small" @click="handleMp3LrcCheckContinue">
+          跳过错误继续
+        </van-button>
+        <van-button size="small" @click="handleMp3LrcCheckCancel">
+          取消导入
+        </van-button>
+      </div>
+    </div>
+  </van-dialog>
+
   <!-- 导入完成后选择对话框 -->
   <van-dialog
     v-model:show="showChoiceDialog"
@@ -304,13 +335,13 @@
   <!-- MP3+LRC 导入后中文语音提醒 -->
   <van-dialog
     v-model:show="showMp3LrcZhDialog"
-    title="中文语音提醒"
+    :title="needTranslation ? '翻译和中文语音提醒' : '中文语音提醒'"
     :show-confirm-button="false"
     :show-cancel-button="false"
     close-on-click-overlay
   >
     <div class="choice-dialog-content">
-      <p class="choice-hint">翻译已从LRC提取，但中文语音为空，是否立即生成？</p>
+      <p class="choice-hint">{{ needTranslation ? 'LRC中缺少中文翻译，是否立即生成翻译和中文语音？' : '翻译已从LRC提取，但中文语音为空，是否立即生成？' }}</p>
       <van-button type="primary" size="large" @click="handleGenerateChineseAudio">
         立即生成
       </van-button>
@@ -388,7 +419,9 @@ const {
 
   // MP3/LRC
   showMp3LrcZhDialog,
-  importedBookIds,
+  showMp3LrcCheckDialog,
+  mp3LrcCheckResult,
+  needTranslation,
 
   // 中文语音生成进度
   showZhAudioProgress,
@@ -415,6 +448,8 @@ const {
   switchImportMode,
   handleGenerateChineseAudio,
   handleMp3LrcZhLater,
+  handleMp3LrcCheckContinue,
+  handleMp3LrcCheckCancel,
 } = state
 
 // 是否有可导入的书籍（新书籍或选中的重复书籍）

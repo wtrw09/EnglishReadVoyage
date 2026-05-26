@@ -120,7 +120,7 @@
                       :alt="book.title"
                       loading="lazy"
                     />
-                    <i v-else class="fas fa-book" style="font-size: 24px; color: #dcdee0;" />
+                    <div v-else class="cover-placeholder">{{ book.title }}</div>
                   </div>
                   <div class="book-info">
                     <span class="book-title">{{ book.title }}</span>
@@ -222,7 +222,7 @@
                       :alt="book.title"
                       loading="lazy"
                     />
-                    <i v-else class="fas fa-book" style="font-size: 24px; color: #dcdee0;" />
+                    <div v-else class="cover-placeholder">{{ book.title }}</div>
                   </div>
                   <div class="book-info">
                     <span class="book-title">{{ book.title }}</span>
@@ -1340,6 +1340,28 @@ onMounted(() => {
     height: 100%;
     object-fit: cover;
   }
+}
+
+.cover-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  padding: 2px;
+  box-sizing: border-box;
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-height: 1.2;
 }
 
 .book-info {

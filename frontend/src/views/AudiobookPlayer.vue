@@ -49,10 +49,10 @@
               decoding="async"
             />
             <div v-else class="book-cover-placeholder">
-              <i class="fas fa-book"></i>
+              <span class="cover-title-text">{{ currentBook?.book_title || '暂无书籍' }}</span>
             </div>
           </div>
-          <h2 class="book-title">{{ currentBook?.book_title || '暂无书籍' }}</h2>
+          <h2 v-if="currentBook?.book_cover" class="book-title">{{ currentBook?.book_title || '暂无书籍' }}</h2>
           <!-- 定时器状态和朗读模式显示在封面区域 -->
           <div class="status-info-row">
             <p v-if="sleepTimer && sleepTimerType" class="timer-status">
@@ -348,9 +348,7 @@
                   loading="lazy"
                   decoding="async"
                 />
-                <div v-else class="book-thumb-placeholder">
-                  <i class="fas fa-book"></i>
-                </div>
+                <div v-else class="book-thumb-placeholder">{{ book.title }}</div>
                 <span class="book-name">{{ book.title }}</span>
               </div>
             </div>
@@ -2459,12 +2457,24 @@ onUnmounted(() => {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #f0f0f0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      box-sizing: border-box;
+      border-radius: inherit;
+    }
 
-      .fas {
-        font-size: 64px;
-        color: #ccc;
-      }
+    .cover-title-text {
+      color: #fff;
+      font-size: 20px;
+      font-weight: 600;
+      text-align: center;
+      word-break: break-all;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 6;
+      -webkit-box-orient: vertical;
+      line-height: 1.4;
     }
   }
 
@@ -3058,15 +3068,26 @@ onUnmounted(() => {
         }
 
         .book-thumb-placeholder {
+          width: 40px;
+          height: 56px;
+          border-radius: 4px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #f0f0f0;
-
-          .fas {
-            font-size: 20px;
-            color: #ccc;
-          }
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: #fff;
+          font-size: 9px;
+          font-weight: 600;
+          text-align: center;
+          padding: 2px;
+          box-sizing: border-box;
+          word-break: break-all;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          display: -webkit-box;
+          -webkit-line-clamp: 3;
+          -webkit-box-orient: vertical;
+          line-height: 1.2;
         }
 
         .book-name {
