@@ -1477,7 +1477,6 @@ export const useImport = () => {
         // 使用 SSE 流式响应，实时更新进度直到生成完成
         const xhr = new XMLHttpRequest()
         let lastProcessedLen = 0
-        bookSuccess = false
 
         const processSseData = () => {
           const text = xhr.responseText
@@ -1573,7 +1572,7 @@ export const useImport = () => {
     } else {
       let summary = failBooks.length === 1
         ? `1本有失败: ${failBooks[0].message}`
-        : `${failBooks.length}本有失败`
+        : `${failBooks.length}本有失败, 例如: ${failBooks[0].message}`
       // 截断过长消息
       if (summary.length > 80) summary = summary.slice(0, 77) + '...'
       zhAudioMessage.value = `已完成，${failBooks.length}本有失败`

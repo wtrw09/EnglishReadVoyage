@@ -382,7 +382,6 @@
     confirm-button-text="关闭"
   >
     <div class="supplement-progress-content">
-      <div v-if="zhAudioResults.length === 0" class="progress-message">无结果</div>
       <div
         v-for="(item, idx) in zhAudioResults"
         :key="idx"
