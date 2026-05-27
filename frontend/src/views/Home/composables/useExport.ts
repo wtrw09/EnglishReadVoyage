@@ -5,8 +5,7 @@
 import { ref } from 'vue'
 import { showNotify } from 'vant'
 import { useAuthStore } from '@/store/auth'
-import { buildApiUrl } from '@/utils/apiBase'
-import { saveFile } from '@/utils/nativeDownload'
+import { buildApiUrl, buildStaticUrl } from '@/utils/apiBase'
 
 export const useExport = () => {
   const authStore = useAuthStore()
@@ -48,131 +47,71 @@ export const useExport = () => {
 
     try {
       const totalBooks = bookIds.length
-      let simulatedProgress = 0
 
       // 打包阶段的模拟进度
       const progressInterval = setInterval(() => {
-        if (simulatedProgress < 50) {
-          simulatedProgress += 2
-          exportProgress.value = simulatedProgress
+        if (exportProgress.value < 50) {
+          exportProgress.value += 2
           exportStatus.value = `正在打包书籍 (${totalBooks} 本)...`
         }
       }, 500)
 
-      return new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('POST', buildApiUrl('/books/export'))
-        xhr.setRequestHeader('Content-Type', 'application/json')
-        xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`)
-        xhr.responseType = 'blob'
-
-        let totalSize = 0
-
-        xhr.addEventListener('progress', (event) => {
-          clearInterval(progressInterval)
-
-          if (totalSize === 0) {
-            const contentLength = xhr.getResponseHeader('Content-Length')
-            if (contentLength) {
-              totalSize = parseInt(contentLength, 10)
-            }
-          }
-
-          const loaded = event.loaded
-          const total = totalSize || event.total
-
-          if (total > 0) {
-            const downloadPercent = Math.round((loaded / total) * 45) + 50
-            exportProgress.value = Math.min(downloadPercent, 95)
-
-            const loadedMB = (loaded / 1024 / 1024).toFixed(1)
-            const totalMB = (total / 1024 / 1024).toFixed(1)
-            exportStatus.value = `正在下载 ${loadedMB}MB / ${totalMB}MB`
-          } else {
-            exportProgress.value = 70
-            const loadedMB = (loaded / 1024 / 1024).toFixed(1)
-            exportStatus.value = `正在下载 ${loadedMB}MB...`
-          }
-        })
-
-        xhr.addEventListener('readystatechange', () => {
-          if (xhr.readyState === 2) {
-            const contentLength = xhr.getResponseHeader('Content-Length')
-            if (contentLength) {
-              totalSize = parseInt(contentLength, 10)
-              clearInterval(progressInterval)
-              const totalMB = (totalSize / 1024 / 1024).toFixed(1)
-              exportStatus.value = `正在下载 0MB / ${totalMB}MB`
-            }
-          }
-        })
-
-        xhr.addEventListener('load', async () => {
-          clearInterval(progressInterval)
-
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const contentDisposition = xhr.getResponseHeader('content-disposition')
-            let filename = 'books_export.zip'
-            if (contentDisposition) {
-              const filenameMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i)
-              if (filenameMatch) {
-                filename = decodeURIComponent(filenameMatch[1].trim().replace(/"/g, ''))
-              }
-            }
-
-            exportProgress.value = 100
-            exportStatus.value = '导出完成！'
-            exportCurrentBook.value = filename
-
-            const blob = xhr.response
-            // 使用跨平台文件保存（await 确保保存完成后再关闭对话框）
-            try {
-              const result = await saveFile(blob, filename)
-              if (result.success) {
-                const msg = result.path ? `导出成功：${result.path}` : '导出成功'
-                showNotify({ type: 'success', message: msg, duration: 1500 })
-              } else {
-                showNotify({ type: 'warning', message: '保存失败', duration: 2000 })
-              }
-            } catch (e) {
-              console.error('文件保存失败:', e)
-              showNotify({ type: 'danger', message: '文件保存异常', duration: 2000 })
-            }
-
-            setTimeout(() => {
-              showExportProgressDialog.value = false
-              showNotify({ type: 'success', message: '书籍导出成功', duration: 1500 })
-              if (onExportComplete) {
-                setTimeout(() => onExportComplete!(), 100)
-              }
-            }, 800)
-
-            resolve()
-          } else {
-            showExportProgressDialog.value = false
-            reject(new Error('导出失败'))
-          }
-        })
-
-        xhr.addEventListener('error', () => {
-          clearInterval(progressInterval)
-          showExportProgressDialog.value = false
-          reject(new Error('网络错误'))
-        })
-
-        xhr.addEventListener('abort', () => {
-          clearInterval(progressInterval)
-          showExportProgressDialog.value = false
-          reject(new Error('导出已取消'))
-        })
-
-        xhr.send(JSON.stringify({ book_ids: bookIds }))
+      // 1. 发送导出请求，获取下载 URL
+      const url = buildApiUrl('/books/export')
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authStore.token}`,
+        },
+        body: JSON.stringify({ book_ids: bookIds }),
       })
+
+      if (!resp.ok) {
+        clearInterval(progressInterval)
+        showExportProgressDialog.value = false
+        showNotify({ type: 'danger', message: `导出失败 (${resp.status})`, duration: 2000 })
+        return
+      }
+
+      const { download_url, filename } = await resp.json()
+
+      clearInterval(progressInterval)
+
+      exportProgress.value = 100
+      exportStatus.value = '导出完成！'
+      exportCurrentBook.value = filename
+
+      // 2. 下载 ZIP 文件（绕过 XHR blob，直接用 URL 下载）
+      await downloadZipFile(download_url, filename)
+
+      setTimeout(() => {
+        showExportProgressDialog.value = false
+        showNotify({ type: 'success', message: '书籍导出成功', duration: 1500 })
+        if (onExportComplete) {
+          setTimeout(() => onExportComplete!(), 100)
+        }
+      }, 800)
     } catch (error: any) {
       showExportProgressDialog.value = false
       console.error('导出书籍失败:', error)
       showNotify({ type: 'danger', message: error.message || '导出失败' })
     }
+  }
+
+  /**
+   * 下载 ZIP 文件（所有平台统一用 <a> 标签触发系统下载）
+   * - Web 浏览器：通过 Vite 代理 / Nginx 同源下载
+   * - 原生壳（Capacitor/HarmonyOS）：绝对 URL 触发系统下载管理器，零 JS 内存消耗
+   */
+  const downloadZipFile = (downloadUrl: string, filename: string) => {
+    const isNative = window.location.protocol === 'file:' || window.location.protocol === 'resource:'
+    const link = document.createElement('a')
+    link.href = isNative ? buildStaticUrl(downloadUrl) : downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   /**

@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # JWT 认证
     # 不再提供默认值，生产环境必须通过环境变量设置
     SECRET_KEY: str = ""
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
     INVITATION_CODE_EXPIRE_MINUTES: int = 10080
     ALGORITHM: str = "HS256"
 

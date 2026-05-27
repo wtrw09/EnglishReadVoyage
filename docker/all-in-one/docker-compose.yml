@@ -18,7 +18,7 @@ services:
       - ./backend/.cache:/app/.cache
     # 所有环境变量直接在此设置，无需外部 .env 文件
     # SECRET_KEY 不设置时 entrypoint 自动生成临时密钥（重启后需重新登录）
-    # ACCESS_TOKEN_EXPIRE_MINUTES 代码默认 30 分钟，这里设为 7 天
+    # ACCESS_TOKEN_EXPIRE_MINUTES 代码默认 10800 分钟，这里设为 7 天
     environment:
       - DEBUG=False
       - IS_PRODUCTION=True

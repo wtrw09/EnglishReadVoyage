@@ -105,7 +105,7 @@ export const useGroupManagement = () => {
   const showGroupContextMenu = (event: MouseEvent, group: BookGroup) => {
     contextMenuGroup.value = group
     // 计算菜单位置，确保不超出屏幕
-    const x = Math.min(event.clientX, window.innerWidth - 150)
+    const x = Math.min(event.clientX, window.innerWidth - 200)
     const y = Math.min(event.clientY, window.innerHeight - 120)
     groupContextMenuPos.value = { x, y }
     showGroupContextMenuPopup.value = true

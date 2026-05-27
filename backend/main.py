@@ -102,10 +102,11 @@ app = FastAPI(
 )
 
 # 配置 CORS
+# 注意：allow_origins='*' 时不能同时设置 allow_credentials=True，否则浏览器会拒绝跨域响应
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.get_cors_origins(),
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

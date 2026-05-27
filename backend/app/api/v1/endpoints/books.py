@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import hashlib
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Query, Path as FastAPIPath, Body
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from typing import List, Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1540,6 +1540,7 @@ async def export_books(
     请求体: {"book_ids": ["id1", "id2", ...]}
     """
     book_ids = request.get("book_ids", [])
+    logger.info(f"[Export] 导出请求: book_ids={book_ids}, user={current_user.username}")
     if not book_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1557,6 +1558,8 @@ async def export_books(
         book = result.scalar_one_or_none()
         if book:
             books.append(book)
+        else:
+            logger.warning(f"[Export] 书籍未找到: book_id={book_id}")
 
     if not books:
         raise HTTPException(
@@ -1574,7 +1577,7 @@ async def export_books(
             book_folder = book_path.parent
 
             if not book_folder.exists():
-                logger.warning(f"导出跳过: 书籍文件夹不存在 {book_folder}")
+                logger.warning(f"[Export] 跳过: 书籍文件夹不存在 {book_folder}")
                 continue
 
             # 每本书都放在自己的文件夹中，与批量导出格式保持一致
@@ -1605,6 +1608,8 @@ async def export_books(
 
     # 准备响应
     zip_buffer.seek(0)
+    zip_size = zip_buffer.getbuffer().nbytes
+    logger.info(f"[Export] ZIP 打包完成: {len(books)} 本书, 大小={zip_size/1024/1024:.2f}MB")
 
     # 生成下载文件名
     if len(books) == 1:
@@ -1612,27 +1617,31 @@ async def export_books(
     else:
         filename = f"books_export_{len(books)}_items.zip"
 
-    # 对文件名进行URL编码
     from urllib.parse import quote
-    encoded_filename = quote(filename)
 
-    async def iter_bytes():
-        """分块迭代zip数据，提高大文件下载速度"""
-        chunk_size = 1024 * 1024  # 1MB chunks
-        while True:
-            chunk = zip_buffer.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
+    # 将 ZIP 保存到 .exports 目录（BOOKS_DIR 已通过 static mount 对外服务）
+    # 客户端通过静态 URL 直接下载，避免大文件经过中间件/代理层导致 net::ERR_FAILED
+    import secrets
+    exports_dir = BOOKS_DIR / ".exports"
+    exports_dir.mkdir(exist_ok=True)
+    token = secrets.token_hex(8)
+    export_path = exports_dir / f"{token}_{filename}"
+    zip_bytes = zip_buffer.getvalue()
+    with open(export_path, "wb") as f:
+        f.write(zip_bytes)
 
-    # 不使用 Content-Length 头（GZipMiddleware 会压缩响应，设置长度会导致不匹配）
-    return StreamingResponse(
-        iter_bytes(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-        }
-    )
+    # 清理 10 分钟前的旧导出文件
+    import time
+    now = time.time()
+    for old_file in exports_dir.iterdir():
+        if old_file.is_file() and now - old_file.stat().st_mtime > 600:
+            old_file.unlink(missing_ok=True)
+
+    download_url = f"/books/.exports/{token}_{quote(filename)}"
+    return {
+        "download_url": download_url,
+        "filename": filename,
+    }
 
 
 @router.post("/check-integrity")

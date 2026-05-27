@@ -70,6 +70,6 @@ const canDelete = computed(() => {
 <style scoped>
 .context-menu {
   position: fixed !important;
-  width: 150px;
+  width: 160px;
 }
 </style>

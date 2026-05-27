@@ -1075,19 +1075,31 @@ const onCoverSaved = async () => {
   await loadGroups()
 }
 
-const exportSingleBook = () => {
+const exportSingleBook = async () => {
   showContextMenuPopup.value = false
   // 如果已有多选书籍，导出所有选中的
   if (isMultiSelect.value && selectedBooks.value.length > 0) {
-    doExportSelectedBooks(selectedBooks.value)
+    try {
+      await doExportSelectedBooks(selectedBooks.value)
+    } catch (e) {
+      // doExportSelectedBooks 内部已通过 showNotify 显示错误
+    }
   } else if (contextMenuBook.value) {
     // 否则导出当前右键点击的书
-    doExportSingleBook(contextMenuBook.value.id)
+    try {
+      await doExportSingleBook(contextMenuBook.value.id)
+    } catch (e) {
+      // doExportSingleBook 内部已通过 showNotify 显示错误
+    }
   }
 }
 
-const exportSelectedBooks = () => {
-  doExportSelectedBooks(selectedBooks.value)
+const exportSelectedBooks = async () => {
+  try {
+    await doExportSelectedBooks(selectedBooks.value)
+  } catch (e) {
+    // doExportSelectedBooks 内部已通过 showNotify 显示错误
+  }
 }
 
 // 删除书籍
