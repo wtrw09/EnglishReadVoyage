@@ -28,7 +28,12 @@ main:
         # 注意：buildx 多架构构建时会自动选择对应架构的 base 镜像，无需指定 -arm64 后缀
         - name: build and push multi-arch image
           script: |
+            # --allow security.insecure 允许 QEMU 模拟环境下执行 RUN 指令
+            # --set *.run.SecurityInsecure=true 使所有 RUN 步骤以 insecure 模式运行
+            # 解决 QEMU 模拟 amd64 架构时 capabilities 不可用的问题
             docker buildx build \
+              --allow security.insecure \
+              --set "*.run.SecurityInsecure=true" \
               --platform linux/amd64,linux/arm64 \
               --tag ${IMAGE_TAG} \
               --file docker/all-in-one/Dockerfile \

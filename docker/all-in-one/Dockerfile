@@ -31,10 +31,8 @@ FROM ${PYTHON_IMAGE} AS python-builder
 WORKDIR /app
 
 # 配置国内 apt 镜像源（单次）
-RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm-backports main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+# 使用 COPY 而非 RUN echo 避免 QEMU 模拟环境下 capabilities 限制问题
+COPY docker/all-in-one/debian-sources.list /etc/apt/sources.list
 
 # 安装编译依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
