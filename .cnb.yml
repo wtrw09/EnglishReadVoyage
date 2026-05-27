@@ -2,9 +2,11 @@
 # 文档：https://docs.cnb.cool/zh/build/
 #
 # 使用说明：
-# - 构建多架构镜像（amd64 + arm64）并创建 manifest list
-# - 构建完成后镜像标签统一为: latest
+# - 分平台构建镜像（amd64 + arm64），最后合并为 manifest list
+# - 最终镜像标签统一为: latest
 # - 拉取时会自动选择对应架构的镜像
+# - 使用默认的 docker driver（而非 docker-container driver），
+#   避免 QEMU 模拟架构下 RUN 指令因 capabilities 限制失败的问题
 
 main:
   push:
@@ -18,31 +20,34 @@ main:
           exports:
             info: IMAGE_TAG
 
-        # 创建 docker-container builder（默认 docker driver 不支持多架构 --push）
-        - name: create buildx builder
+        # 构建并推送 amd64 镜像
+        - name: build and push amd64
           script: |
-            docker buildx create --name multiarch --driver docker-container --use
-            docker buildx inspect --bootstrap
-
-        # 构建多架构镜像（amd64 + arm64），一次性推送
-        # 注意：buildx 多架构构建时会自动选择对应架构的 base 镜像，无需指定 -arm64 后缀
-        - name: build and push multi-arch image
-          script: |
-            # --allow security.insecure 允许 QEMU 模拟环境下执行 RUN 指令
-            # --set *.run.SecurityInsecure=true 使所有 RUN 步骤以 insecure 模式运行
-            # 解决 QEMU 模拟 amd64 架构时 capabilities 不可用的问题
             docker buildx build \
-              --allow security.insecure \
-              --set "*.run.SecurityInsecure=true" \
-              --platform linux/amd64,linux/arm64 \
-              --tag ${IMAGE_TAG} \
+              --platform linux/amd64 \
+              --tag ${IMAGE_TAG}-amd64 \
               --file docker/all-in-one/Dockerfile \
               --build-arg PYTHON_IMAGE=python:3.13-slim \
               --build-arg NODE_IMAGE=node:22-alpine \
               --push \
               .
 
-        # 清理 builder，释放资源
-        - name: cleanup buildx builder
+        # 构建并推送 arm64 镜像
+        - name: build and push arm64
           script: |
-            docker buildx rm multiarch
+            docker buildx build \
+              --platform linux/arm64 \
+              --tag ${IMAGE_TAG}-arm64 \
+              --file docker/all-in-one/Dockerfile \
+              --build-arg PYTHON_IMAGE=python:3.13-slim \
+              --build-arg NODE_IMAGE=node:22-alpine \
+              --push \
+              .
+
+        # 合并为多架构 manifest（指向 latest）
+        - name: create multi-arch manifest
+          script: |
+            docker buildx imagetools create \
+              --tag ${IMAGE_TAG} \
+              ${IMAGE_TAG}-amd64 \
+              ${IMAGE_TAG}-arm64
